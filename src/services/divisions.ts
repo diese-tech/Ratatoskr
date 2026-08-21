@@ -8,7 +8,7 @@ import {
 } from 'discord.js';
 import { divisions, type DivisionName } from '../config/guild-structure.js';
 
-const STAFF_ROLES = ['Valkyries', 'Æsir', 'Allfather'] as const;
+export const STAFF_ROLES = ['Valkyries', 'Æsir', 'Allfather'] as const;
 
 export type DivisionProvisionResult = {
   division: DivisionName;

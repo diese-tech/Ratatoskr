@@ -11,6 +11,10 @@ export type GuildChannelSpec = {
   type: 'text' | 'voice';
   access?: string[];
   topic?: string;
+  // Visible to everyone who can already view the channel, but only staff
+  // (STAFF_ROLES) may post. See resolveChannelOverwrites in
+  // scripts/bootstrap-guild.ts.
+  readOnly?: boolean;
 };
 
 export type GuildCategorySpec = {
@@ -38,9 +42,25 @@ export const yslGuildStructure = {
     {
       name: 'Welcome',
       channels: [
-        { name: 'welcome', type: 'text', topic: 'Start here for YSL information and onboarding.' },
-        { name: 'rules', type: 'text', topic: 'League and server rules.' },
-        { name: 'announcements', type: 'text', topic: 'Official YSL announcements.' },
+        { name: 'welcome', type: 'text', topic: 'Start here for YSL information and onboarding.', readOnly: true },
+        { name: 'rules', type: 'text', topic: 'League and server rules.', readOnly: true },
+        { name: 'announcements', type: 'text', topic: 'Official YSL announcements.', readOnly: true },
+      ],
+    },
+    {
+      name: 'League Information',
+      channels: [
+        { name: 'about-ysl', type: 'text', topic: 'What Yggdrasil Smite League is and how it works.', readOnly: true },
+        { name: 'league-rules', type: 'text', topic: 'Canonical competitive YSL rulebook.', readOnly: true },
+        { name: 'faq', type: 'text', topic: 'Frequently asked questions.', readOnly: true },
+        {
+          name: 'sign-ups',
+          type: 'text',
+          topic: 'Player, organization, coach, staff, production, and caster sign-up links.',
+          readOnly: true,
+        },
+        { name: 'patch-notes', type: 'text', topic: 'SMITE 2 patch notes.', readOnly: true },
+        { name: 'role-select', type: 'text', topic: 'Self-service notification roles.', readOnly: true },
       ],
     },
     {
@@ -49,16 +69,9 @@ export const yslGuildStructure = {
         { name: 'general', type: 'text' },
         { name: 'smite-chat', type: 'text' },
         { name: 'lfg', type: 'text' },
+        { name: 'self-promo', type: 'text' },
+        { name: 'clips-and-highlights', type: 'text' },
         { name: 'General', type: 'voice' },
-      ],
-    },
-    {
-      name: 'League Players',
-      access: ['Player', 'Captain', 'Free Agent', 'Org Owner', 'Valkyries', 'Æsir', 'Allfather'],
-      channels: [
-        { name: 'player-lounge', type: 'text' },
-        { name: 'free-agency', type: 'text' },
-        { name: 'league-resources', type: 'text' },
       ],
     },
     {
@@ -76,6 +89,7 @@ export const yslGuildStructure = {
       channels: [
         { name: 'production-chat', type: 'text' },
         { name: 'broadcast-planning', type: 'text' },
+        { name: 'org-graphics', type: 'text' },
         { name: 'Production Room', type: 'voice' },
       ],
     },
