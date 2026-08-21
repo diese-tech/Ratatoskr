@@ -255,8 +255,12 @@ async function ensureChannel(
     if (apply) markManagedResourceObsolete(db, managed.id);
   }
 
+  // Deliberately not filtered to this category's channels: a same-named
+  // channel sitting under the wrong parent must still surface as a
+  // candidate so classifyMatch can call it ambiguous (per #16's ownership
+  // rules) rather than being invisible here and causing a duplicate create.
   const candidates: CandidateResource[] = guild.channels.cache
-    .filter((channel) => channel.parentId === parentId)
+    .filter((channel) => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice)
     .map((channel) => ({
       discordId: channel.id,
       name: channel.name,
@@ -404,12 +408,11 @@ async function bootstrap() {
       }
     }
 
-    if (apply) {
-      await runCleanup(db, guild);
-    } else {
-      console.log('\n--- Cleanup preview ---');
-      console.log('Skipped in dry-run: managed-resource registrations only happen with --apply, so a dry run has nothing to compare yet.');
-    }
+    // runCleanup itself gates actual deletion behind `apply`/`deleteObsolete`
+    // -- the preview (which resources are obsolete) is safe and useful to
+    // show in dry-run mode too, especially once a prior apply run has
+    // already populated managed_resources.
+    await runCleanup(db, guild);
 
     console.log('\nBootstrap complete.');
     if (!apply) console.log('Review the plan above, then rerun with --apply when ready.');

@@ -142,16 +142,23 @@ test('resolveChannelPermissionOverwrites: no access and no readOnly produces no 
   assert.equal(result, undefined);
 });
 
-test('resolveChannelPermissionOverwrites: readOnly denies SendMessages/CreatePublicThreads to @everyone and allows staff', () => {
+const READ_ONLY_DENIES = [
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.CreatePublicThreads,
+  PermissionFlagsBits.CreatePrivateThreads,
+  PermissionFlagsBits.SendMessagesInThreads,
+];
+
+test('resolveChannelPermissionOverwrites: readOnly denies message/thread-posting perms to @everyone and allows staff', () => {
   const result = resolveChannelPermissionOverwrites(EVERYONE_ID, resolveRoleId, ['Aesir', 'Allfather'], { readOnly: true });
   assert.ok(result);
 
   const everyone = result!.find((entry) => entry.id === EVERYONE_ID);
-  assert.deepEqual(everyone?.deny.sort(), [PermissionFlagsBits.SendMessages, PermissionFlagsBits.CreatePublicThreads].sort());
+  assert.deepEqual(everyone?.deny.sort(), [...READ_ONLY_DENIES].sort());
   assert.deepEqual(everyone?.allow, []);
 
   const staff = result!.find((entry) => entry.id === roleIds.Aesir);
-  assert.deepEqual(staff?.allow.sort(), [PermissionFlagsBits.SendMessages, PermissionFlagsBits.CreatePublicThreads].sort());
+  assert.deepEqual(staff?.allow.sort(), [...READ_ONLY_DENIES].sort());
 });
 
 test('resolveChannelPermissionOverwrites: access alone still denies/allows only ViewChannel, unchanged from before readOnly existed', () => {
@@ -177,17 +184,11 @@ test('resolveChannelPermissionOverwrites: access + readOnly on the same role id 
 
   const allfatherEntries = result!.filter((entry) => entry.id === roleIds.Allfather);
   assert.equal(allfatherEntries.length, 1, 'must merge into a single overwrite entry per id');
-  assert.deepEqual(
-    allfatherEntries[0].allow.sort(),
-    [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.CreatePublicThreads].sort(),
-  );
+  assert.deepEqual(allfatherEntries[0].allow.sort(), [PermissionFlagsBits.ViewChannel, ...READ_ONLY_DENIES].sort());
 
   const everyoneEntries = result!.filter((entry) => entry.id === EVERYONE_ID);
   assert.equal(everyoneEntries.length, 1, 'must merge @everyone into a single overwrite entry too');
-  assert.deepEqual(
-    everyoneEntries[0].deny.sort(),
-    [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.CreatePublicThreads].sort(),
-  );
+  assert.deepEqual(everyoneEntries[0].deny.sort(), [PermissionFlagsBits.ViewChannel, ...READ_ONLY_DENIES].sort());
 });
 
 test('resolveChannelPermissionOverwrites: missing access role throws a clear error', () => {

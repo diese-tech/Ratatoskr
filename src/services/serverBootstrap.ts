@@ -154,10 +154,21 @@ export function resolveChannelPermissionOverwrites(
   }
 
   if (spec.readOnly) {
-    addOverwrite(everyoneId, [], [PermissionFlagsBits.SendMessages, PermissionFlagsBits.CreatePublicThreads]);
+    // Denying only SendMessages/CreatePublicThreads still lets a member post
+    // inside an existing thread (via the inherited SendMessagesInThreads
+    // permission) or spin up a private thread -- deny both thread-posting
+    // surfaces too so the channel is actually read-only, not just
+    // top-level-read-only.
+    const readOnlyDenies = [
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.CreatePublicThreads,
+      PermissionFlagsBits.CreatePrivateThreads,
+      PermissionFlagsBits.SendMessagesInThreads,
+    ];
+    addOverwrite(everyoneId, [], readOnlyDenies);
     for (const roleName of staffRoleNames) {
       const roleId = resolveRoleId(roleName);
-      if (roleId) addOverwrite(roleId, [PermissionFlagsBits.SendMessages, PermissionFlagsBits.CreatePublicThreads]);
+      if (roleId) addOverwrite(roleId, readOnlyDenies);
     }
   }
 
