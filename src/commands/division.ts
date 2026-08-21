@@ -5,10 +5,10 @@ import {
   SlashCommandBuilder,
   type CategoryChannel,
   type ChatInputCommandInteraction,
-  type GuildMember,
   type Role,
 } from 'discord.js';
 import { divisions, type DivisionName } from '../config/guild-structure.js';
+import { requireAccess } from '../services/authorization.js';
 import { getExpectedChannelNames, provisionDivision } from '../services/divisions.js';
 
 const choices = divisions.map((division) => ({ name: division, value: division }));
@@ -53,11 +53,6 @@ export const divisionCommand = new SlashCommandBuilder()
       ),
   );
 
-function canManageDivisions(member: GuildMember) {
-  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-  return member.roles.cache.some((role) => role.name === 'Allfather' || role.name === 'Æsir');
-}
-
 function isCategoryArchived(category: CategoryChannel, divisionRole: Role | undefined) {
   // Active and archived categories both deny @everyone ViewChannel (that's the
   // default-deny model), so that alone doesn't distinguish them. Only the
@@ -85,10 +80,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
   }
 
   const member = await interaction.guild.members.fetch(interaction.user.id);
-  if (!canManageDivisions(member)) {
-    await interaction.reply({ content: 'You do not have permission to manage divisions.', flags: MessageFlags.Ephemeral });
-    return;
-  }
+  if (!(await requireAccess(interaction, member, 'ADMIN'))) return;
 
   const division = interaction.options.getString('name', true) as DivisionName;
   const subcommand = interaction.options.getSubcommand();
