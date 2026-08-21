@@ -2,7 +2,14 @@ import 'dotenv/config';
 import { Client, GatewayIntentBits, MessageFlags } from 'discord.js';
 import { handleInteraction, registerGuildCommands } from './commands/index.js';
 import { env } from './config/env.js';
+import { closeDatabase, openDatabase } from './db/index.js';
 import { syncCaptainAccess } from './services/divisions.js';
+
+// Opened before login: a database that can't be opened/migrated fails
+// startup immediately rather than letting the bot come online without
+// durable storage.
+const db = openDatabase();
+console.log('Database ready.');
 
 const client = new Client({
   intents: [
@@ -11,6 +18,15 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
   ],
 });
+
+async function shutdown() {
+  await client.destroy();
+  closeDatabase(db);
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 client.once('clientReady', async () => {
   console.log(`Ratatoskr online as ${client.user?.tag ?? 'unknown user'}`);

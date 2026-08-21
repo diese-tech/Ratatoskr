@@ -1,0 +1,206 @@
+import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, test } from 'node:test';
+import { closeDatabase, openDatabase } from './client.js';
+import {
+  createSeason,
+  getActiveManagedResourceByLogicalKey,
+  getActiveSeason,
+  getDivisionByName,
+  getManagedResourceByDiscordId,
+  getSeasonByNumber,
+  insertManagedResource,
+  setActiveSeason,
+  upsertDivision,
+} from './index.js';
+
+let tempDir: string;
+
+before(() => {
+  tempDir = mkdtempSync(join(tmpdir(), 'ratatoskr-db-test-'));
+});
+
+after(() => {
+  rmSync(tempDir, { recursive: true, force: true });
+});
+
+test('fresh database initializes successfully', () => {
+  const dbPath = join(tempDir, 'fresh.db');
+  const db = openDatabase(dbPath);
+  try {
+    assert.ok(existsSync(dbPath), 'database file should exist on disk');
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((row) => (row as { name: string }).name);
+
+    for (const expected of ['managed_resources', 'seasons', 'divisions', 'schema_migrations']) {
+      assert.ok(tables.includes(expected), `expected table "${expected}" to exist`);
+    }
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('migrations are idempotent across repeated startups against the same file', () => {
+  const dbPath = join(tempDir, 'idempotent.db');
+
+  const first = openDatabase(dbPath);
+  closeDatabase(first);
+
+  const second = openDatabase(dbPath);
+  try {
+    const rows = second.prepare('SELECT id FROM schema_migrations ORDER BY id').all() as { id: number }[];
+    const ids = rows.map((row) => row.id);
+    assert.deepEqual(ids, [...new Set(ids)], 'schema_migrations must not contain duplicate migration ids');
+    assert.ok(ids.length > 0, 'at least one migration should be recorded');
+  } finally {
+    closeDatabase(second);
+  }
+});
+
+test('process restart against the same database preserves inserted state', () => {
+  const dbPath = join(tempDir, 'restart.db');
+
+  const beforeRestart = openDatabase(dbPath);
+  insertManagedResource(beforeRestart, {
+    discordResourceId: 'channel-1',
+    guildId: 'guild-1',
+    resourceType: 'text_channel',
+    logicalKey: 'server:welcome:channel',
+    scaffoldDomain: 'server',
+  });
+  closeDatabase(beforeRestart);
+
+  const afterRestart = openDatabase(dbPath);
+  try {
+    const resource = getManagedResourceByDiscordId(afterRestart, 'guild-1', 'channel-1');
+    assert.ok(resource, 'resource inserted before restart should survive a reopen of the same file');
+    assert.equal(resource?.logicalKey, 'server:welcome:channel');
+  } finally {
+    closeDatabase(afterRestart);
+  }
+});
+
+test('managed resources can be inserted and read back by Discord ID and logical key', () => {
+  const db = openDatabase(join(tempDir, 'managed-resources.db'));
+  try {
+    const inserted = insertManagedResource(db, {
+      discordResourceId: 'category-42',
+      guildId: 'guild-1',
+      resourceType: 'category',
+      logicalKey: 'division:Crown:category',
+      scaffoldDomain: 'division',
+    });
+
+    const byDiscordId = getManagedResourceByDiscordId(db, 'guild-1', 'category-42');
+    assert.equal(byDiscordId?.id, inserted.id);
+    assert.equal(byDiscordId?.status, 'active');
+
+    const byLogicalKey = getActiveManagedResourceByLogicalKey(db, 'guild-1', 'division:Crown:category');
+    assert.equal(byLogicalKey?.id, inserted.id);
+
+    const missing = getManagedResourceByDiscordId(db, 'guild-1', 'does-not-exist');
+    assert.equal(missing, undefined);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('season identity keeps season_number, display_name, and category_name independent', () => {
+  const db = openDatabase(join(tempDir, 'season-identity.db'));
+  try {
+    const named = createSeason(db, {
+      guildId: 'guild-1',
+      seasonNumber: 2,
+      displayName: 'Season of the Tree',
+    });
+    assert.equal(named.seasonNumber, 2);
+    assert.equal(named.displayName, 'Season of the Tree');
+    assert.equal(named.categoryName, 'Season of the Tree');
+
+    const unnamed = createSeason(db, {
+      guildId: 'guild-1',
+      seasonNumber: 3,
+    });
+    assert.equal(unnamed.seasonNumber, 3);
+    assert.equal(unnamed.displayName, null);
+    assert.equal(unnamed.categoryName, 'YSL Season 3');
+
+    const rereadNamed = getSeasonByNumber(db, 'guild-1', 2);
+    assert.equal(rereadNamed?.displayName, 'Season of the Tree');
+    const rereadUnnamed = getSeasonByNumber(db, 'guild-1', 3);
+    assert.equal(rereadUnnamed?.displayName, null);
+    assert.equal(rereadUnnamed?.categoryName, 'YSL Season 3');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('exactly one season can be active at a time per guild', () => {
+  const db = openDatabase(join(tempDir, 'active-season.db'));
+  try {
+    const seasonOne = createSeason(db, { guildId: 'guild-1', seasonNumber: 1 });
+    const seasonTwo = createSeason(db, { guildId: 'guild-1', seasonNumber: 2, displayName: 'Season of the Tree' });
+
+    assert.equal(getActiveSeason(db, 'guild-1'), undefined, 'no season is active until explicitly set');
+
+    setActiveSeason(db, 'guild-1', seasonOne.id);
+    assert.equal(getActiveSeason(db, 'guild-1')?.id, seasonOne.id);
+
+    setActiveSeason(db, 'guild-1', seasonTwo.id);
+    const active = getActiveSeason(db, 'guild-1');
+    assert.equal(active?.id, seasonTwo.id, 'activating a new season should deactivate the previous one');
+
+    const stale = getSeasonByNumber(db, 'guild-1', 1);
+    assert.equal(stale?.status, 'inactive');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('division persistence reconciles by (guildId, divisionName) without duplicating rows', () => {
+  const db = openDatabase(join(tempDir, 'divisions.db'));
+  try {
+    upsertDivision(db, { guildId: 'guild-1', divisionName: 'Crown', roleId: 'role-1' });
+    upsertDivision(db, { guildId: 'guild-1', divisionName: 'Crown', roleId: 'role-1', categoryId: 'category-1' });
+
+    const rows = db.prepare('SELECT COUNT(*) AS count FROM divisions WHERE guild_id = ?').get('guild-1') as {
+      count: number;
+    };
+    assert.equal(rows.count, 1, 'reconciling the same division twice must not create a second row');
+
+    const division = getDivisionByName(db, 'guild-1', 'Crown');
+    assert.equal(division?.categoryId, 'category-1');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('opening a database at an unwritable path fails clearly instead of falling back silently', () => {
+  const blockingFilePath = join(tempDir, 'not-a-directory');
+  writeFileSync(blockingFilePath, 'this is a file, not a directory');
+  const impossiblePath = join(blockingFilePath, 'nested', 'ratatoskr.db');
+
+  assert.throws(() => {
+    openDatabase(impossiblePath);
+  }, /Cannot create directory/);
+});
+
+test('resolveDatabasePath never resolves to an in-memory database', async () => {
+  const { resolveDatabasePath } = await import('./client.js');
+  const originalPath = process.env.DATABASE_PATH;
+  try {
+    delete process.env.DATABASE_PATH;
+    assert.notEqual(resolveDatabasePath(), ':memory:');
+
+    process.env.DATABASE_PATH = '/data/ratatoskr.db';
+    assert.equal(resolveDatabasePath(), '/data/ratatoskr.db');
+  } finally {
+    if (originalPath === undefined) delete process.env.DATABASE_PATH;
+    else process.env.DATABASE_PATH = originalPath;
+  }
+});
