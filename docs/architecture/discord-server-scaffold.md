@@ -81,7 +81,7 @@ Humans should not manually manage these utility roles.
 - `/division status` — report missing role/category/channel pieces
 - `/division archive` — hide the category and all child channels from normal division access while preserving history
 
-Only `Allfather`, `Æsir`, or members with Discord Administrator permission may manage divisions.
+Division commands are gated by the ADMIN policy in `src/services/authorization.ts`: only members holding the role configured as `ROLE_ALLFATHER_ID` or `ROLE_AESIR_ID` may manage divisions. This is a runtime role-ID check, not Discord's native Administrator permission -- holding Administrator alone does not grant access.
 
 ## Base category layout
 
