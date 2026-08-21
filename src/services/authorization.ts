@@ -5,7 +5,7 @@ import { z } from 'zod';
 // shared schema) so that only code paths which actually depend on the
 // authorization layer -- the running bot -- require these to be set.
 // scripts/bootstrap-guild.ts imports config/env.ts to create the Allfather
-// and Æsir roles by name on a fresh server, before their IDs can possibly
+// and Aesir roles by name on a fresh server, before their IDs can possibly
 // exist yet; it never imports this module, so that flow stays unblocked.
 const AuthorizationEnvSchema = z.object({
   ROLE_ALLFATHER_ID: z.string().min(1),

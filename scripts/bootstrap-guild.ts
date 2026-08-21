@@ -12,7 +12,7 @@ import {
   type VoiceChannel,
 } from 'discord.js';
 import { env } from '../src/config/env.js';
-import { yslGuildStructure, type GuildChannelSpec } from '../src/config/guild-structure.js';
+import { yslGuildStructure, type GuildChannelSpec, type GuildRoleSpec } from '../src/config/guild-structure.js';
 import {
   closeDatabase,
   getActiveManagedResourceByLogicalKey,
@@ -65,11 +65,7 @@ async function resolveManagedRole(
   return undefined;
 }
 
-async function ensureRole(
-  db: Database.Database,
-  guild: Guild,
-  spec: (typeof yslGuildStructure.roles)[number],
-): Promise<Role> {
+async function ensureRole(db: Database.Database, guild: Guild, spec: GuildRoleSpec): Promise<Role> {
   const logicalKey = serverRoleLogicalKey(spec.name);
 
   const managedRole = await resolveManagedRole(db, guild, logicalKey);
@@ -238,8 +234,8 @@ async function ensureChannel(
 ) {
   const parentId = category.id;
   const expectedType = spec.type === 'voice' ? ChannelType.GuildVoice : ChannelType.GuildText;
-  const resourceType = spec.type === 'voice' ? 'voice_channel' : 'text_channel';
-  const logicalKey = serverChannelLogicalKey(categoryName, spec.name);
+  const resourceType = spec.type === 'voice' ? ('voice_channel' as const) : ('text_channel' as const);
+  const logicalKey = serverChannelLogicalKey(categoryName, spec.name, resourceType);
   const permissionOverwrites = resolveChannelOverwrites(guild, roleMap, spec);
 
   const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);

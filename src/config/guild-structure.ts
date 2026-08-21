@@ -29,7 +29,7 @@ export type DivisionName = (typeof divisions)[number];
 export const yslGuildStructure = {
   roles: [
     { name: 'Allfather', hoist: true },
-    { name: 'Æsir', hoist: true },
+    { name: 'Aesir', hoist: true },
     { name: 'Valkyries', hoist: true },
     { name: 'Production', hoist: true },
     { name: 'Org Owner', hoist: true },
@@ -76,7 +76,7 @@ export const yslGuildStructure = {
     },
     {
       name: 'Org Owners',
-      access: ['Org Owner', 'Æsir', 'Allfather'],
+      access: ['Org Owner', 'Aesir', 'Allfather'],
       channels: [
         { name: 'org-owner-lounge', type: 'text' },
         { name: 'org-admin-discussion', type: 'text' },
@@ -85,7 +85,7 @@ export const yslGuildStructure = {
     },
     {
       name: 'Production',
-      access: ['Production', 'Æsir', 'Allfather'],
+      access: ['Production', 'Aesir', 'Allfather'],
       channels: [
         { name: 'production-chat', type: 'text' },
         { name: 'broadcast-planning', type: 'text' },
@@ -95,7 +95,7 @@ export const yslGuildStructure = {
     },
     {
       name: 'Admin',
-      access: ['Valkyries', 'Æsir', 'Allfather'],
+      access: ['Valkyries', 'Aesir', 'Allfather'],
       channels: [
         { name: 'meeting-of-the-minds', type: 'text' },
         { name: 'staff-ops', type: 'text' },

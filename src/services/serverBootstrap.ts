@@ -3,7 +3,7 @@ import type { ManagedResource, ManagedResourceType } from '../db/types.js';
 
 export type ServerStructureLike = {
   roles: readonly { name: string }[];
-  categories: readonly { name: string; channels: readonly { name: string }[] }[];
+  categories: readonly { name: string; channels: readonly { name: string; type: 'text' | 'voice' }[] }[];
 };
 
 // Pure ownership-determination and obsolete-detection logic for Server
@@ -79,8 +79,20 @@ export function serverCategoryLogicalKey(categoryName: string): string {
   return `server:${slugify(categoryName)}:category`;
 }
 
-export function serverChannelLogicalKey(categoryName: string, channelName: string): string {
-  return `server:${slugify(categoryName)}:${slugify(channelName)}:channel`;
+// `kind` is required, not optional: Discord lets a text and a voice channel
+// share the same (case-insensitive) name under one category -- e.g.
+// Community's "general" text channel and "General" voice channel. Without
+// the resource type in the key, both would slugify to the same logical key
+// and silently clobber each other's managed_resources tracking on every
+// run (confirmed live: the second one processed would find the first one's
+// row, see a type mismatch, mark it obsolete, and re-adopt itself under the
+// same key -- flip-flopping which one is "tracked" on every subsequent run).
+export function serverChannelLogicalKey(
+  categoryName: string,
+  channelName: string,
+  kind: Extract<ManagedResourceType, 'text_channel' | 'voice_channel'>,
+): string {
+  return `server:${slugify(categoryName)}:${slugify(channelName)}:${kind}`;
 }
 
 // Every logical key the current template defines -- the full set that
@@ -97,7 +109,7 @@ export function currentServerLogicalKeys(structure: ServerStructureLike): Set<st
   for (const category of structure.categories) {
     keys.add(serverCategoryLogicalKey(category.name));
     for (const channel of category.channels) {
-      keys.add(serverChannelLogicalKey(category.name, channel.name));
+      keys.add(serverChannelLogicalKey(category.name, channel.name, channel.type === 'voice' ? 'voice_channel' : 'text_channel'));
     }
   }
 

@@ -14,7 +14,7 @@ import {
 } from './serverBootstrap.js';
 
 const EVERYONE_ID = 'everyone-role-id';
-const roleIds: Record<string, string> = { Æsir: 'aesir-id', Allfather: 'allfather-id', Valkyries: 'valkyries-id' };
+const roleIds: Record<string, string> = { Aesir: 'aesir-id', Allfather: 'allfather-id', Valkyries: 'valkyries-id' };
 const resolveRoleId = (name: string) => roleIds[name];
 
 function managedResource(overrides: Partial<ManagedResource>): ManagedResource {
@@ -102,7 +102,21 @@ test('detectObsoleteManagedResources: an empty managed_resources set (first run)
 test('logical key builders are stable and slot-shaped', () => {
   assert.equal(serverRoleLogicalKey('Allfather'), 'server:allfather:role');
   assert.equal(serverCategoryLogicalKey('League Information'), 'server:league-information:category');
-  assert.equal(serverChannelLogicalKey('League Information', 'sign-ups'), 'server:league-information:sign-ups:channel');
+  assert.equal(
+    serverChannelLogicalKey('League Information', 'sign-ups', 'text_channel'),
+    'server:league-information:sign-ups:text_channel',
+  );
+});
+
+test('serverChannelLogicalKey: a text and voice channel sharing a case-folded name under the same category get distinct keys', () => {
+  // Regression test for a live bug: Community's "general" text channel and
+  // "General" voice channel previously slugified to the identical logical
+  // key (kind was not part of the key), so the second one processed would
+  // find the first one's managed_resources row, see a type mismatch, mark
+  // it obsolete, and re-adopt itself under the same key every run.
+  const textKey = serverChannelLogicalKey('Community', 'general', 'text_channel');
+  const voiceKey = serverChannelLogicalKey('Community', 'General', 'voice_channel');
+  assert.notEqual(textKey, voiceKey);
 });
 
 test('currentServerLogicalKeys reflects every role/category/channel in the template', () => {
@@ -119,29 +133,29 @@ test('currentServerLogicalKeys reflects every role/category/channel in the templ
   const keys = currentServerLogicalKeys(structure);
   assert.ok(keys.has('server:allfather:role'));
   assert.ok(keys.has('server:welcome:category'));
-  assert.ok(keys.has('server:welcome:welcome:channel'));
+  assert.ok(keys.has('server:welcome:welcome:text_channel'));
   assert.equal(keys.size, 3);
 });
 
 test('resolveChannelPermissionOverwrites: no access and no readOnly produces no overwrites', () => {
-  const result = resolveChannelPermissionOverwrites(EVERYONE_ID, resolveRoleId, ['Æsir'], {});
+  const result = resolveChannelPermissionOverwrites(EVERYONE_ID, resolveRoleId, ['Aesir'], {});
   assert.equal(result, undefined);
 });
 
 test('resolveChannelPermissionOverwrites: readOnly denies SendMessages/CreatePublicThreads to @everyone and allows staff', () => {
-  const result = resolveChannelPermissionOverwrites(EVERYONE_ID, resolveRoleId, ['Æsir', 'Allfather'], { readOnly: true });
+  const result = resolveChannelPermissionOverwrites(EVERYONE_ID, resolveRoleId, ['Aesir', 'Allfather'], { readOnly: true });
   assert.ok(result);
 
   const everyone = result!.find((entry) => entry.id === EVERYONE_ID);
   assert.deepEqual(everyone?.deny.sort(), [PermissionFlagsBits.SendMessages, PermissionFlagsBits.CreatePublicThreads].sort());
   assert.deepEqual(everyone?.allow, []);
 
-  const staff = result!.find((entry) => entry.id === roleIds.Æsir);
+  const staff = result!.find((entry) => entry.id === roleIds.Aesir);
   assert.deepEqual(staff?.allow.sort(), [PermissionFlagsBits.SendMessages, PermissionFlagsBits.CreatePublicThreads].sort());
 });
 
 test('resolveChannelPermissionOverwrites: access alone still denies/allows only ViewChannel, unchanged from before readOnly existed', () => {
-  const result = resolveChannelPermissionOverwrites(EVERYONE_ID, resolveRoleId, ['Æsir'], { access: ['Allfather'] });
+  const result = resolveChannelPermissionOverwrites(EVERYONE_ID, resolveRoleId, ['Aesir'], { access: ['Allfather'] });
   assert.ok(result);
 
   const everyone = result!.find((entry) => entry.id === EVERYONE_ID);

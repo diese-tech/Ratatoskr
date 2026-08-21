@@ -68,7 +68,7 @@ function archiveOverwrites(interaction: ChatInputCommandInteraction) {
   return [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     ...guild.roles.cache
-      .filter((role) => role.name === 'Allfather' || role.name === 'Æsir')
+      .filter((role) => role.name === 'Allfather' || role.name === 'Aesir')
       .map((role) => ({ id: role.id, allow: [PermissionFlagsBits.ViewChannel] })),
   ];
 }
