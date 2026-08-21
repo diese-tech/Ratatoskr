@@ -32,10 +32,15 @@ export function getDivisionTemplate(division: DivisionName) {
       { name: 'general', type: 'text' as const },
       { name: 'scheduling', type: 'text' as const },
       { name: 'match-reports', type: 'text' as const },
+      { name: 'tier-list', type: 'text' as const },
       { name: 'captain-chat', type: 'text' as const, captainOnly: true },
       { name: `${division} Lobby`, type: 'voice' as const },
     ],
   };
+}
+
+export function getExpectedChannelNames(division: DivisionName): string[] {
+  return getDivisionTemplate(division).channels.map((channel) => channel.name);
 }
 
 function roleByName(guild: Guild, name: string) {

@@ -61,6 +61,7 @@ A provisioned division contains:
 ├─ #general
 ├─ #scheduling
 ├─ #match-reports
+├─ #tier-list
 ├─ #captain-chat
 └─ 🔊 <Division> Lobby
 ```
