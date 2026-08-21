@@ -95,10 +95,24 @@ export function listSeasons(db: Database.Database, guildId: string): Season[] {
 // single UPDATE is what lets idx_seasons_one_active_per_guild (a partial
 // UNIQUE index on status = 'active') stay satisfied at every intermediate
 // point, rather than briefly having two active rows.
+//
+// If `seasonId` doesn't exist (or belongs to another guild), the activating
+// UPDATE matches zero rows without erroring on its own -- so this throws
+// explicitly *inside* the transaction in that case, which rolls the
+// deactivation back too. Without that, a bad seasonId would silently leave
+// the guild with no active season at all before the caller ever saw an
+// error.
 export function setActiveSeason(db: Database.Database, guildId: string, seasonId: number): Season {
   const activate = db.transaction((targetSeasonId: number) => {
     db.prepare("UPDATE seasons SET status = 'inactive' WHERE guild_id = ? AND status = 'active'").run(guildId);
-    db.prepare("UPDATE seasons SET status = 'active' WHERE id = ? AND guild_id = ?").run(targetSeasonId, guildId);
+
+    const result = db
+      .prepare("UPDATE seasons SET status = 'active' WHERE id = ? AND guild_id = ?")
+      .run(targetSeasonId, guildId);
+
+    if (result.changes === 0) {
+      throw new Error(`Season ${targetSeasonId} not found for guild ${guildId}`);
+    }
   });
 
   activate(seasonId);

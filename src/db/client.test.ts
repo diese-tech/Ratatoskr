@@ -162,6 +162,27 @@ test('exactly one season can be active at a time per guild', () => {
   }
 });
 
+test('activating a nonexistent season throws without deactivating the current one', () => {
+  const db = openDatabase(join(tempDir, 'active-season-invalid-target.db'));
+  try {
+    const seasonOne = createSeason(db, { guildId: 'guild-1', seasonNumber: 1 });
+    setActiveSeason(db, 'guild-1', seasonOne.id);
+
+    assert.throws(() => {
+      setActiveSeason(db, 'guild-1', 999999);
+    }, /not found/);
+
+    const active = getActiveSeason(db, 'guild-1');
+    assert.equal(
+      active?.id,
+      seasonOne.id,
+      'a failed activation must not leave the guild with zero active seasons',
+    );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test('division persistence reconciles by (guildId, divisionName) without duplicating rows', () => {
   const db = openDatabase(join(tempDir, 'divisions.db'));
   try {
