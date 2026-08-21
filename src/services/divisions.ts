@@ -121,11 +121,11 @@ export async function provisionDivision(guild: Guild, division: DivisionName): P
     );
     const permissionOverwrites = 'captainOnly' in channelSpec && channelSpec.captainOnly
       ? captainOverwrites(guild, captainAccessRole)
-      : undefined;
+      : [];
 
     if (existing) {
-      if (permissionOverwrites && !existing.isThread()) {
-        await existing.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile captain-chat permissions');
+      if (!existing.isThread()) {
+        await existing.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile division channel permissions');
       }
       result.reused.push(`channel:${channelSpec.name}`);
       continue;
