@@ -4,9 +4,11 @@ import {
   Client,
   GatewayIntentBits,
   PermissionFlagsBits,
+  type CategoryChannel,
   type Guild,
-  type GuildBasedChannel,
   type Role,
+  type TextChannel,
+  type VoiceChannel,
 } from 'discord.js';
 import { env } from '../src/config/env.js';
 import { yslGuildStructure } from '../src/config/guild-structure.js';
@@ -63,9 +65,9 @@ async function ensureCategory(
   guild: Guild,
   roleMap: Map<string, Role>,
   spec: (typeof yslGuildStructure.categories)[number],
-) {
+): Promise<CategoryChannel> {
   const existing = guild.channels.cache.find(
-    (channel) => channel.type === ChannelType.GuildCategory && channel.name === spec.name,
+    (channel): channel is CategoryChannel => channel.type === ChannelType.GuildCategory && channel.name === spec.name,
   );
   const permissionOverwrites = resolveAccessOverwrites(guild, roleMap, spec.access);
 
@@ -82,7 +84,7 @@ async function ensureCategory(
 
   log('create category', spec.name);
   if (!apply) {
-    return { id: `dry-category:${spec.name}`, name: spec.name } as GuildBasedChannel;
+    return { id: `dry-category:${spec.name}`, name: spec.name } as CategoryChannel;
   }
 
   return guild.channels.create({
@@ -96,7 +98,7 @@ async function ensureCategory(
 async function ensureChannel(
   guild: Guild,
   roleMap: Map<string, Role>,
-  category: GuildBasedChannel,
+  category: CategoryChannel,
   categoryName: string,
   spec: (typeof yslGuildStructure.categories)[number]['channels'][number],
 ) {
@@ -104,7 +106,8 @@ async function ensureChannel(
   const expectedType = spec.type === 'voice' ? ChannelType.GuildVoice : ChannelType.GuildText;
   const permissionOverwrites = resolveAccessOverwrites(guild, roleMap, spec.access);
   const existing = guild.channels.cache.find(
-    (channel) => channel.name === spec.name && channel.parentId === parentId && channel.type === expectedType,
+    (channel): channel is TextChannel | VoiceChannel =>
+      channel.name === spec.name && channel.parentId === parentId && channel.type === expectedType,
   );
 
   if (existing) {
