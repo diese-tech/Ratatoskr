@@ -6,3 +6,8 @@ dist/
 *.log
 .DS_Store
 coverage/
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
