@@ -3,6 +3,7 @@ export type GuildRoleSpec = {
   color?: number;
   hoist?: boolean;
   mentionable?: boolean;
+  utility?: boolean;
 };
 
 export type GuildChannelSpec = {
@@ -18,6 +19,8 @@ export type GuildCategorySpec = {
   channels: GuildChannelSpec[];
 };
 
+export const divisions = ['Crown', 'Canopy', 'Ironbranch', 'Heartwood', 'Deep Root'] as const;
+
 export const yslGuildStructure = {
   roles: [
     { name: 'Allfather', hoist: true },
@@ -28,11 +31,13 @@ export const yslGuildStructure = {
     { name: 'Captain', hoist: true },
     { name: 'Player', hoist: false },
     { name: 'Free Agent', hoist: false },
-    { name: 'Crown', hoist: true },
-    { name: 'Canopy', hoist: true },
-    { name: 'Ironbranch', hoist: true },
-    { name: 'Heartwood', hoist: true },
-    { name: 'Deep Root', hoist: true },
+    ...divisions.map((name) => ({ name, hoist: true })),
+    ...divisions.map((division) => ({
+      name: `${division} Captain Access`,
+      hoist: false,
+      mentionable: false,
+      utility: true,
+    })),
   ] satisfies GuildRoleSpec[],
 
   categories: [
@@ -62,7 +67,7 @@ export const yslGuildStructure = {
         { name: 'league-resources', type: 'text' },
       ],
     },
-    ...['Crown', 'Canopy', 'Ironbranch', 'Heartwood', 'Deep Root'].map((division) => ({
+    ...divisions.map((division) => ({
       name: division,
       access: [division, 'Valkyries', 'Æsir', 'Allfather'],
       channels: [
@@ -72,8 +77,8 @@ export const yslGuildStructure = {
         {
           name: 'captains',
           type: 'text' as const,
-          access: [division, 'Captain', 'Valkyries', 'Æsir', 'Allfather'],
-          topic: 'Captain coordination for this division. Bootstrapper will treat this as a tighter-permission exception.',
+          access: [`${division} Captain Access`, 'Valkyries', 'Æsir', 'Allfather'],
+          topic: 'Captain coordination for this division. The utility access role represents Division + Captain because Discord permissions cannot express AND conditions.',
         },
         { name: `${division} Lobby`, type: 'voice' as const },
       ],
