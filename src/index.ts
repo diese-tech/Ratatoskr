@@ -36,7 +36,7 @@ client.once('clientReady', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    await handleInteraction(interaction);
+    await handleInteraction(interaction, db);
   } catch (error) {
     console.error('Interaction failed', error);
     if (interaction.isRepliable()) {
