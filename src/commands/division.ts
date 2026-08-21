@@ -6,6 +6,7 @@ import {
   type CategoryChannel,
   type ChatInputCommandInteraction,
   type GuildMember,
+  type Role,
 } from 'discord.js';
 import { divisions, type DivisionName } from '../config/guild-structure.js';
 import { provisionDivision } from '../services/divisions.js';
@@ -39,11 +40,32 @@ export const divisionCommand = new SlashCommandBuilder()
       .addStringOption((option) =>
         option.setName('name').setDescription('Division to archive.').setRequired(true).addChoices(...choices),
       ),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('delete')
+      .setDescription("Permanently delete an archived division's category, channels, and roles.")
+      .addStringOption((option) =>
+        option.setName('name').setDescription('Archived division to delete.').setRequired(true).addChoices(...choices),
+      )
+      .addBooleanOption((option) =>
+        option.setName('confirm').setDescription('Must be true to permanently delete.').setRequired(true),
+      ),
   );
 
 function canManageDivisions(member: GuildMember) {
   if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
   return member.roles.cache.some((role) => role.name === 'Allfather' || role.name === 'Æsir');
+}
+
+function isCategoryArchived(category: CategoryChannel, divisionRole: Role | undefined) {
+  // Active and archived categories both deny @everyone ViewChannel (that's the
+  // default-deny model), so that alone doesn't distinguish them. Only the
+  // active state's overwrites (see categoryOverwrites in services/divisions.ts)
+  // grant the division role itself access; archiveOverwrites omits it entirely.
+  if (!divisionRole) return true;
+  const roleOverwrite = category.permissionOverwrites.cache.get(divisionRole.id);
+  return !(roleOverwrite?.allow.has(PermissionFlagsBits.ViewChannel) ?? false);
 }
 
 function archiveOverwrites(interaction: ChatInputCommandInteraction) {
@@ -113,6 +135,65 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
         `Missing channels: ${missing.length ? missing.join(', ') : 'none'}`,
       ].join('\n'),
     });
+    return;
+  }
+
+  if (subcommand === 'delete') {
+    const confirm = interaction.options.getBoolean('confirm', true);
+
+    if (!category) {
+      await interaction.reply({ content: `${division} does not have a category to delete.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!isCategoryArchived(category, role)) {
+      await interaction.reply({
+        content: `${division} must be archived with \`/division archive\` before it can be deleted.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const captainRole = interaction.guild.roles.cache.find(
+      (candidate) => candidate.name === `${division} Captain Access`,
+    );
+    const rolesToDelete = [role, captainRole].filter((candidate): candidate is Role => Boolean(candidate));
+    const channelNames = category.children.cache.map((channel) => channel.name);
+    const roleNames = rolesToDelete.map((roleToDelete) => roleToDelete.name);
+
+    if (!confirm) {
+      await interaction.reply({
+        content: [
+          `This will permanently delete the following for **${division}**:`,
+          `Category: ${category.name}`,
+          `Channels (${channelNames.length}): ${channelNames.length ? channelNames.join(', ') : 'none'}`,
+          `Roles (${roleNames.length}): ${roleNames.length ? roleNames.join(', ') : 'none'}`,
+          '',
+          'Re-run with `confirm: true` to proceed. This cannot be undone.',
+        ].join('\n'),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    for (const channel of category.children.cache.values()) {
+      await channel.delete('Ratatoskr division deletion');
+    }
+    await category.delete('Ratatoskr division deletion');
+
+    for (const roleToDelete of rolesToDelete) {
+      await roleToDelete.delete('Ratatoskr division deletion');
+    }
+
+    await interaction.editReply(
+      [
+        `${division} has been permanently deleted.`,
+        `Channels removed (${channelNames.length}): ${channelNames.length ? channelNames.join(', ') : 'none'}`,
+        `Roles removed (${roleNames.length}): ${roleNames.length ? roleNames.join(', ') : 'none'}`,
+      ].join('\n'),
+    );
     return;
   }
 
