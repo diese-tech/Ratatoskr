@@ -2,6 +2,7 @@ import {
   ChannelType,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  type CategoryChannel,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
@@ -83,7 +84,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
 
   const role = interaction.guild.roles.cache.find((candidate) => candidate.name === division);
   const category = interaction.guild.channels.cache.find(
-    (channel) => channel.type === ChannelType.GuildCategory && channel.name === division,
+    (channel): channel is CategoryChannel => channel.type === ChannelType.GuildCategory && channel.name === division,
   );
 
   if (subcommand === 'status') {
@@ -122,19 +123,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
   const overwrites = archiveOverwrites(interaction);
   await category.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
 
-  const children = interaction.guild.channels.cache.filter((channel) => channel.parentId === category.id);
-  for (const channel of children.values()) {
-    if (
-      channel.type !== ChannelType.GuildText &&
-      channel.type !== ChannelType.GuildVoice &&
-      channel.type !== ChannelType.GuildAnnouncement &&
-      channel.type !== ChannelType.GuildForum &&
-      channel.type !== ChannelType.GuildMedia &&
-      channel.type !== ChannelType.GuildStageVoice
-    ) {
-      continue;
-    }
-
+  for (const channel of category.children.cache.values()) {
     await channel.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
   }
 
