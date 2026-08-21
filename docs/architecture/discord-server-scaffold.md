@@ -23,7 +23,7 @@ The bootstrapper does **not** delete or rename unmatched existing content. Restr
 ### Themed organizational roles
 
 1. `Allfather` — league owner / highest authority
-2. `Æsir` — administrators
+2. `Aesir` — administrators
 3. `Valkyries` — moderators / league staff
 
 ### Functional roles
@@ -131,7 +131,7 @@ Restricted categories use default-deny permissions:
 - each provisioned division — matching division role + staff
 - `Org Owners` — Org Owner + admin leadership
 - `Production` — Production + admin leadership
-- `Admin` — Valkyries / Æsir / Allfather
+- `Admin` — Valkyries / Aesir / Allfather
 
 ## Bootstrap behavior
 
