@@ -1,8 +1,8 @@
 import {
   ChannelType,
   PermissionFlagsBits,
+  type CategoryChannel,
   type Guild,
-  type GuildBasedChannel,
   type GuildMember,
   type Role,
 } from 'discord.js';
@@ -82,13 +82,13 @@ async function ensureCategory(
   division: DivisionName,
   divisionRole: Role,
   result: DivisionProvisionResult,
-): Promise<GuildBasedChannel> {
+): Promise<CategoryChannel> {
   const existing = guild.channels.cache.find(
     (channel) => channel.type === ChannelType.GuildCategory && channel.name === division,
   );
   const overwrites = categoryOverwrites(guild, divisionRole);
 
-  if (existing) {
+  if (existing && existing.type === ChannelType.GuildCategory) {
     await existing.permissionOverwrites.set(overwrites, 'Ratatoskr reconcile division category permissions');
     result.reused.push(`category:${division}`);
     return existing;
@@ -124,7 +124,7 @@ export async function provisionDivision(guild: Guild, division: DivisionName): P
       : undefined;
 
     if (existing) {
-      if (permissionOverwrites) {
+      if (permissionOverwrites && !existing.isThread()) {
         await existing.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile captain-chat permissions');
       }
       result.reused.push(`channel:${channelSpec.name}`);
