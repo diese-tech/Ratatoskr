@@ -1,6 +1,6 @@
 # YSL Discord Server Scaffold
 
-This is the working mock structure for the Yggdrasil Smite League Discord. It is intentionally additive and safe to iterate on before touching the live server.
+This is the working scaffold for the Yggdrasil Smite League Discord. The base bootstrap is intentionally additive and safe to iterate on before touching the live server.
 
 ## Current live-server baseline
 
@@ -16,9 +16,7 @@ The initial server currently contains a minimal structure:
   - `#meeting-of-the-minds`
   - `General` voice
 
-The current role list is also intentionally light (`Admin` plus integrations such as Dyno).
-
-The bootstrapper does **not** delete or rename these existing items. Migration/cleanup should happen only after the mock structure is approved.
+The bootstrapper does **not** delete or rename unmatched existing content. Restricted matching categories/channels are permission-reconciled before reuse.
 
 ## Working role model
 
@@ -36,7 +34,7 @@ The bootstrapper does **not** delete or rename these existing items. Migration/c
 - `Player`
 - `Free Agent`
 
-### Division roles
+### Canonical division names
 
 Highest to lowest:
 
@@ -46,23 +44,45 @@ Highest to lowest:
 4. `Heartwood`
 5. `Deep Root`
 
-Division roles grant access to the normal channels for that division.
+The base bootstrap does **not** create all five divisions. Divisions are provisioned only when YSL activates them.
 
-### Utility access roles
+## Division provisioning
 
-Discord permissions are additive and cannot express a true `Division AND Captain` requirement. For captain-only channels, Ratatoskr therefore creates non-hoisted utility roles:
+Ratatoskr exposes a reusable division provisioner used by runtime commands. `/division add name:<division>` creates or repairs exactly one division.
 
-- `Crown Captain Access`
-- `Canopy Captain Access`
-- `Ironbranch Captain Access`
-- `Heartwood Captain Access`
-- `Deep Root Captain Access`
+A provisioned division contains:
 
-These are permission implementation details, not identity/status roles. Ratatoskr can maintain them automatically based on a member's `Captain` + division state.
+```text
+@<Division>
+@<Division> Captain Access   (hidden utility role)
 
-Org roles are not included in the bootstrap because organization names are not known yet and org roles are primarily cosmetic/identity roles. Ratatoskr can add them later from league configuration.
+<Division>
+├─ #<division>-announcements
+├─ #general
+├─ #scheduling
+├─ #match-reports
+├─ #captain-chat
+└─ 🔊 <Division> Lobby
+```
 
-## Mock category layout
+The division role grants access to the category. `#captain-chat` is the only tighter-permission exception and is visible to the division-specific captain utility role plus staff.
+
+Discord cannot express `Division AND Captain` directly, so Ratatoskr automatically reconciles utility access roles:
+
+- member has `Captain` + `Crown` → ensure `Crown Captain Access`
+- member loses either role → remove `Crown Captain Access`
+
+Humans should not manually manage these utility roles.
+
+### Division commands
+
+- `/division add` — idempotently create or repair a selected division
+- `/division status` — report missing role/category/channel pieces
+- `/division archive` — hide the category and all child channels from normal division access while preserving history
+
+Only `Allfather`, `Æsir`, or members with Discord Administrator permission may manage divisions.
+
+## Base category layout
 
 ```text
 Welcome
@@ -81,41 +101,6 @@ League Players
 ├─ #free-agency
 └─ #league-resources
 
-Crown
-├─ #crown-announcements
-├─ #crown-general
-├─ #schedule-results
-├─ #captains
-└─ 🔊 Crown Lobby
-
-Canopy
-├─ #canopy-announcements
-├─ #canopy-general
-├─ #schedule-results
-├─ #captains
-└─ 🔊 Canopy Lobby
-
-Ironbranch
-├─ #ironbranch-announcements
-├─ #ironbranch-general
-├─ #schedule-results
-├─ #captains
-└─ 🔊 Ironbranch Lobby
-
-Heartwood
-├─ #heartwood-announcements
-├─ #heartwood-general
-├─ #schedule-results
-├─ #captains
-└─ 🔊 Heartwood Lobby
-
-Deep Root
-├─ #deep-root-announcements
-├─ #deep-root-general
-├─ #schedule-results
-├─ #captains
-└─ 🔊 Deep Root Lobby
-
 Org Owners
 ├─ #org-owner-lounge
 ├─ #org-admin-discussion
@@ -133,23 +118,23 @@ Admin
 └─ 🔊 Staff Room
 ```
 
+`Free Agent` is included in the League Players access set so free agents can reach `#free-agency`.
+
 ## Access model
 
 Public categories remain visible to `@everyone`.
 
 Restricted categories use default-deny permissions:
 
-- `League Players` — player/staff layer
-- each division — corresponding division role + staff
+- `League Players` — Player / Captain / Free Agent / Org Owner / staff
+- each provisioned division — matching division role + staff
 - `Org Owners` — Org Owner + admin leadership
 - `Production` — Production + admin leadership
 - `Admin` — Valkyries / Æsir / Allfather
 
-`#captains` inside each division is a deliberate tighter-permission exception and uses the division-specific captain utility role.
-
 ## Bootstrap behavior
 
-The bootstrap script lives at `scripts/bootstrap-guild.ts`.
+The base bootstrap lives at `scripts/bootstrap-guild.ts`.
 
 Safe preview:
 
@@ -157,25 +142,24 @@ Safe preview:
 npm run guild:plan
 ```
 
-Apply changes:
+Apply base changes:
 
 ```bash
 npm run guild:apply
 ```
 
-The script is deliberately conservative:
+Safety rules:
 
 - dry-run is the default
-- existing matching roles/categories/channels are reused
-- existing unmatched server content is preserved
+- matching restricted categories/channels have configured permissions reconciled before reuse
+- unmatched server content is preserved
 - nothing is deleted
 - nothing is renamed
+- divisions are activated separately through Ratatoskr
 - no migration of the current `Admin` role is attempted automatically
-
-The mock should be reviewed before `guild:apply` is ever used against the live YSL guild.
 
 ## Branding context
 
-The regular-season divisions represent climbing Yggdrasil. Qualified teams then earn their place in **Valhalla** for quarterfinals and semifinals, with **Ascension** reserved for the Grand Finals concept.
+The regular-season divisions represent climbing Yggdrasil. Qualified teams earn their place in **Valhalla** for quarterfinals and semifinals, with **Ascension** reserved for the Grand Finals concept.
 
 Working phrase: **Climb Yggdrasil. Earn Valhalla. Ascend.**
