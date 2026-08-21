@@ -1,5 +1,18 @@
 import { MessageFlags, type ChatInputCommandInteraction, type GuildMember } from 'discord.js';
-import { env } from '../config/env.js';
+import { z } from 'zod';
+
+// Validated separately from src/config/env.ts (rather than added to its
+// shared schema) so that only code paths which actually depend on the
+// authorization layer -- the running bot -- require these to be set.
+// scripts/bootstrap-guild.ts imports config/env.ts to create the Allfather
+// and Æsir roles by name on a fresh server, before their IDs can possibly
+// exist yet; it never imports this module, so that flow stays unblocked.
+const AuthorizationEnvSchema = z.object({
+  ROLE_ALLFATHER_ID: z.string().min(1),
+  ROLE_AESIR_ID: z.string().min(1),
+});
+
+const authorizationEnv = AuthorizationEnvSchema.parse(process.env);
 
 // Semantic access policies, each backed by one or more Discord role IDs from
 // environment configuration. Role IDs are deployment-specific identifiers;
@@ -9,7 +22,7 @@ import { env } from '../config/env.js';
 export type AccessPolicy = 'ADMIN';
 
 const POLICY_ROLE_IDS: Record<AccessPolicy, readonly string[]> = {
-  ADMIN: [env.ROLE_ALLFATHER_ID, env.ROLE_AESIR_ID],
+  ADMIN: [authorizationEnv.ROLE_ALLFATHER_ID, authorizationEnv.ROLE_AESIR_ID],
 };
 
 export function hasAccess(member: GuildMember, policy: AccessPolicy): boolean {
