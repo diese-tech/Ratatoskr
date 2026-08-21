@@ -124,7 +124,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
 
   const children = interaction.guild.channels.cache.filter((channel) => channel.parentId === category.id);
   for (const channel of children.values()) {
-    if (channel.isThread()) continue;
+    if (!('permissionOverwrites' in channel)) continue;
     await channel.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
   }
 
