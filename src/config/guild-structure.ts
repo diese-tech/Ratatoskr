@@ -20,6 +20,7 @@ export type GuildCategorySpec = {
 };
 
 export const divisions = ['Crown', 'Canopy', 'Ironbranch', 'Heartwood', 'Deep Root'] as const;
+export type DivisionName = (typeof divisions)[number];
 
 export const yslGuildStructure = {
   roles: [
@@ -31,13 +32,6 @@ export const yslGuildStructure = {
     { name: 'Captain', hoist: true },
     { name: 'Player', hoist: false },
     { name: 'Free Agent', hoist: false },
-    ...divisions.map((name) => ({ name, hoist: true })),
-    ...divisions.map((division) => ({
-      name: `${division} Captain Access`,
-      hoist: false,
-      mentionable: false,
-      utility: true,
-    })),
   ] satisfies GuildRoleSpec[],
 
   categories: [
@@ -60,29 +54,13 @@ export const yslGuildStructure = {
     },
     {
       name: 'League Players',
-      access: ['Player', 'Captain', 'Org Owner', 'Valkyries', 'Æsir', 'Allfather'],
+      access: ['Player', 'Captain', 'Free Agent', 'Org Owner', 'Valkyries', 'Æsir', 'Allfather'],
       channels: [
         { name: 'player-lounge', type: 'text' },
         { name: 'free-agency', type: 'text' },
         { name: 'league-resources', type: 'text' },
       ],
     },
-    ...divisions.map((division) => ({
-      name: division,
-      access: [division, 'Valkyries', 'Æsir', 'Allfather'],
-      channels: [
-        { name: `${division.toLowerCase().replace(/\s+/g, '-')}-announcements`, type: 'text' as const },
-        { name: `${division.toLowerCase().replace(/\s+/g, '-')}-general`, type: 'text' as const },
-        { name: 'schedule-results', type: 'text' as const },
-        {
-          name: 'captains',
-          type: 'text' as const,
-          access: [`${division} Captain Access`, 'Valkyries', 'Æsir', 'Allfather'],
-          topic: 'Captain coordination for this division. The utility access role represents Division + Captain because Discord permissions cannot express AND conditions.',
-        },
-        { name: `${division} Lobby`, type: 'voice' as const },
-      ],
-    })),
     {
       name: 'Org Owners',
       access: ['Org Owner', 'Æsir', 'Allfather'],
