@@ -44,13 +44,23 @@ function canManageDivisions(member: GuildMember) {
   return member.roles.cache.some((role) => role.name === 'Allfather' || role.name === 'Æsir');
 }
 
+function archiveOverwrites(interaction: ChatInputCommandInteraction) {
+  const guild = interaction.guild!;
+  return [
+    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    ...guild.roles.cache
+      .filter((role) => role.name === 'Allfather' || role.name === 'Æsir')
+      .map((role) => ({ id: role.id, allow: [PermissionFlagsBits.ViewChannel] })),
+  ];
+}
+
 export async function handleDivisionCommand(interaction: ChatInputCommandInteraction) {
-  if (!interaction.guild || !(interaction.member instanceof Object)) {
+  if (!interaction.guild) {
     await interaction.reply({ content: 'This command can only be used in the YSL server.', ephemeral: true });
     return;
   }
 
-  const member = interaction.member as GuildMember;
+  const member = await interaction.guild.members.fetch(interaction.user.id);
   if (!canManageDivisions(member)) {
     await interaction.reply({ content: 'You do not have permission to manage divisions.', ephemeral: true });
     return;
@@ -68,6 +78,9 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
     return;
   }
 
+  await interaction.guild.roles.fetch();
+  await interaction.guild.channels.fetch();
+
   const role = interaction.guild.roles.cache.find((candidate) => candidate.name === division);
   const category = interaction.guild.channels.cache.find(
     (channel) => channel.type === ChannelType.GuildCategory && channel.name === division,
@@ -75,7 +88,14 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
 
   if (subcommand === 'status') {
     const captainRole = interaction.guild.roles.cache.find((candidate) => candidate.name === `${division} Captain Access`);
-    const expectedChannels = [`${division.toLowerCase().replace(/\s+/g, '-')}-announcements`, 'general', 'scheduling', 'match-reports', 'captain-chat', `${division} Lobby`];
+    const expectedChannels = [
+      `${division.toLowerCase().replace(/\s+/g, '-')}-announcements`,
+      'general',
+      'scheduling',
+      'match-reports',
+      'captain-chat',
+      `${division} Lobby`,
+    ];
     const existing = category
       ? interaction.guild.channels.cache.filter((channel) => channel.parentId === category.id).map((channel) => channel.name)
       : [];
@@ -99,15 +119,14 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
     return;
   }
 
-  await category.permissionOverwrites.set(
-    [
-      { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-      ...interaction.guild.roles.cache
-        .filter((candidate) => candidate.name === 'Allfather' || candidate.name === 'Æsir')
-        .map((candidate) => ({ id: candidate.id, allow: [PermissionFlagsBits.ViewChannel] })),
-    ],
-    'Ratatoskr division archive',
-  );
+  const overwrites = archiveOverwrites(interaction);
+  await category.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
+
+  const children = interaction.guild.channels.cache.filter((channel) => channel.parentId === category.id);
+  for (const channel of children.values()) {
+    await channel.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
+  }
+
   await interaction.reply({
     content: `${division} has been archived. The category and history were preserved and hidden from normal division access.`,
     ephemeral: true,
