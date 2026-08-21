@@ -154,9 +154,23 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
       return;
     }
 
+    const captainRole = interaction.guild.roles.cache.find(
+      (candidate) => candidate.name === `${division} Captain Access`,
+    );
+    const rolesToDelete = [role, captainRole].filter((candidate): candidate is Role => Boolean(candidate));
+    const channelNames = category.children.cache.map((channel) => channel.name);
+    const roleNames = rolesToDelete.map((roleToDelete) => roleToDelete.name);
+
     if (!confirm) {
       await interaction.reply({
-        content: `Pass \`confirm: true\` to permanently delete ${division}'s archived category, channels, and roles. This cannot be undone.`,
+        content: [
+          `This will permanently delete the following for **${division}**:`,
+          `Category: ${category.name}`,
+          `Channels (${channelNames.length}): ${channelNames.length ? channelNames.join(', ') : 'none'}`,
+          `Roles (${roleNames.length}): ${roleNames.length ? roleNames.join(', ') : 'none'}`,
+          '',
+          'Re-run with `confirm: true` to proceed. This cannot be undone.',
+        ].join('\n'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -164,24 +178,21 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const deletedChannels: string[] = [];
     for (const channel of category.children.cache.values()) {
-      deletedChannels.push(channel.name);
       await channel.delete('Ratatoskr division deletion');
     }
     await category.delete('Ratatoskr division deletion');
 
-    const captainRole = interaction.guild.roles.cache.find(
-      (candidate) => candidate.name === `${division} Captain Access`,
-    );
-    const deletedRoles: string[] = [];
-    for (const roleToDelete of [role, captainRole].filter((candidate): candidate is Role => Boolean(candidate))) {
-      deletedRoles.push(roleToDelete.name);
+    for (const roleToDelete of rolesToDelete) {
       await roleToDelete.delete('Ratatoskr division deletion');
     }
 
     await interaction.editReply(
-      `${division} has been permanently deleted.\nChannels removed: ${deletedChannels.length}\nRoles removed: ${deletedRoles.length}`,
+      [
+        `${division} has been permanently deleted.`,
+        `Channels removed (${channelNames.length}): ${channelNames.length ? channelNames.join(', ') : 'none'}`,
+        `Roles removed (${roleNames.length}): ${roleNames.length ? roleNames.join(', ') : 'none'}`,
+      ].join('\n'),
     );
     return;
   }
