@@ -1,5 +1,6 @@
 import {
   ChannelType,
+  MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
   type CategoryChannel,
@@ -57,13 +58,13 @@ function archiveOverwrites(interaction: ChatInputCommandInteraction) {
 
 export async function handleDivisionCommand(interaction: ChatInputCommandInteraction) {
   if (!interaction.guild) {
-    await interaction.reply({ content: 'This command can only be used in the YSL server.', ephemeral: true });
+    await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
     return;
   }
 
   const member = await interaction.guild.members.fetch(interaction.user.id);
   if (!canManageDivisions(member)) {
-    await interaction.reply({ content: 'You do not have permission to manage divisions.', ephemeral: true });
+    await interaction.reply({ content: 'You do not have permission to manage divisions.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -71,7 +72,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
   const subcommand = interaction.options.getSubcommand();
 
   if (subcommand === 'add') {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const result = await provisionDivision(interaction.guild, division);
     await interaction.editReply(
       `**${division}** is provisioned.\nCreated: ${result.created.length}\nReused/reconciled: ${result.reused.length}`,
@@ -103,7 +104,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
     const missing = expectedChannels.filter((name) => !existing.includes(name));
 
     await interaction.reply({
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
       content: [
         `**${division} status**`,
         `Division role: ${role ? 'yes' : 'no'}`,
@@ -116,9 +117,11 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
   }
 
   if (!category) {
-    await interaction.reply({ content: `${division} does not have a category to archive.`, ephemeral: true });
+    await interaction.reply({ content: `${division} does not have a category to archive.`, flags: MessageFlags.Ephemeral });
     return;
   }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const overwrites = archiveOverwrites(interaction);
   await category.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
@@ -127,8 +130,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
     await channel.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
   }
 
-  await interaction.reply({
-    content: `${division} has been archived. The category and history were preserved and hidden from normal division access.`,
-    ephemeral: true,
-  });
+  await interaction.editReply(
+    `${division} has been archived. The category and history were preserved and hidden from normal division access.`,
+  );
 }

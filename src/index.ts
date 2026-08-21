@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, MessageFlags } from 'discord.js';
 import { handleInteraction, registerGuildCommands } from './commands/index.js';
 import { env } from './config/env.js';
 import { syncCaptainAccess } from './services/divisions.js';
@@ -12,7 +12,7 @@ const client = new Client({
   ],
 });
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`Ratatoskr online as ${client.user?.tag ?? 'unknown user'}`);
   await registerGuildCommands(client, env.DISCORD_GUILD_ID);
   console.log('Guild slash commands registered.');
@@ -24,7 +24,7 @@ client.on('interactionCreate', async (interaction) => {
   } catch (error) {
     console.error('Interaction failed', error);
     if (interaction.isRepliable()) {
-      const payload = { content: 'Ratatoskr could not complete that command. Check staff logs for details.', ephemeral: true } as const;
+      const payload = { content: 'Ratatoskr could not complete that command. Check staff logs for details.', flags: MessageFlags.Ephemeral } as const;
       if (interaction.replied || interaction.deferred) await interaction.followUp(payload);
       else await interaction.reply(payload);
     }
