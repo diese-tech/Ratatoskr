@@ -9,7 +9,7 @@ import {
   type Role,
 } from 'discord.js';
 import { divisions, type DivisionName } from '../config/guild-structure.js';
-import { provisionDivision } from '../services/divisions.js';
+import { getExpectedChannelNames, provisionDivision } from '../services/divisions.js';
 
 const choices = divisions.map((division) => ({ name: division, value: division }));
 
@@ -112,14 +112,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
 
   if (subcommand === 'status') {
     const captainRole = interaction.guild.roles.cache.find((candidate) => candidate.name === `${division} Captain Access`);
-    const expectedChannels = [
-      `${division.toLowerCase().replace(/\s+/g, '-')}-announcements`,
-      'general',
-      'scheduling',
-      'match-reports',
-      'captain-chat',
-      `${division} Lobby`,
-    ];
+    const expectedChannels = getExpectedChannelNames(division);
     const existing = category
       ? interaction.guild.channels.cache.filter((channel) => channel.parentId === category.id).map((channel) => channel.name)
       : [];
