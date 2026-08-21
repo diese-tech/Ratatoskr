@@ -58,9 +58,14 @@ function canManageDivisions(member: GuildMember) {
   return member.roles.cache.some((role) => role.name === 'Allfather' || role.name === 'Æsir');
 }
 
-function isCategoryArchived(category: CategoryChannel) {
-  const everyoneOverwrite = category.permissionOverwrites.cache.get(category.guild.roles.everyone.id);
-  return everyoneOverwrite?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
+function isCategoryArchived(category: CategoryChannel, divisionRole: Role | undefined) {
+  // Active and archived categories both deny @everyone ViewChannel (that's the
+  // default-deny model), so that alone doesn't distinguish them. Only the
+  // active state's overwrites (see categoryOverwrites in services/divisions.ts)
+  // grant the division role itself access; archiveOverwrites omits it entirely.
+  if (!divisionRole) return true;
+  const roleOverwrite = category.permissionOverwrites.cache.get(divisionRole.id);
+  return !(roleOverwrite?.allow.has(PermissionFlagsBits.ViewChannel) ?? false);
 }
 
 function archiveOverwrites(interaction: ChatInputCommandInteraction) {
@@ -141,7 +146,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
       return;
     }
 
-    if (!isCategoryArchived(category)) {
+    if (!isCategoryArchived(category, role)) {
       await interaction.reply({
         content: `${division} must be archived with \`/division archive\` before it can be deleted.`,
         flags: MessageFlags.Ephemeral,

@@ -121,11 +121,19 @@ export async function provisionDivision(guild: Guild, division: DivisionName): P
     );
     const permissionOverwrites = 'captainOnly' in channelSpec && channelSpec.captainOnly
       ? captainOverwrites(guild, captainAccessRole)
-      : [];
+      : undefined;
 
     if (existing) {
       if (!existing.isThread()) {
-        await existing.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile division channel permissions');
+        if (permissionOverwrites) {
+          await existing.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile captain-chat permissions');
+        } else {
+          // Ordinary channels have no overwrites of their own; re-sync to the
+          // category's current (just-reconciled) overwrites rather than
+          // clearing to an empty list, which would fall back to raw base
+          // guild permissions instead of the category's default-deny.
+          await existing.lockPermissions();
+        }
       }
       result.reused.push(`channel:${channelSpec.name}`);
       continue;
