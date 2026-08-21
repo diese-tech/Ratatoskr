@@ -67,9 +67,16 @@ async function ensureCategory(
   const existing = guild.channels.cache.find(
     (channel) => channel.type === ChannelType.GuildCategory && channel.name === spec.name,
   );
+  const permissionOverwrites = resolveAccessOverwrites(guild, roleMap, spec.access);
 
   if (existing) {
     log('category exists', spec.name);
+    if (permissionOverwrites) {
+      log('reconcile category permissions', spec.name);
+      if (apply) {
+        await existing.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr bootstrap permission reconciliation');
+      }
+    }
     return existing;
   }
 
@@ -81,7 +88,7 @@ async function ensureCategory(
   return guild.channels.create({
     name: spec.name,
     type: ChannelType.GuildCategory,
-    permissionOverwrites: resolveAccessOverwrites(guild, roleMap, spec.access),
+    permissionOverwrites,
     reason: 'Ratatoskr YSL guild bootstrap',
   });
 }
@@ -95,12 +102,19 @@ async function ensureChannel(
 ) {
   const parentId = category.id;
   const expectedType = spec.type === 'voice' ? ChannelType.GuildVoice : ChannelType.GuildText;
+  const permissionOverwrites = resolveAccessOverwrites(guild, roleMap, spec.access);
   const existing = guild.channels.cache.find(
     (channel) => channel.name === spec.name && channel.parentId === parentId && channel.type === expectedType,
   );
 
   if (existing) {
     log('channel exists', `${categoryName} / ${spec.name}`);
+    if (permissionOverwrites) {
+      log('reconcile channel permissions', `${categoryName} / ${spec.name}`);
+      if (apply) {
+        await existing.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr bootstrap permission reconciliation');
+      }
+    }
     return;
   }
 
@@ -112,7 +126,7 @@ async function ensureChannel(
     type: expectedType,
     parent: parentId,
     topic: spec.type === 'text' ? spec.topic : undefined,
-    permissionOverwrites: resolveAccessOverwrites(guild, roleMap, spec.access),
+    permissionOverwrites,
     reason: 'Ratatoskr YSL guild bootstrap',
   });
 }
@@ -124,8 +138,8 @@ async function bootstrap() {
   await guild.channels.fetch();
 
   console.log(`\nTarget guild: ${guild.name} (${guild.id})`);
-  console.log(apply ? 'MODE: APPLY — changes will be created.' : 'MODE: DRY RUN — no Discord changes will be made.');
-  console.log('Existing roles/channels are preserved; this script does not delete or rename anything.\n');
+  console.log(apply ? 'MODE: APPLY — changes will be created/reconciled.' : 'MODE: DRY RUN — no Discord changes will be made.');
+  console.log('Existing unmatched roles/channels are preserved; restricted matching content is permission-reconciled.\n');
 
   const roleMap = new Map<string, Role>();
   for (const roleSpec of yslGuildStructure.roles) {
