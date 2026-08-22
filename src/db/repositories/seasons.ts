@@ -128,3 +128,49 @@ export function setActiveSeason(db: Database.Database, guildId: string, seasonId
 export function setSeasonDiscordCategoryId(db: Database.Database, seasonId: number, discordCategoryId: string): void {
   db.prepare('UPDATE seasons SET discord_category_id = ? WHERE id = ?').run(discordCategoryId, seasonId);
 }
+
+// Thrown by activateSeasonIfNoneActive when another season won the race --
+// distinct from the generic "not found" error setActiveSeason throws, so
+// callers can tell "someone else is already active" apart from "bad id."
+export class SeasonAlreadyActiveError extends Error {
+  constructor(public readonly activeSeasonNumber: number) {
+    super(`Season ${activeSeasonNumber} is already active for this guild`);
+    this.name = 'SeasonAlreadyActiveError';
+  }
+}
+
+// Unlike setActiveSeason (which deactivates whatever is active and
+// replaces it -- the right primitive for a future /season close|activate),
+// this activates `seasonId` only if no season is currently active, atomically.
+// /season create's fail-closed contract needs exactly this: two concurrent
+// /season create invocations can both observe "no active season" before
+// either finishes provisioning, and only one of them may ever actually
+// activate -- the other must fail closed rather than silently replacing it.
+export function activateSeasonIfNoneActive(db: Database.Database, guildId: string, seasonId: number): Season {
+  const activate = db.transaction((targetSeasonId: number) => {
+    const active = db
+      .prepare("SELECT season_number FROM seasons WHERE guild_id = ? AND status = 'active'")
+      .get(guildId) as { season_number: number } | undefined;
+
+    if (active) {
+      throw new SeasonAlreadyActiveError(active.season_number);
+    }
+
+    const result = db
+      .prepare("UPDATE seasons SET status = 'active' WHERE id = ? AND guild_id = ?")
+      .run(targetSeasonId, guildId);
+
+    if (result.changes === 0) {
+      throw new Error(`Season ${targetSeasonId} not found for guild ${guildId}`);
+    }
+  });
+
+  activate(seasonId);
+
+  const row = db.prepare('SELECT * FROM seasons WHERE id = ? AND guild_id = ?').get(seasonId, guildId) as
+    | SeasonRow
+    | undefined;
+
+  if (!row) throw new Error(`Season ${seasonId} not found for guild ${guildId}`);
+  return toSeason(row);
+}

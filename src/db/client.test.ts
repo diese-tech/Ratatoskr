@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { closeDatabase, openDatabase } from './client.js';
 import {
+  activateSeasonIfNoneActive,
   createSeason,
   getActiveManagedResourceByLogicalKey,
   getActiveSeason,
@@ -12,6 +13,7 @@ import {
   getManagedResourceByDiscordId,
   getSeasonByNumber,
   insertManagedResource,
+  SeasonAlreadyActiveError,
   setActiveSeason,
   upsertDivision,
 } from './index.js';
@@ -178,6 +180,39 @@ test('activating a nonexistent season throws without deactivating the current on
       seasonOne.id,
       'a failed activation must not leave the guild with zero active seasons',
     );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('activateSeasonIfNoneActive activates a season when none is currently active', () => {
+  const db = openDatabase(join(tempDir, 'activate-if-none-active.db'));
+  try {
+    const season = createSeason(db, { guildId: 'guild-1', seasonNumber: 1 });
+    assert.equal(getActiveSeason(db, 'guild-1'), undefined);
+
+    const activated = activateSeasonIfNoneActive(db, 'guild-1', season.id);
+    assert.equal(activated.status, 'active');
+    assert.equal(getActiveSeason(db, 'guild-1')?.id, season.id);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('activateSeasonIfNoneActive throws and touches nothing when a season is already active -- it never replaces it', () => {
+  const db = openDatabase(join(tempDir, 'activate-if-none-active-conflict.db'));
+  try {
+    const seasonOne = createSeason(db, { guildId: 'guild-1', seasonNumber: 1 });
+    const seasonTwo = createSeason(db, { guildId: 'guild-1', seasonNumber: 2 });
+    activateSeasonIfNoneActive(db, 'guild-1', seasonOne.id);
+
+    assert.throws(
+      () => activateSeasonIfNoneActive(db, 'guild-1', seasonTwo.id),
+      (error: unknown) => error instanceof SeasonAlreadyActiveError && error.activeSeasonNumber === 1,
+    );
+
+    assert.equal(getActiveSeason(db, 'guild-1')?.id, seasonOne.id, 'the already-active season must be untouched');
+    assert.equal(getSeasonByNumber(db, 'guild-1', 2)?.status, 'inactive', 'the loser must stay inactive, not partially activated');
   } finally {
     closeDatabase(db);
   }
