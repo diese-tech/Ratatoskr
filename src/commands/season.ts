@@ -8,13 +8,14 @@ import {
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
+  activateSeasonIfNoneActive,
   createSeason,
   getActiveManagedResourceByLogicalKey,
   getActiveSeason,
   getSeasonByNumber,
   insertManagedResource,
   markManagedResourceObsolete,
-  setActiveSeason,
+  SeasonAlreadyActiveError,
   setSeasonDiscordCategoryId,
   type Season,
 } from '../db/index.js';
@@ -38,7 +39,14 @@ export const seasonCommand = new SlashCommandBuilder()
         option
           .setName('name')
           .setDescription('Custom display name -- entirely replaces the default "YSL Season N".')
-          .setRequired(false),
+          .setRequired(false)
+          // Discord category names are capped at 100 characters. Rejecting
+          // this at the option level (enforced client-side by Discord)
+          // means an over-length name never reaches createSeason() at
+          // all -- a season row persisted with an unusable category name
+          // would otherwise be stuck, since a retry deliberately ignores
+          // any name supplied after the first attempt.
+          .setMaxLength(100),
       ),
   );
 
@@ -150,16 +158,22 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
     const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
     if (managed) {
       const resolved = guild.channels.cache.get(managed.discordResourceId);
-      if (resolved && resolved.type === ChannelType.GuildText) {
+      // Also require the name/parent to still match, not just the type --
+      // e.g. if the season category was deleted and recreated (a new
+      // Discord id, updated via setSeasonDiscordCategoryId), a previously
+      // registered channel would otherwise be silently "accepted" even
+      // though it no longer actually sits inside the current category.
+      if (resolved && resolved.type === ChannelType.GuildText && resolved.name === spec.name && resolved.parentId === category.id) {
         if (permissionOverwrites) {
           await resolved.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr season bootstrap permission reconciliation');
         }
         continue;
       }
-      // The channel this row pointed at is gone (or changed type) --
-      // retire the row before falling through to re-match/re-create, same
-      // as bootstrap-guild.ts's "stale managed channel" handling, so it
-      // doesn't keep shadowing the logical key on every future run.
+      // The channel this row pointed at is gone, changed type, or drifted
+      // out of the season category -- retire the row before falling
+      // through to re-match/re-create, same as bootstrap-guild.ts's "stale
+      // managed channel" handling, so it doesn't keep shadowing the
+      // logical key on every future run.
       markManagedResourceObsolete(db, managed.id);
     }
 
@@ -225,10 +239,27 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
     return;
   }
 
-  // Only activate once every channel is confirmed created/adopted --
-  // never report success, and never flip the season active, on a partial
-  // provisioning run.
-  setActiveSeason(db, guild.id, season.id);
+  // Only activate once every channel is confirmed created/adopted -- never
+  // report success, and never flip the season active, on a partial
+  // provisioning run. Uses activateSeasonIfNoneActive rather than
+  // setActiveSeason: two concurrent /season create invocations can both
+  // have observed "no active season" before either got here, and the
+  // fail-closed contract means the loser must abort, not silently replace
+  // whichever one won.
+  try {
+    activateSeasonIfNoneActive(db, guild.id, season.id);
+  } catch (error) {
+    if (error instanceof SeasonAlreadyActiveError) {
+      await interaction.editReply(
+        [
+          `Season ${seasonNumber} (${categoryName}) is fully provisioned, but season ${error.activeSeasonNumber} became active in the meantime.`,
+          'Nothing was activated to avoid silently replacing it -- re-run `/season create` once that season is closed to activate this one.',
+        ].join('\n'),
+      );
+      return;
+    }
+    throw error;
+  }
 
   await interaction.editReply(
     [
