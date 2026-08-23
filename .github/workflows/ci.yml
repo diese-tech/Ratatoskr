@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # scripts/*.ts is intentionally excluded from tsconfig.json's main
+      # `include` (its rootDir is "src"), so it needs its own typecheck pass
+      # -- otherwise a real bug here (this repo has hit one before) can slip
+      # through unnoticed since `npm run typecheck` never touches this file.
+      - run: npm run typecheck:scripts
+
+      - run: npm run build
+
+      - run: npm test
