@@ -70,18 +70,22 @@ export async function handleServerCommand(interaction: ChatInputCommandInteracti
   const apply = interaction.options.getSubcommand() === 'apply';
   const deleteObsolete = apply ? (interaction.options.getBoolean('delete_obsolete') ?? false) : false;
 
+  // Deferred before the lock is touched: if deferReply itself throws (a
+  // transient API failure, an expired interaction), nothing needs cleanup
+  // and the error just propagates to index.ts's top-level handler, same as
+  // any other command. Acquiring the lock first and deferring second would
+  // instead leak the lock forever on that failure path.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   if (apply) {
     if (guildsRunningApply.has(interaction.guild.id)) {
-      await interaction.reply({
-        content: 'A server bootstrap apply is already running for this server. Wait for it to finish before starting another.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.editReply(
+        'A server bootstrap apply is already running for this server. Wait for it to finish before starting another.',
+      );
       return;
     }
     guildsRunningApply.add(interaction.guild.id);
   }
-
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const lines: string[] = [];
   let errorMessage: string | undefined;
