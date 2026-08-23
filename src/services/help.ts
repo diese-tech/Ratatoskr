@@ -42,6 +42,16 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
           'Creates and activates the season workspace (schedule, standings, rosters, and more) for a new season. ' +
           'Refuses to run if a season is already active.',
       },
+      {
+        usage: '/server bootstrap plan',
+        description: 'Previews the base server scaffold (roles, categories, channels) without changing anything.',
+      },
+      {
+        usage: '/server bootstrap apply [delete_obsolete:true]',
+        description:
+          'Creates or repairs the base server scaffold for real -- useful if the bot is set up on a fresh server ' +
+          "or something was deleted, and you don't have local/repo access to run the setup script yourself.",
+      },
     ],
   },
 ];
