@@ -38,13 +38,11 @@ The bootstrapper does **not** delete or rename unmatched existing content. Restr
 
 Highest to lowest:
 
-1. `Crown`
-2. `Canopy`
-3. `Ironbranch`
-4. `Heartwood`
-5. `Deep Root`
+1. `Vanaheim`
+2. `Alfheim`
+3. `Svartalfheim`
 
-The base bootstrap does **not** create all five divisions. Divisions are provisioned only when YSL activates them.
+Named after three of the Nine Realms, matching the server's Yggdrasil theme. Only these three are currently defined -- signup volume and available staff don't yet support naming or provisioning more. The base bootstrap does **not** create all of them automatically; divisions are provisioned only when YSL activates them via `/division add`.
 
 ## Division provisioning
 
@@ -57,12 +55,12 @@ A provisioned division contains:
 @<Division> Captain Access   (hidden utility role)
 
 <Division>
+├─ #captain-chat
 ├─ #<division>-announcements
 ├─ #general
+├─ #tier-list
 ├─ #scheduling
 ├─ #match-reports
-├─ #tier-list
-├─ #captain-chat
 └─ 🔊 <Division> Lobby
 ```
 
@@ -70,8 +68,8 @@ The division role grants access to the category. `#captain-chat` is the only tig
 
 Discord cannot express `Division AND Captain` directly, so Ratatoskr automatically reconciles utility access roles:
 
-- member has `Captain` + `Crown` → ensure `Crown Captain Access`
-- member loses either role → remove `Crown Captain Access`
+- member has `Captain` + `Vanaheim` → ensure `Vanaheim Captain Access`
+- member loses either role → remove `Vanaheim Captain Access`
 
 Humans should not manually manage these utility roles.
 

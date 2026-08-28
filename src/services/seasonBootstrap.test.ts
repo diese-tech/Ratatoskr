@@ -9,17 +9,20 @@ const EVERYONE_ID = 'everyone-role-id';
 const roleIds: Record<string, string> = { Aesir: 'aesir-id', Allfather: 'allfather-id', Valkyries: 'valkyries-id' };
 const resolveRoleId = (name: string) => roleIds[name];
 
-test('SEASON_CHANNELS is exactly the six canonical season channels, all read-only', () => {
+test('SEASON_CHANNELS is exactly the five canonical season channels, all read-only', () => {
   const names = SEASON_CHANNELS.map((channel) => channel.name);
-  assert.deepEqual(names, ['banned-content', 'schedule', 'standings', 'rosters', 'transactions', 'free-agency']);
+  assert.deepEqual(names, ['banned-content', 'schedule', 'standings', 'rosters', 'transactions']);
   for (const spec of SEASON_CHANNELS) {
     assert.equal(spec.readOnly, true);
   }
   // No season-announcements or season-specific rules channel -- those stay
   // permanent/global (#announcements in WELCOME, #league-rules in LEAGUE
-  // INFORMATION), never duplicated per season.
+  // INFORMATION), never duplicated per season. No separate free-agency
+  // channel either -- rosters and free agents share one linked Google Sheet,
+  // so #rosters is the single home for both.
   assert.ok(!names.some((name) => name.includes('announcement')));
   assert.ok(!names.some((name) => name.includes('rules')));
+  assert.ok(!names.includes('free-agency'));
 });
 
 test('seasonChannelLogicalKey is stable and namespaced by season number', () => {

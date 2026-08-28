@@ -1,10 +1,13 @@
 import type { Season } from '../db/types.js';
 
-// The canonical season workspace (#17): six text channels, all publicly
+// The canonical season workspace (#17): five text channels, all publicly
 // readable but staff-managed (read-only for regular members via the same
 // primitive #16 establishes in resolveChannelPermissionOverwrites) -- no
 // per-season announcements or rules channels; those stay in WELCOME/LEAGUE
-// INFORMATION, permanent across seasons.
+// INFORMATION, permanent across seasons. No separate free-agency channel --
+// rosters and free agents are both tracked on the same linked Google Sheet,
+// so #rosters is the single home for both rather than splitting them across
+// two channels.
 export type SeasonChannelSpec = {
   name: string;
   readOnly: true;
@@ -16,7 +19,6 @@ export const SEASON_CHANNELS: readonly SeasonChannelSpec[] = [
   { name: 'standings', readOnly: true },
   { name: 'rosters', readOnly: true },
   { name: 'transactions', readOnly: true },
-  { name: 'free-agency', readOnly: true },
 ];
 
 function slugify(name: string): string {
