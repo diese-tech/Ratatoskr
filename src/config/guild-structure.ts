@@ -24,10 +24,13 @@ export type GuildCategorySpec = {
 };
 
 // Renamed from the original Crown/Canopy/Ironbranch/Heartwood/Deep Root to
-// Norse realm names, matching the rest of the server's Yggdrasil theme.
-// Only three divisions exist for now -- signup volume and available staff
-// don't yet support all nine realms -- in hierarchy order (top tier first).
-export const divisions = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
+// Norse realm names, matching the rest of the server's Yggdrasil theme, in
+// hierarchy order (top tier first). Jotunheim/Muspelheim are templates for
+// a possible 4th/5th division -- listed here so they're available as
+// /division choices, not because they're provisioned yet; per staff
+// discussion, Svartalfheim stays the floor and Niflheim is a reluctant
+// last-resort 7th realm, not added here.
+export const divisions = ['Vanaheim', 'Alfheim', 'Jotunheim', 'Muspelheim', 'Svartalfheim'] as const;
 export type DivisionName = (typeof divisions)[number];
 
 export const yslGuildStructure = {
