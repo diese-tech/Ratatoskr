@@ -23,7 +23,11 @@ export type GuildCategorySpec = {
   channels: GuildChannelSpec[];
 };
 
-export const divisions = ['Crown', 'Canopy', 'Ironbranch', 'Heartwood', 'Deep Root'] as const;
+// Renamed from the original Crown/Canopy/Ironbranch/Heartwood/Deep Root to
+// Norse realm names, matching the rest of the server's Yggdrasil theme.
+// Only three divisions exist for now -- signup volume and available staff
+// don't yet support all nine realms -- in hierarchy order (top tier first).
+export const divisions = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
 export type DivisionName = (typeof divisions)[number];
 
 export const yslGuildStructure = {

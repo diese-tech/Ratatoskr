@@ -27,13 +27,16 @@ export function getDivisionTemplate(division: DivisionName) {
     divisionRole: division,
     captainAccessRole: `${division} Captain Access`,
     category: division,
+    // Ordered so a division's channel list reads top-to-bottom the way
+    // staff actually use it: captain coordination first, then the
+    // information channels, then voice last.
     channels: [
+      { name: 'captain-chat', type: 'text' as const, captainOnly: true },
       { name: `${slug}-announcements`, type: 'text' as const },
       { name: 'general', type: 'text' as const },
+      { name: 'tier-list', type: 'text' as const },
       { name: 'scheduling', type: 'text' as const },
       { name: 'match-reports', type: 'text' as const },
-      { name: 'tier-list', type: 'text' as const },
-      { name: 'captain-chat', type: 'text' as const, captainOnly: true },
       { name: `${division} Lobby`, type: 'voice' as const },
     ],
   };
