@@ -44,7 +44,7 @@ Highest to lowest:
 4. `Muspelheim`
 5. `Svartalfheim`
 
-Named after realms from Norse mythology, matching the server's Yggdrasil theme. `Vanaheim`/`Alfheim`/`Svartalfheim` are currently provisioned; `Jotunheim`/`Muspelheim` are defined as templates (available as `/division` choices) for a possible 4th/5th division, not provisioned yet. The base bootstrap does **not** create any of them automatically; divisions are provisioned only when YSL activates them via `/division add`.
+Named after realms from Norse mythology, matching the server's Yggdrasil theme. All five are currently just defined templates (available as `/division` choices) -- none are provisioned on Discord yet. The base bootstrap does **not** create any of them automatically; each division is provisioned only when YSL activates it via `/division add`.
 
 ## Division provisioning
 
