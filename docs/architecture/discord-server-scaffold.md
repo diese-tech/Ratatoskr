@@ -40,9 +40,11 @@ Highest to lowest:
 
 1. `Vanaheim`
 2. `Alfheim`
-3. `Svartalfheim`
+3. `Jotunheim`
+4. `Muspelheim`
+5. `Svartalfheim`
 
-Named after three of the Nine Realms, matching the server's Yggdrasil theme. Only these three are currently defined -- signup volume and available staff don't yet support naming or provisioning more. The base bootstrap does **not** create all of them automatically; divisions are provisioned only when YSL activates them via `/division add`.
+Named after realms from Norse mythology, matching the server's Yggdrasil theme. `Vanaheim`/`Alfheim`/`Svartalfheim` are currently provisioned; `Jotunheim`/`Muspelheim` are defined as templates (available as `/division` choices) for a possible 4th/5th division, not provisioned yet. The base bootstrap does **not** create any of them automatically; divisions are provisioned only when YSL activates them via `/division add`.
 
 ## Division provisioning
 
