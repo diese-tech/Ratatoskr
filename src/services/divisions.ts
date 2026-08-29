@@ -6,7 +6,7 @@ import {
   type GuildMember,
   type Role,
 } from 'discord.js';
-import { divisions, type DivisionName } from '../config/guild-structure.js';
+import { divisions, DIVISION_ROLE_COLORS, type DivisionName } from '../config/guild-structure.js';
 
 export const STAFF_ROLES = ['Valkyries', 'Aesir', 'Allfather'] as const;
 
@@ -29,14 +29,18 @@ export function getDivisionTemplate(division: DivisionName) {
     category: division,
     // Ordered so a division's channel list reads top-to-bottom the way
     // staff actually use it: captain coordination first, then the
-    // information channels, then voice last.
+    // information channels, then voice last. Every text channel is
+    // division-prefixed (not just announcements) -- with five divisions all
+    // sharing generic names like "general", an unprefixed #general is
+    // ambiguous in Discord's mention autocomplete/channel list without
+    // checking which category it's under.
     channels: [
-      { name: 'captain-chat', type: 'text' as const, captainOnly: true },
+      { name: `${slug}-captain-chat`, type: 'text' as const, captainOnly: true },
       { name: `${slug}-announcements`, type: 'text' as const },
-      { name: 'general', type: 'text' as const },
-      { name: 'tier-list', type: 'text' as const },
-      { name: 'scheduling', type: 'text' as const },
-      { name: 'match-reports', type: 'text' as const },
+      { name: `${slug}-general`, type: 'text' as const },
+      { name: `${slug}-tier-list`, type: 'text' as const },
+      { name: `${slug}-scheduling`, type: 'text' as const },
+      { name: `${slug}-match-reports`, type: 'text' as const },
       { name: `${division} Lobby`, type: 'voice' as const },
     ],
   };
@@ -50,7 +54,7 @@ function roleByName(guild: Guild, name: string) {
   return guild.roles.cache.find((role) => role.name === name);
 }
 
-async function ensureRole(guild: Guild, name: string, utility = false, result?: DivisionProvisionResult) {
+async function ensureRole(guild: Guild, name: string, utility = false, result?: DivisionProvisionResult, color?: number) {
   const existing = roleByName(guild, name);
   if (existing) {
     result?.reused.push(`role:${name}`);
@@ -61,6 +65,7 @@ async function ensureRole(guild: Guild, name: string, utility = false, result?: 
     name,
     hoist: !utility,
     mentionable: false,
+    colors: color ? { primaryColor: color } : undefined,
     reason: 'Ratatoskr division provisioning',
   });
   result?.created.push(`role:${name}`);
@@ -118,7 +123,7 @@ export async function provisionDivision(guild: Guild, division: DivisionName): P
 
   const result: DivisionProvisionResult = { division, created: [], reused: [] };
   const template = getDivisionTemplate(division);
-  const divisionRole = await ensureRole(guild, template.divisionRole, false, result);
+  const divisionRole = await ensureRole(guild, template.divisionRole, false, result, DIVISION_ROLE_COLORS[division]);
   const captainAccessRole = await ensureRole(guild, template.captainAccessRole, true, result);
   const category = await ensureCategory(guild, division, divisionRole, result);
 
