@@ -57,16 +57,16 @@ A provisioned division contains:
 @<Division> Captain Access   (hidden utility role)
 
 <Division>
-├─ #captain-chat
+├─ #<division>-captain-chat
 ├─ #<division>-announcements
-├─ #general
-├─ #tier-list
-├─ #scheduling
-├─ #match-reports
+├─ #<division>-general
+├─ #<division>-tier-list
+├─ #<division>-scheduling
+├─ #<division>-match-reports
 └─ 🔊 <Division> Lobby
 ```
 
-The division role grants access to the category. `#captain-chat` is the only tighter-permission exception and is visible to the division-specific captain utility role plus staff.
+Every text channel is division-prefixed, not just announcements -- with several divisions all sharing generic channel names like "general", an unprefixed `#general` is ambiguous in Discord's mention autocomplete and channel list without checking which category it's under. The division role grants access to the category. `#<division>-captain-chat` is the only tighter-permission exception and is visible to the division-specific captain utility role plus staff.
 
 Discord cannot express `Division AND Captain` directly, so Ratatoskr automatically reconciles utility access roles:
 
