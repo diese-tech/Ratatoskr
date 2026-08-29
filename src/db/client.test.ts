@@ -3,7 +3,9 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
+import Database from 'better-sqlite3';
 import { closeDatabase, openDatabase } from './client.js';
+import { migrations } from './migrations.js';
 import {
   activateSeasonIfNoneActive,
   createSeason,
@@ -111,6 +113,46 @@ test('managed_resources accepts the widened resource_type/status CHECK values (#
     }
   } finally {
     closeDatabase(db);
+  }
+});
+
+test('migration 2 renames season channel keys for every season number, not just season 1', () => {
+  // Codex review finding on this PR: the original migration hardcoded
+  // `season:1:...` renames only. /season create accepts any positive season
+  // number, so a deployment that already provisioned season 2+ before this
+  // upgrade would have left those rows under the old key format -- a retry
+  // then misses the renamed key, re-adopts the same Discord channel under
+  // the "new" row, and violates UNIQUE (guild_id, discord_resource_id). The
+  // fix rewrites the fixed, known suffix via LIKE + REPLACE instead of a
+  // hardcoded season number, so it isn't scoped to season 1 at all.
+  const db = new Database(':memory:');
+  try {
+    db.exec(migrations[0].sql); // 'init' only -- pre-key-authoring schema.
+
+    const insertOldRow = db.prepare(`
+      INSERT INTO managed_resources (discord_resource_id, guild_id, resource_type, logical_key, scaffold_domain)
+      VALUES (?, ?, 'text_channel', ?, 'season')
+    `);
+    insertOldRow.run('season1-schedule', 'guild-1', 'season:1:schedule:text_channel');
+    insertOldRow.run('season2-schedule', 'guild-1', 'season:2:schedule:text_channel');
+    insertOldRow.run('season7-rosters', 'guild-1', 'season:7:rosters:text_channel');
+
+    db.exec(migrations[1].sql); // 'authored_logical_keys_and_widened_lifecycle'.
+
+    const rows = db
+      .prepare('SELECT discord_resource_id, logical_key FROM managed_resources ORDER BY discord_resource_id')
+      .all() as { discord_resource_id: string; logical_key: string }[];
+
+    assert.deepEqual(
+      rows.map((row) => row.logical_key),
+      [
+        'season:1:channel:schedule:text_channel',
+        'season:2:channel:schedule:text_channel',
+        'season:7:channel:rosters:text_channel',
+      ],
+    );
+  } finally {
+    db.close();
   }
 });
 

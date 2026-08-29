@@ -94,13 +94,17 @@ export const migrations: Migration[] = [
     //    if the old key has no row (e.g. a fresh database), so this is safe
     //    to run against any environment.
     //
-    //    Season channel keys are scoped to season 1 specifically: at the
-    //    time of writing, no other season number has ever been created. If
-    //    a deployment somehow has other season numbers with rows under the
-    //    old key format, those would need their own pair added here -- this
-    //    migration does not attempt to discover season numbers dynamically,
-    //    to keep the mapping explicit, finite, and reviewable rather than a
-    //    second reconciliation engine embedded in a migration.
+    //    Season channel keys use LIKE + REPLACE on the fixed, known suffix
+    //    (e.g. `:schedule:text_channel`) instead of hardcoding season 1, so
+    //    a deployment that already provisioned season 2+ before this upgrade
+    //    still gets every one of its rows renamed too -- /season create
+    //    accepts any positive season number, so scoping this to season 1
+    //    only would leave later seasons' rows under the old key format,
+    //    causing a UNIQUE (guild_id, discord_resource_id) violation on the
+    //    next retry (old key never matches, so it re-adopts the same Discord
+    //    channel under the new key). This still only rewrites the five
+    //    known, fixed channel-key suffixes -- explicit, finite, and
+    //    reviewable -- it does not discover or infer keys generally.
     //
     // 2. Widen two CHECK constraints by rebuilding the table (SQLite cannot
     //    ALTER a CHECK constraint in place): `status` gains 'archived' and
@@ -157,11 +161,11 @@ export const migrations: Migration[] = [
       UPDATE managed_resources SET logical_key = 'server:channel:admin:audit_log:text_channel' WHERE logical_key = 'server:admin:audit-log:text_channel';
       UPDATE managed_resources SET logical_key = 'server:channel:admin:staff_room:voice_channel' WHERE logical_key = 'server:admin:staff-room:voice_channel';
 
-      UPDATE managed_resources SET logical_key = 'season:1:channel:banned_content:text_channel' WHERE logical_key = 'season:1:banned-content:text_channel';
-      UPDATE managed_resources SET logical_key = 'season:1:channel:schedule:text_channel' WHERE logical_key = 'season:1:schedule:text_channel';
-      UPDATE managed_resources SET logical_key = 'season:1:channel:standings:text_channel' WHERE logical_key = 'season:1:standings:text_channel';
-      UPDATE managed_resources SET logical_key = 'season:1:channel:rosters:text_channel' WHERE logical_key = 'season:1:rosters:text_channel';
-      UPDATE managed_resources SET logical_key = 'season:1:channel:transactions:text_channel' WHERE logical_key = 'season:1:transactions:text_channel';
+      UPDATE managed_resources SET logical_key = REPLACE(logical_key, ':banned-content:text_channel', ':channel:banned_content:text_channel') WHERE logical_key LIKE 'season:%:banned-content:text_channel';
+      UPDATE managed_resources SET logical_key = REPLACE(logical_key, ':schedule:text_channel', ':channel:schedule:text_channel') WHERE logical_key LIKE 'season:%:schedule:text_channel';
+      UPDATE managed_resources SET logical_key = REPLACE(logical_key, ':standings:text_channel', ':channel:standings:text_channel') WHERE logical_key LIKE 'season:%:standings:text_channel';
+      UPDATE managed_resources SET logical_key = REPLACE(logical_key, ':rosters:text_channel', ':channel:rosters:text_channel') WHERE logical_key LIKE 'season:%:rosters:text_channel';
+      UPDATE managed_resources SET logical_key = REPLACE(logical_key, ':transactions:text_channel', ':channel:transactions:text_channel') WHERE logical_key LIKE 'season:%:transactions:text_channel';
 
       CREATE TABLE managed_resources_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
