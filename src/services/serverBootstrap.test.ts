@@ -3,6 +3,7 @@ import { PermissionFlagsBits } from 'discord.js';
 import { test } from 'node:test';
 import type { ManagedResource } from '../db/types.js';
 import {
+  assertNoDuplicateServerLogicalKeys,
   classifyMatch,
   currentServerLogicalKeys,
   detectObsoleteManagedResources,
@@ -99,42 +100,86 @@ test('detectObsoleteManagedResources: an empty managed_resources set (first run)
   assert.deepEqual(result, []);
 });
 
-test('logical key builders are stable and slot-shaped', () => {
-  assert.equal(serverRoleLogicalKey('Allfather'), 'server:allfather:role');
-  assert.equal(serverCategoryLogicalKey('League Information'), 'server:league-information:category');
+test('logical key builders consume the authored key, not a display name, and are slot-shaped', () => {
+  assert.equal(serverRoleLogicalKey('allfather'), 'server:role:allfather');
+  assert.equal(serverCategoryLogicalKey('league_information'), 'server:category:league_information');
   assert.equal(
-    serverChannelLogicalKey('League Information', 'sign-ups', 'text_channel'),
-    'server:league-information:sign-ups:text_channel',
+    serverChannelLogicalKey('league_information', 'sign_ups', 'text_channel'),
+    'server:channel:league_information:sign_ups:text_channel',
   );
 });
 
-test('serverChannelLogicalKey: a text and voice channel sharing a case-folded name under the same category get distinct keys', () => {
-  // Regression test for a live bug: Community's "general" text channel and
-  // "General" voice channel previously slugified to the identical logical
-  // key (kind was not part of the key), so the second one processed would
-  // find the first one's managed_resources row, see a type mismatch, mark
-  // it obsolete, and re-adopt itself under the same key every run.
-  const textKey = serverChannelLogicalKey('Community', 'general', 'text_channel');
-  const voiceKey = serverChannelLogicalKey('Community', 'General', 'voice_channel');
+test('serverChannelLogicalKey: kind stays a required, separate segment even if a category/channel key were reused for both text and voice', () => {
+  // Mechanical safety net for an authoring mistake: keys are supposed to be
+  // authored uniquely per #31 Defect 2, but kind-scoping means even two
+  // channel specs that accidentally share the same categoryKey/channelKey
+  // (one text, one voice) still can't collide -- this is exactly the live
+  // bug PR #18 fixed when keys were name-derived instead of authored.
+  const textKey = serverChannelLogicalKey('community', 'general', 'text_channel');
+  const voiceKey = serverChannelLogicalKey('community', 'general', 'voice_channel');
   assert.notEqual(textKey, voiceKey);
 });
 
 test('currentServerLogicalKeys reflects every role/category/channel in the template', () => {
   const structure = {
-    roles: [{ name: 'Allfather' }],
+    roles: [{ key: 'allfather' }],
     categories: [
       {
-        name: 'Welcome',
-        channels: [{ name: 'welcome', type: 'text' as const }],
+        key: 'welcome',
+        channels: [{ key: 'welcome', type: 'text' as const }],
       },
     ],
   };
 
   const keys = currentServerLogicalKeys(structure);
-  assert.ok(keys.has('server:allfather:role'));
-  assert.ok(keys.has('server:welcome:category'));
-  assert.ok(keys.has('server:welcome:welcome:text_channel'));
+  assert.ok(keys.has('server:role:allfather'));
+  assert.ok(keys.has('server:category:welcome'));
+  assert.ok(keys.has('server:channel:welcome:welcome:text_channel'));
   assert.equal(keys.size, 3);
+});
+
+test('currentServerLogicalKeys: renaming display name alone (key unchanged) never changes the key set -- #31 Defect 2', () => {
+  // This is the pure-logic proof that a config-side rename can't corrupt
+  // managed-resource identity: two structures differing only in `name`
+  // (never in `key`) must produce identical logical key sets, otherwise
+  // getActiveManagedResourceByLogicalKey would miss on a rename and
+  // reconciliation would create a duplicate plus mark the original obsolete.
+  const original = {
+    roles: [{ key: 'allfather', name: 'Allfather' }],
+    categories: [
+      { key: 'welcome', name: 'Welcome', channels: [{ key: 'welcome', name: 'welcome', type: 'text' as const }] },
+    ],
+  };
+  const renamedDisplayNamesOnly = {
+    roles: [{ key: 'allfather', name: 'Allfather Prime' }],
+    categories: [
+      { key: 'welcome', name: 'Welcome Lounge', channels: [{ key: 'welcome', name: 'hello-there', type: 'text' as const }] },
+    ],
+  };
+
+  assert.deepEqual(currentServerLogicalKeys(original), currentServerLogicalKeys(renamedDisplayNamesOnly));
+});
+
+test('assertNoDuplicateServerLogicalKeys throws a clear error when two entries share a key', () => {
+  const structure = {
+    roles: [{ key: 'allfather' }],
+    categories: [
+      { key: 'welcome', channels: [{ key: 'welcome', type: 'text' as const }] },
+      // Same category key reused by mistake -- must be caught immediately.
+      { key: 'welcome', channels: [] },
+    ],
+  };
+
+  assert.throws(() => assertNoDuplicateServerLogicalKeys(structure), /Duplicate server logical key.*server:category:welcome/);
+});
+
+test('the real, current guild structure has no duplicate keys (guild-structure.ts asserts this at import time)', async () => {
+  // guild-structure.ts calls assertNoDuplicateServerLogicalKeys(yslGuildStructure)
+  // itself as a module-load side effect -- if that throws, this import
+  // rejects and the test fails. This test exists to give that failure mode
+  // an explicit, discoverable name rather than surfacing only as whichever
+  // unrelated test file happened to import guild-structure.ts first.
+  await import('../config/guild-structure.js');
 });
 
 test('resolveChannelPermissionOverwrites: no access and no readOnly produces no overwrites', () => {

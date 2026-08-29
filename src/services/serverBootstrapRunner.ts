@@ -69,7 +69,7 @@ export async function runServerBootstrap(
   }
 
   async function ensureRole(spec: GuildRoleSpec): Promise<Role> {
-    const logicalKey = serverRoleLogicalKey(spec.name);
+    const logicalKey = serverRoleLogicalKey(spec.key);
 
     const managedRole = await resolveManagedRole(logicalKey);
     if (managedRole) {
@@ -155,7 +155,7 @@ export async function runServerBootstrap(
     roleMap: Map<string, Role>,
     spec: (typeof yslGuildStructure.categories)[number],
   ): Promise<CategoryChannel | null> {
-    const logicalKey = serverCategoryLogicalKey(spec.name);
+    const logicalKey = serverCategoryLogicalKey(spec.key);
     const permissionOverwrites = resolveAccessOverwrites(roleMap, spec.access);
 
     const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
@@ -227,13 +227,14 @@ export async function runServerBootstrap(
   async function ensureChannel(
     roleMap: Map<string, Role>,
     category: CategoryChannel,
-    categoryName: string,
+    categorySpec: (typeof yslGuildStructure.categories)[number],
     spec: GuildChannelSpec,
   ) {
+    const categoryName = categorySpec.name;
     const parentId = category.id;
     const expectedType = spec.type === 'voice' ? ChannelType.GuildVoice : ChannelType.GuildText;
     const resourceType = spec.type === 'voice' ? ('voice_channel' as const) : ('text_channel' as const);
-    const logicalKey = serverChannelLogicalKey(categoryName, spec.name, resourceType);
+    const logicalKey = serverChannelLogicalKey(categorySpec.key, spec.key, resourceType);
     const permissionOverwrites = resolveChannelOverwrites(roleMap, spec);
 
     const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
@@ -396,7 +397,7 @@ export async function runServerBootstrap(
     const category = await ensureCategory(roleMap, categorySpec);
     if (!category) continue;
     for (const channelSpec of categorySpec.channels) {
-      await ensureChannel(roleMap, category, categorySpec.name, channelSpec);
+      await ensureChannel(roleMap, category, categorySpec, channelSpec);
     }
   }
 

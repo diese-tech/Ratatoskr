@@ -152,7 +152,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   const ambiguous: string[] = [];
 
   for (const spec of SEASON_CHANNELS) {
-    const logicalKey = seasonChannelLogicalKey(season.seasonNumber, spec.name);
+    const logicalKey = seasonChannelLogicalKey(season.seasonNumber, spec.key);
     const permissionOverwrites = resolveChannelPermissionOverwrites(guild.roles.everyone.id, resolveRoleId, STAFF_ROLES, spec);
 
     const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);

@@ -87,6 +87,33 @@ test('process restart against the same database preserves inserted state', () =>
   }
 });
 
+test('managed_resources accepts the widened resource_type/status CHECK values (#31 Decision 1 / migration 2)', () => {
+  // Migration 2 rebuilds managed_resources to widen resource_type with
+  // 'emoji' and status with 'archived'/'purged'. No production code writes
+  // these yet, but nothing else exercises the widened CHECK constraint
+  // itself -- this proves the rebuilt table's CHECK actually accepts them,
+  // rather than relying on the CREATE TABLE SQL being eyeballed correct.
+  const db = openDatabase(join(tempDir, 'widened-enum.db'));
+  try {
+    const inserted = insertManagedResource(db, {
+      discordResourceId: 'emoji-1',
+      guildId: 'guild-1',
+      resourceType: 'emoji',
+      logicalKey: 'server:emoji:test',
+      scaffoldDomain: 'server',
+    });
+    assert.equal(inserted.resourceType, 'emoji');
+
+    for (const status of ['archived', 'purged'] as const) {
+      assert.doesNotThrow(() => {
+        db.prepare('UPDATE managed_resources SET status = ? WHERE id = ?').run(status, inserted.id);
+      }, `status '${status}' should be accepted by the widened CHECK constraint`);
+    }
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test('managed resources can be inserted and read back by Discord ID and logical key', () => {
   const db = openDatabase(join(tempDir, 'managed-resources.db'));
   try {
