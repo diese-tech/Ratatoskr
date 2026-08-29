@@ -33,6 +33,17 @@ export type GuildCategorySpec = {
 export const divisions = ['Vanaheim', 'Alfheim', 'Jotunheim', 'Muspelheim', 'Svartalfheim'] as const;
 export type DivisionName = (typeof divisions)[number];
 
+// Hex role colors set only when a division role is first created -- an
+// existing/reused role's color is never overwritten, matching how
+// ensureRole treats every other role property. Jotunheim/Muspelheim have no
+// assigned color yet, so their roles get created with Discord's default
+// color until staff pick one.
+export const DIVISION_ROLE_COLORS: Partial<Record<DivisionName, number>> = {
+  Vanaheim: 0x11734b,
+  Alfheim: 0xffe5a0,
+  Svartalfheim: 0x5a3286,
+};
+
 export const yslGuildStructure = {
   roles: [
     { name: 'Allfather', hoist: true },

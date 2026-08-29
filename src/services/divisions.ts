@@ -6,7 +6,7 @@ import {
   type GuildMember,
   type Role,
 } from 'discord.js';
-import { divisions, type DivisionName } from '../config/guild-structure.js';
+import { divisions, DIVISION_ROLE_COLORS, type DivisionName } from '../config/guild-structure.js';
 
 export const STAFF_ROLES = ['Valkyries', 'Aesir', 'Allfather'] as const;
 
@@ -54,7 +54,7 @@ function roleByName(guild: Guild, name: string) {
   return guild.roles.cache.find((role) => role.name === name);
 }
 
-async function ensureRole(guild: Guild, name: string, utility = false, result?: DivisionProvisionResult) {
+async function ensureRole(guild: Guild, name: string, utility = false, result?: DivisionProvisionResult, color?: number) {
   const existing = roleByName(guild, name);
   if (existing) {
     result?.reused.push(`role:${name}`);
@@ -65,6 +65,7 @@ async function ensureRole(guild: Guild, name: string, utility = false, result?: 
     name,
     hoist: !utility,
     mentionable: false,
+    colors: color ? { primaryColor: color } : undefined,
     reason: 'Ratatoskr division provisioning',
   });
   result?.created.push(`role:${name}`);
@@ -122,7 +123,7 @@ export async function provisionDivision(guild: Guild, division: DivisionName): P
 
   const result: DivisionProvisionResult = { division, created: [], reused: [] };
   const template = getDivisionTemplate(division);
-  const divisionRole = await ensureRole(guild, template.divisionRole, false, result);
+  const divisionRole = await ensureRole(guild, template.divisionRole, false, result, DIVISION_ROLE_COLORS[division]);
   const captainAccessRole = await ensureRole(guild, template.captainAccessRole, true, result);
   const category = await ensureCategory(guild, division, divisionRole, result);
 
