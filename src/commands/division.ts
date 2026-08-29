@@ -1,9 +1,11 @@
 import {
+  ChannelType,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
   type CategoryChannel,
   type ChatInputCommandInteraction,
+  type Guild,
   type Role,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
@@ -68,6 +70,28 @@ export const divisionCommand = new SlashCommandBuilder()
       ),
   );
 
+// A managed_resources row staying 'active' only means Ratatoskr hasn't
+// re-run provisioning since; it says nothing about whether the Discord
+// resource still exists right now. /division status must report reality, not
+// just what the last reconciliation run wrote -- a channel manually deleted
+// from Discord (without Ratatoskr ever re-running /division add to notice
+// and mark the row obsolete) must show as missing, not as present.
+function managedResourceIsLive(guild: Guild, resource: { discordResourceId: string; resourceType: string }, expectedParentId?: string): boolean {
+  if (resource.resourceType === 'role') {
+    return guild.roles.cache.has(resource.discordResourceId);
+  }
+
+  const channel = guild.channels.cache.get(resource.discordResourceId);
+  if (!channel) return false;
+
+  if (resource.resourceType === 'category') return channel.type === ChannelType.GuildCategory;
+
+  const expectedType = resource.resourceType === 'voice_channel' ? ChannelType.GuildVoice : ChannelType.GuildText;
+  if (channel.type !== expectedType) return false;
+  if (expectedParentId !== undefined && 'parentId' in channel && channel.parentId !== expectedParentId) return false;
+  return true;
+}
+
 function archiveOverwrites(interaction: ChatInputCommandInteraction) {
   const guild = interaction.guild!;
   return [
@@ -95,8 +119,11 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
   if (subcommand === 'add') {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const result = await provisionDivision(db, guild, divisionKey);
+    const reactivationNote = result.reactivatedFromArchived
+      ? `\n\nNote: ${result.division} was archived; provisioning restored its normal visibility, and its status is active again.`
+      : '';
     await interaction.editReply(
-      `**${result.division}** is provisioned.\nCreated: ${result.created.length}\nReused/reconciled: ${result.reused.length}`,
+      `**${result.division}** is provisioned.\nCreated: ${result.created.length}\nReused/reconciled: ${result.reused.length}${reactivationNote}`,
     );
     return;
   }
@@ -114,23 +141,28 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
     division.key,
   );
   const managedCategoryRow = managedForDivision.find((resource) => resource.logicalKey === divisionCategoryLogicalKey(division.key));
-  const category = managedCategoryRow
-    ? (guild.channels.cache.get(managedCategoryRow.discordResourceId) as CategoryChannel | undefined)
-    : undefined;
+  const category =
+    managedCategoryRow && managedResourceIsLive(guild, managedCategoryRow)
+      ? (guild.channels.cache.get(managedCategoryRow.discordResourceId) as CategoryChannel)
+      : undefined;
 
   if (subcommand === 'status') {
-    const roleManaged = managedForDivision.some((resource) => resource.logicalKey === divisionRoleLogicalKey(division.key));
-    const captainRoleManaged = managedForDivision.some(
+    const roleRow = managedForDivision.find((resource) => resource.logicalKey === divisionRoleLogicalKey(division.key));
+    const captainRoleRow = managedForDivision.find(
       (resource) => resource.logicalKey === divisionCaptainAccessRoleLogicalKey(division.key),
     );
-    const managedChannelKeys = new Set(
+    const roleManaged = Boolean(roleRow) && managedResourceIsLive(guild, roleRow!);
+    const captainRoleManaged = Boolean(captainRoleRow) && managedResourceIsLive(guild, captainRoleRow!);
+
+    const liveChannelKeys = new Set(
       managedForDivision
         .filter((resource) => resource.resourceType === 'text_channel' || resource.resourceType === 'voice_channel')
+        .filter((resource) => managedResourceIsLive(guild, resource, category?.id))
         .map((resource) => resource.logicalKey),
     );
     const missingChannels = DIVISION_CHANNEL_TEMPLATE.filter((channel) => {
       const kind = channel.type === 'voice' ? ('voice_channel' as const) : ('text_channel' as const);
-      return !managedChannelKeys.has(divisionChannelLogicalKey(division.key, channel.key, kind));
+      return !liveChannelKeys.has(divisionChannelLogicalKey(division.key, channel.key, kind));
     });
 
     await interaction.reply({
@@ -158,40 +190,41 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
       return;
     }
 
-    if (!category) {
-      await interaction.reply({
-        content: `${division.name} has no managed category to delete (it may have already been removed from Discord manually).`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
     // Destructive delete resolves its target set *only* from persisted
     // managed_resources rows -- never from category.children.cache -- and
     // blocks entirely if the category holds a channel Ratatoskr cannot prove
     // it manages. This is the required safety split from archive: archive
     // may sweep unmanaged children as (reversible) containment, delete may
     // never touch what it can't prove it owns.
+    //
+    // Deliberately not gated on `!category`: if a prior partial delete run
+    // already removed the category (or it was removed manually), that must
+    // not block a retry from finishing off any channels/roles still left
+    // with an active managed_resources row -- there is simply nothing left
+    // to check for unmanaged children in that case.
     const managedChannels = managedForDivision.filter(
       (resource) => resource.resourceType === 'text_channel' || resource.resourceType === 'voice_channel',
     );
-    const unmanagedChildIds = findUnmanagedCategoryChildren(
-      category.children.cache.map((channel) => channel.id),
-      managedChannels.map((resource) => resource.discordResourceId),
-    );
 
-    if (unmanagedChildIds.length > 0) {
-      const unmanagedNames = unmanagedChildIds.map((id) => category.children.cache.get(id)?.name ?? id);
-      await interaction.reply({
-        content: [
-          `Cannot delete **${division.name}**: this category contains channel(s) Ratatoskr does not manage:`,
-          unmanagedNames.map((name) => `- ${name}`).join('\n'),
-          '',
-          'Move or remove them manually in Discord, then retry. Nothing was deleted.',
-        ].join('\n'),
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
+    if (category) {
+      const unmanagedChildIds = findUnmanagedCategoryChildren(
+        category.children.cache.map((channel) => channel.id),
+        managedChannels.map((resource) => resource.discordResourceId),
+      );
+
+      if (unmanagedChildIds.length > 0) {
+        const unmanagedNames = unmanagedChildIds.map((id) => category.children.cache.get(id)?.name ?? id);
+        await interaction.reply({
+          content: [
+            `Cannot delete **${division.name}**: this category contains channel(s) Ratatoskr does not manage:`,
+            unmanagedNames.map((name) => `- ${name}`).join('\n'),
+            '',
+            'Move or remove them manually in Discord, then retry. Nothing was deleted.',
+          ].join('\n'),
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
     }
 
     const roleRow = managedForDivision.find((resource) => resource.logicalKey === divisionRoleLogicalKey(division.key));
@@ -199,14 +232,16 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
       (resource) => resource.logicalKey === divisionCaptainAccessRoleLogicalKey(division.key),
     );
     const rolesToDelete = [roleRow, captainRoleRow].filter((row): row is ManagedResource => Boolean(row));
-    const channelNames = managedChannels.map((resource) => category.children.cache.get(resource.discordResourceId)?.name ?? resource.discordResourceId);
+    const channelNames = managedChannels.map(
+      (resource) => (category ? category.children.cache.get(resource.discordResourceId)?.name : undefined) ?? resource.discordResourceId,
+    );
     const roleNames = rolesToDelete.map((row) => guild.roles.cache.get(row.discordResourceId)?.name ?? row.discordResourceId);
 
     if (!confirm) {
       await interaction.reply({
         content: [
           `This will permanently delete the following for **${division.name}**:`,
-          `Category: ${category.name}`,
+          `Category: ${category ? category.name : 'none (already removed)'}`,
           `Channels (${channelNames.length}): ${channelNames.length ? channelNames.join(', ') : 'none'}`,
           `Roles (${roleNames.length}): ${roleNames.length ? roleNames.join(', ') : 'none'}`,
           '',
@@ -219,27 +254,62 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+    // Each deletion is independent and individually retryable -- one
+    // resource failing (a transient Discord API error, insufficient
+    // permissions after the fact, etc.) must not abort cleanup of the rest,
+    // and must not leave the command permanently stuck: a resource that
+    // fails here keeps its managed_resources row active, so a plain re-run
+    // of `/division delete confirm:true` will simply retry exactly the
+    // resources still outstanding.
+    const succeeded: string[] = [];
+    const failed: { name: string; error: string }[] = [];
+
     for (const resource of managedChannels) {
-      const channel = guild.channels.cache.get(resource.discordResourceId);
-      if (channel) await channel.delete('Ratatoskr division deletion');
-      markManagedResourcePurged(db, resource.id);
+      const label = `channel:${guild.channels.cache.get(resource.discordResourceId)?.name ?? resource.discordResourceId}`;
+      try {
+        const channel = guild.channels.cache.get(resource.discordResourceId);
+        if (channel) await channel.delete('Ratatoskr division deletion');
+        markManagedResourcePurged(db, resource.id);
+        succeeded.push(label);
+      } catch (error) {
+        failed.push({ name: label, error: (error as Error).message });
+      }
     }
-    await category.delete('Ratatoskr division deletion');
-    if (managedCategoryRow) markManagedResourcePurged(db, managedCategoryRow.id);
+
+    if (category) {
+      try {
+        await category.delete('Ratatoskr division deletion');
+        if (managedCategoryRow) markManagedResourcePurged(db, managedCategoryRow.id);
+        succeeded.push(`category:${category.name}`);
+      } catch (error) {
+        failed.push({ name: `category:${category.name}`, error: (error as Error).message });
+      }
+    }
 
     for (const roleRowToDelete of rolesToDelete) {
-      const role = guild.roles.cache.get(roleRowToDelete.discordResourceId) as Role | undefined;
-      if (role) await role.delete('Ratatoskr division deletion');
-      markManagedResourcePurged(db, roleRowToDelete.id);
+      const label = `role:${guild.roles.cache.get(roleRowToDelete.discordResourceId)?.name ?? roleRowToDelete.discordResourceId}`;
+      try {
+        const role = guild.roles.cache.get(roleRowToDelete.discordResourceId) as Role | undefined;
+        if (role) await role.delete('Ratatoskr division deletion');
+        markManagedResourcePurged(db, roleRowToDelete.id);
+        succeeded.push(label);
+      } catch (error) {
+        failed.push({ name: label, error: (error as Error).message });
+      }
     }
 
-    await interaction.editReply(
-      [
-        `${division.name} has been permanently deleted.`,
-        `Channels removed (${channelNames.length}): ${channelNames.length ? channelNames.join(', ') : 'none'}`,
-        `Roles removed (${roleNames.length}): ${roleNames.length ? roleNames.join(', ') : 'none'}`,
-      ].join('\n'),
-    );
+    const summary = [
+      failed.length === 0 ? `${division.name} has been permanently deleted.` : `${division.name} deletion partially completed.`,
+      `Removed (${succeeded.length}): ${succeeded.length ? succeeded.join(', ') : 'none'}`,
+    ];
+    if (failed.length > 0) {
+      summary.push(
+        `FAILED to remove (${failed.length}) -- still active/managed, safe to retry:`,
+        ...failed.map(({ name, error }) => `- ${name}: ${error}`),
+      );
+    }
+
+    await interaction.editReply(summary.join('\n'));
     return;
   }
 

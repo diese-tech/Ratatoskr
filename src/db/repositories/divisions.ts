@@ -43,22 +43,30 @@ export type UpsertDivisionInput = {
 
 // Insert-or-update on (guildId, divisionKey) -- the authored, stable key,
 // never the display name (#31 Defect 1/Defect 2). displayName is updated on
-// every conflict since it's presentational and expected to track config;
-// status is deliberately never touched here -- archiving/reactivating a
-// division is an explicit, separate action (setDivisionStatus), never a
-// side effect of re-provisioning.
+// every conflict since it's presentational and expected to track config.
+//
+// status is always reset to 'active' here, on every provisioning run --
+// this is not a side effect layered on top of provisioning, it's provisioning
+// telling the truth about what it just did: ensureCategory/ensureChannel
+// unconditionally restore each resource's active-state permission overwrites
+// regardless of the division's previous archived status, so a division that
+// was archived and then re-provisioned via /division add is, in reality,
+// visible again. Leaving status at 'archived' after that would let
+// /division delete's "must be archived first" safety gate pass against a
+// division that Discord-side is no longer archived at all.
 export function upsertDivision(db: Database.Database, input: UpsertDivisionInput): DivisionRecord {
   const row = db
     .prepare(
       `
-      INSERT INTO divisions (guild_id, division_key, display_name, season_id, role_id, captain_access_role_id, category_id)
-      VALUES (@guildId, @divisionKey, @displayName, @seasonId, @roleId, @captainAccessRoleId, @categoryId)
+      INSERT INTO divisions (guild_id, division_key, display_name, season_id, role_id, captain_access_role_id, category_id, status)
+      VALUES (@guildId, @divisionKey, @displayName, @seasonId, @roleId, @captainAccessRoleId, @categoryId, 'active')
       ON CONFLICT (guild_id, division_key) DO UPDATE SET
         display_name = excluded.display_name,
         season_id = excluded.season_id,
         role_id = excluded.role_id,
         captain_access_role_id = excluded.captain_access_role_id,
         category_id = excluded.category_id,
+        status = 'active',
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       RETURNING *;
       `,

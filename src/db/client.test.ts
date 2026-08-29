@@ -17,6 +17,7 @@ import {
   insertManagedResource,
   SeasonAlreadyActiveError,
   setActiveSeason,
+  setDivisionStatus,
   upsertDivision,
 } from './index.js';
 
@@ -352,6 +353,32 @@ test('upsertDivision: a config-side display-name rename (key unchanged) updates 
     assert.equal(afterRename.displayName, 'Vanir Prime');
     assert.equal(afterRename.roleId, 'role-1', 'the existing managed role stays linked across the rename');
     assert.equal(afterRename.categoryId, 'category-1', 'the existing managed category stays linked across the rename');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('upsertDivision resets an archived division back to active -- provisioning restores active-state permissions, so the record must not keep claiming archived (Codex review on #33)', () => {
+  const db = openDatabase(join(tempDir, 'divisions-reactivate.db'));
+  try {
+    upsertDivision(db, { guildId: 'guild-1', divisionKey: 'vanaheim', displayName: 'Vanaheim', roleId: 'role-1', categoryId: 'category-1' });
+    setDivisionStatus(db, 'guild-1', 'vanaheim', 'archived');
+
+    const archived = getDivisionByKey(db, 'guild-1', 'vanaheim');
+    assert.equal(archived?.status, 'archived');
+
+    // Re-running provisioning (e.g. /division add) unconditionally restores
+    // active-state permission overwrites -- if the row still said 'archived'
+    // afterward, /division delete's "must be archived first" safety gate
+    // would pass against a division that is, in reality, no longer hidden.
+    const reprovisioned = upsertDivision(db, {
+      guildId: 'guild-1',
+      divisionKey: 'vanaheim',
+      displayName: 'Vanaheim',
+      roleId: 'role-1',
+      categoryId: 'category-1',
+    });
+    assert.equal(reprovisioned.status, 'active', 'provisioning must reset status to active, not leave it archived');
   } finally {
     closeDatabase(db);
   }

@@ -10,7 +10,13 @@ import {
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { divisions, DIVISION_ROLE_COLORS, type DivisionKey, type DivisionSpec } from '../config/guild-structure.js';
-import { getActiveManagedResourceByLogicalKey, insertManagedResource, markManagedResourceObsolete, upsertDivision } from '../db/index.js';
+import {
+  getActiveManagedResourceByLogicalKey,
+  getDivisionByKey,
+  insertManagedResource,
+  markManagedResourceObsolete,
+  upsertDivision,
+} from '../db/index.js';
 import {
   divisionCaptainAccessRoleLogicalKey,
   divisionCategoryLogicalKey,
@@ -26,6 +32,12 @@ export type DivisionProvisionResult = {
   division: string;
   created: string[];
   reused: string[];
+  // True when this run found the division already archived -- provisioning
+  // restores active-state permission overwrites unconditionally (see
+  // upsertDivision's comment), so callers should tell the operator their
+  // division is visible again, not silently leave them assuming it's still
+  // hidden just because they didn't explicitly run an "unarchive" command.
+  reactivatedFromArchived: boolean;
 };
 
 export function isDivisionKey(value: string): value is DivisionKey {
@@ -317,6 +329,15 @@ async function ensureChannel(
     const channel = guild.channels.cache.get(match.candidate.discordId) as TextChannel | VoiceChannel;
     if (permissionOverwrites) {
       await channel.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile division channel permissions');
+    } else {
+      // Adopting an existing channel with unsynchronized overrides must not
+      // leave them untouched -- an ordinary (non-captain-only) channel is
+      // supposed to inherit the category's default-deny via
+      // lockPermissions(), the same treatment the already-managed reuse path
+      // above already gives it. Skipping this here would let an adopted
+      // channel stay visible to @everyone despite the division category's
+      // default-deny policy.
+      await channel.lockPermissions();
     }
     insertManagedResource(db, {
       discordResourceId: channel.id,
@@ -353,7 +374,13 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
   await guild.channels.fetch();
 
   const division = getDivisionSpec(divisionKey);
-  const result: DivisionProvisionResult = { division: division.name, created: [], reused: [] };
+  const existingRecord = getDivisionByKey(db, guild.id, division.key);
+  const result: DivisionProvisionResult = {
+    division: division.name,
+    created: [],
+    reused: [],
+    reactivatedFromArchived: existingRecord?.status === 'archived',
+  };
   const template = getDivisionTemplate(division);
 
   const divisionRole = await ensureRole(
