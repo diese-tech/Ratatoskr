@@ -195,4 +195,26 @@ export const migrations: Migration[] = [
         ON managed_resources (guild_id, scaffold_domain, status);
     `,
   },
+  {
+    id: 3,
+    name: 'division_authored_key_identity',
+    // #31 Defect 1: the divisions table has zero rows in production (nothing
+    // ever wired a db through to provisionDivision until this migration's
+    // accompanying PR), so this is a schema change, not a data migration --
+    // there is nothing to preserve or reconstruct. division_name is renamed
+    // to division_key because it now holds the division's authored, stable
+    // key (e.g. 'vanaheim'), not its display name -- identity vs.
+    // presentation, same split already applied to managed_resources.
+    // display_name is a new column holding the current presentational name
+    // (e.g. 'Vanaheim'), free to change on every provisioning run without
+    // affecting this row's identity. SQLite's RENAME COLUMN (available since
+    // 3.25, well below the 3.53 this project's better-sqlite3 bundles)
+    // updates the table's own UNIQUE (guild_id, division_name) constraint
+    // definition automatically -- no full table rebuild needed here, unlike
+    // migration 2's CHECK-constraint widening.
+    sql: `
+      ALTER TABLE divisions RENAME COLUMN division_name TO division_key;
+      ALTER TABLE divisions ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];

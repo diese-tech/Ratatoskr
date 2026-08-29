@@ -16,7 +16,7 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'division') {
-    await handleDivisionCommand(interaction);
+    await handleDivisionCommand(interaction, db);
   } else if (interaction.commandName === 'season') {
     await handleSeasonCommand(interaction, db);
   } else if (interaction.commandName === 'server') {
