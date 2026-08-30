@@ -36,8 +36,18 @@ process.on('SIGTERM', shutdown);
 // still logs rather than crashes if a future listener (or a discord.js
 // internal path) doesn't (#34).
 client.on('error', (error) => console.error('Discord client error:', error));
+
+// Deliberately NOT a swallow-and-continue handler (Codex review on #35):
+// Node 20 terminates the process by default on an unhandled rejection, and
+// that default is what lets Railway notice a genuine failure -- e.g.
+// client.login() below is unawaited, so a bad token or failed initial
+// connection would otherwise leave the process alive but never actually
+// online, invisible to any restart/alerting that keys off a process exit.
+// This only makes the failure legible before that same default behavior
+// takes over, it doesn't change the outcome.
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
+  process.exit(1);
 });
 
 client.once('clientReady', async () => {
