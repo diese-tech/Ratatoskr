@@ -1,3 +1,4 @@
+import { assertNoDuplicateKeys } from '../services/divisionScaffold.js';
 import { assertNoDuplicateServerLogicalKeys } from '../services/serverBootstrap.js';
 
 export type GuildRoleSpec = {
@@ -33,6 +34,14 @@ export type GuildCategorySpec = {
   channels: GuildChannelSpec[];
 };
 
+export type DivisionSpec = {
+  // Stable identity, authored once and never derived from `name` -- see #31
+  // Defect 1/Defect 2. Renaming `name` must never change `key`, the same
+  // contract GuildRoleSpec/GuildCategorySpec/GuildChannelSpec keys hold.
+  key: string;
+  name: string;
+};
+
 // Renamed from the original Crown/Canopy/Ironbranch/Heartwood/Deep Root to
 // Norse realm names, matching the rest of the server's Yggdrasil theme, in
 // hierarchy order (top tier first). Jotunheim/Muspelheim are templates for
@@ -40,18 +49,28 @@ export type GuildCategorySpec = {
 // /division choices, not because they're provisioned yet; per staff
 // discussion, Svartalfheim stays the floor and Niflheim is a reluctant
 // last-resort 7th realm, not added here.
-export const divisions = ['Vanaheim', 'Alfheim', 'Jotunheim', 'Muspelheim', 'Svartalfheim'] as const;
-export type DivisionName = (typeof divisions)[number];
+export const divisions: readonly DivisionSpec[] = [
+  { key: 'vanaheim', name: 'Vanaheim' },
+  { key: 'alfheim', name: 'Alfheim' },
+  { key: 'jotunheim', name: 'Jotunheim' },
+  { key: 'muspelheim', name: 'Muspelheim' },
+  { key: 'svartalfheim', name: 'Svartalfheim' },
+];
+export type DivisionKey = (typeof divisions)[number]['key'];
+
+assertNoDuplicateKeys('division', divisions);
 
 // Hex role colors set only when a division role is first created -- an
 // existing/reused role's color is never overwritten, matching how
 // ensureRole treats every other role property. Jotunheim/Muspelheim have no
 // assigned color yet, so their roles get created with Discord's default
-// color until staff pick one.
-export const DIVISION_ROLE_COLORS: Partial<Record<DivisionName, number>> = {
-  Vanaheim: 0x11734b,
-  Alfheim: 0xffe5a0,
-  Svartalfheim: 0x5a3286,
+// color until staff pick one. Keyed by the stable division key (not the
+// display name) so a config-side rename doesn't silently drop a division's
+// assigned color.
+export const DIVISION_ROLE_COLORS: Partial<Record<DivisionKey, number>> = {
+  vanaheim: 0x11734b,
+  alfheim: 0xffe5a0,
+  svartalfheim: 0x5a3286,
 };
 
 export const yslGuildStructure = {

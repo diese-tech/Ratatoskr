@@ -49,7 +49,12 @@ export type DivisionStatus = 'active' | 'archived';
 export type DivisionRecord = {
   id: number;
   guildId: string;
-  divisionName: string;
+  // Stable identity, authored once in config and never derived from the
+  // division's display name -- see #31 Defect 1/Defect 2. displayName is
+  // presentational only and may change without affecting this row's identity
+  // or any managed_resources row that points at it.
+  divisionKey: string;
+  displayName: string;
   seasonId: number | null;
   roleId: string | null;
   captainAccessRoleId: string | null;

@@ -128,3 +128,14 @@ export function markManagedResourceObsolete(db: Database.Database, id: number): 
     id,
   );
 }
+
+// Flips a managed resource to purged after its underlying Discord resource
+// has actually been destroyed (#31 Decision 1) -- the row itself is kept as
+// a tombstone, never hard-deleted. Distinct from markManagedResourceObsolete,
+// which means "no longer the current template's resource" but the Discord
+// resource may still exist; purged specifically means Ratatoskr destroyed it.
+export function markManagedResourcePurged(db: Database.Database, id: number): void {
+  db.prepare("UPDATE managed_resources SET status = 'purged', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(
+    id,
+  );
+}

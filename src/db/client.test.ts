@@ -11,12 +11,13 @@ import {
   createSeason,
   getActiveManagedResourceByLogicalKey,
   getActiveSeason,
-  getDivisionByName,
+  getDivisionByKey,
   getManagedResourceByDiscordId,
   getSeasonByNumber,
   insertManagedResource,
   SeasonAlreadyActiveError,
   setActiveSeason,
+  setDivisionStatus,
   upsertDivision,
 } from './index.js';
 
@@ -163,7 +164,7 @@ test('managed resources can be inserted and read back by Discord ID and logical 
       discordResourceId: 'category-42',
       guildId: 'guild-1',
       resourceType: 'category',
-      logicalKey: 'division:Crown:category',
+      logicalKey: 'division:vanaheim:category',
       scaffoldDomain: 'division',
     });
 
@@ -171,7 +172,7 @@ test('managed resources can be inserted and read back by Discord ID and logical 
     assert.equal(byDiscordId?.id, inserted.id);
     assert.equal(byDiscordId?.status, 'active');
 
-    const byLogicalKey = getActiveManagedResourceByLogicalKey(db, 'guild-1', 'division:Crown:category');
+    const byLogicalKey = getActiveManagedResourceByLogicalKey(db, 'guild-1', 'division:vanaheim:category');
     assert.equal(byLogicalKey?.id, inserted.id);
 
     const missing = getManagedResourceByDiscordId(db, 'guild-1', 'does-not-exist');
@@ -287,19 +288,97 @@ test('activateSeasonIfNoneActive throws and touches nothing when a season is alr
   }
 });
 
-test('division persistence reconciles by (guildId, divisionName) without duplicating rows', () => {
+test('division persistence reconciles by (guildId, divisionKey) without duplicating rows', () => {
   const db = openDatabase(join(tempDir, 'divisions.db'));
   try {
-    upsertDivision(db, { guildId: 'guild-1', divisionName: 'Crown', roleId: 'role-1' });
-    upsertDivision(db, { guildId: 'guild-1', divisionName: 'Crown', roleId: 'role-1', categoryId: 'category-1' });
+    upsertDivision(db, { guildId: 'guild-1', divisionKey: 'vanaheim', displayName: 'Vanaheim', roleId: 'role-1' });
+    upsertDivision(db, {
+      guildId: 'guild-1',
+      divisionKey: 'vanaheim',
+      displayName: 'Vanaheim',
+      roleId: 'role-1',
+      categoryId: 'category-1',
+    });
 
     const rows = db.prepare('SELECT COUNT(*) AS count FROM divisions WHERE guild_id = ?').get('guild-1') as {
       count: number;
     };
     assert.equal(rows.count, 1, 'reconciling the same division twice must not create a second row');
 
-    const division = getDivisionByName(db, 'guild-1', 'Crown');
+    const division = getDivisionByKey(db, 'guild-1', 'vanaheim');
     assert.equal(division?.categoryId, 'category-1');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('divisions table identifies rows by division_key, not division_name (migration 3 / #31 Defect 1)', () => {
+  const db = openDatabase(join(tempDir, 'divisions-schema.db'));
+  try {
+    const columns = (db.prepare('PRAGMA table_info(divisions)').all() as { name: string }[]).map((col) => col.name);
+    assert.ok(columns.includes('division_key'), 'divisions table must have a division_key column');
+    assert.ok(columns.includes('display_name'), 'divisions table must have a display_name column');
+    assert.ok(!columns.includes('division_name'), 'the old division_name column must be gone, not left alongside the new one');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('upsertDivision: a config-side display-name rename (key unchanged) updates display_name in place -- never a duplicate row -- and role/category ids stay linked (#31 Defect 1/Defect 2)', () => {
+  const db = openDatabase(join(tempDir, 'divisions-rename.db'));
+  try {
+    upsertDivision(db, {
+      guildId: 'guild-1',
+      divisionKey: 'vanaheim',
+      displayName: 'Vanaheim',
+      roleId: 'role-1',
+      captainAccessRoleId: 'captain-role-1',
+      categoryId: 'category-1',
+    });
+
+    // Simulates re-provisioning after only guild-structure.ts's division
+    // `name` changed -- the key a real reconciliation run would still pass
+    // is identical, because it comes from config, not from the old row.
+    const afterRename = upsertDivision(db, {
+      guildId: 'guild-1',
+      divisionKey: 'vanaheim',
+      displayName: 'Vanir Prime',
+      roleId: 'role-1',
+      captainAccessRoleId: 'captain-role-1',
+      categoryId: 'category-1',
+    });
+
+    const rows = db.prepare('SELECT COUNT(*) AS count FROM divisions WHERE guild_id = ?').get('guild-1') as { count: number };
+    assert.equal(rows.count, 1, 'a display-name-only rename must never create a second row');
+    assert.equal(afterRename.displayName, 'Vanir Prime');
+    assert.equal(afterRename.roleId, 'role-1', 'the existing managed role stays linked across the rename');
+    assert.equal(afterRename.categoryId, 'category-1', 'the existing managed category stays linked across the rename');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('upsertDivision resets an archived division back to active -- provisioning restores active-state permissions, so the record must not keep claiming archived (Codex review on #33)', () => {
+  const db = openDatabase(join(tempDir, 'divisions-reactivate.db'));
+  try {
+    upsertDivision(db, { guildId: 'guild-1', divisionKey: 'vanaheim', displayName: 'Vanaheim', roleId: 'role-1', categoryId: 'category-1' });
+    setDivisionStatus(db, 'guild-1', 'vanaheim', 'archived');
+
+    const archived = getDivisionByKey(db, 'guild-1', 'vanaheim');
+    assert.equal(archived?.status, 'archived');
+
+    // Re-running provisioning (e.g. /division add) unconditionally restores
+    // active-state permission overwrites -- if the row still said 'archived'
+    // afterward, /division delete's "must be archived first" safety gate
+    // would pass against a division that is, in reality, no longer hidden.
+    const reprovisioned = upsertDivision(db, {
+      guildId: 'guild-1',
+      divisionKey: 'vanaheim',
+      displayName: 'Vanaheim',
+      roleId: 'role-1',
+      categoryId: 'category-1',
+    });
+    assert.equal(reprovisioned.status, 'active', 'provisioning must reset status to active, not leave it archived');
   } finally {
     closeDatabase(db);
   }

@@ -4,7 +4,8 @@ import type { DivisionRecord, DivisionStatus } from '../types.js';
 type DivisionRow = {
   id: number;
   guild_id: string;
-  division_name: string;
+  division_key: string;
+  display_name: string;
   season_id: number | null;
   role_id: string | null;
   captain_access_role_id: string | null;
@@ -18,7 +19,8 @@ function toDivisionRecord(row: DivisionRow): DivisionRecord {
   return {
     id: row.id,
     guildId: row.guild_id,
-    divisionName: row.division_name,
+    divisionKey: row.division_key,
+    displayName: row.display_name,
     seasonId: row.season_id,
     roleId: row.role_id,
     captainAccessRoleId: row.captain_access_role_id,
@@ -31,35 +33,48 @@ function toDivisionRecord(row: DivisionRow): DivisionRecord {
 
 export type UpsertDivisionInput = {
   guildId: string;
-  divisionName: string;
+  divisionKey: string;
+  displayName: string;
   seasonId?: number | null;
   roleId?: string | null;
   captainAccessRoleId?: string | null;
   categoryId?: string | null;
 };
 
-// Insert-or-update on (guildId, divisionName), matching how the existing
-// division provisioner already treats division name as the reconciliation
-// key. Safe to call every time a division is provisioned/reconciled; it
-// never creates a duplicate row for the same division.
+// Insert-or-update on (guildId, divisionKey) -- the authored, stable key,
+// never the display name (#31 Defect 1/Defect 2). displayName is updated on
+// every conflict since it's presentational and expected to track config.
+//
+// status is always reset to 'active' here, on every provisioning run --
+// this is not a side effect layered on top of provisioning, it's provisioning
+// telling the truth about what it just did: ensureCategory/ensureChannel
+// unconditionally restore each resource's active-state permission overwrites
+// regardless of the division's previous archived status, so a division that
+// was archived and then re-provisioned via /division add is, in reality,
+// visible again. Leaving status at 'archived' after that would let
+// /division delete's "must be archived first" safety gate pass against a
+// division that Discord-side is no longer archived at all.
 export function upsertDivision(db: Database.Database, input: UpsertDivisionInput): DivisionRecord {
   const row = db
     .prepare(
       `
-      INSERT INTO divisions (guild_id, division_name, season_id, role_id, captain_access_role_id, category_id)
-      VALUES (@guildId, @divisionName, @seasonId, @roleId, @captainAccessRoleId, @categoryId)
-      ON CONFLICT (guild_id, division_name) DO UPDATE SET
+      INSERT INTO divisions (guild_id, division_key, display_name, season_id, role_id, captain_access_role_id, category_id, status)
+      VALUES (@guildId, @divisionKey, @displayName, @seasonId, @roleId, @captainAccessRoleId, @categoryId, 'active')
+      ON CONFLICT (guild_id, division_key) DO UPDATE SET
+        display_name = excluded.display_name,
         season_id = excluded.season_id,
         role_id = excluded.role_id,
         captain_access_role_id = excluded.captain_access_role_id,
         category_id = excluded.category_id,
+        status = 'active',
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       RETURNING *;
       `,
     )
     .get({
       guildId: input.guildId,
-      divisionName: input.divisionName,
+      divisionKey: input.divisionKey,
+      displayName: input.displayName,
       seasonId: input.seasonId ?? null,
       roleId: input.roleId ?? null,
       captainAccessRoleId: input.captainAccessRoleId ?? null,
@@ -69,10 +84,10 @@ export function upsertDivision(db: Database.Database, input: UpsertDivisionInput
   return toDivisionRecord(row);
 }
 
-export function getDivisionByName(db: Database.Database, guildId: string, divisionName: string): DivisionRecord | undefined {
+export function getDivisionByKey(db: Database.Database, guildId: string, divisionKey: string): DivisionRecord | undefined {
   const row = db
-    .prepare('SELECT * FROM divisions WHERE guild_id = ? AND division_name = ?')
-    .get(guildId, divisionName) as DivisionRow | undefined;
+    .prepare('SELECT * FROM divisions WHERE guild_id = ? AND division_key = ?')
+    .get(guildId, divisionKey) as DivisionRow | undefined;
 
   return row ? toDivisionRecord(row) : undefined;
 }
@@ -85,8 +100,8 @@ export function listDivisions(db: Database.Database, guildId: string, status?: D
   return rows.map(toDivisionRecord);
 }
 
-export function setDivisionStatus(db: Database.Database, guildId: string, divisionName: string, status: DivisionStatus): void {
+export function setDivisionStatus(db: Database.Database, guildId: string, divisionKey: string, status: DivisionStatus): void {
   db.prepare(
-    "UPDATE divisions SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE guild_id = ? AND division_name = ?",
-  ).run(status, guildId, divisionName);
+    "UPDATE divisions SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE guild_id = ? AND division_key = ?",
+  ).run(status, guildId, divisionKey);
 }
