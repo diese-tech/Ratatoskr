@@ -3,7 +3,9 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
+import Database from 'better-sqlite3';
 import { closeDatabase, openDatabase } from './client.js';
+import { migrations } from './migrations.js';
 import {
   activateSeasonIfNoneActive,
   createSeason,
@@ -84,6 +86,73 @@ test('process restart against the same database preserves inserted state', () =>
     assert.equal(resource?.logicalKey, 'server:welcome:channel');
   } finally {
     closeDatabase(afterRestart);
+  }
+});
+
+test('managed_resources accepts the widened resource_type/status CHECK values (#31 Decision 1 / migration 2)', () => {
+  // Migration 2 rebuilds managed_resources to widen resource_type with
+  // 'emoji' and status with 'archived'/'purged'. No production code writes
+  // these yet, but nothing else exercises the widened CHECK constraint
+  // itself -- this proves the rebuilt table's CHECK actually accepts them,
+  // rather than relying on the CREATE TABLE SQL being eyeballed correct.
+  const db = openDatabase(join(tempDir, 'widened-enum.db'));
+  try {
+    const inserted = insertManagedResource(db, {
+      discordResourceId: 'emoji-1',
+      guildId: 'guild-1',
+      resourceType: 'emoji',
+      logicalKey: 'server:emoji:test',
+      scaffoldDomain: 'server',
+    });
+    assert.equal(inserted.resourceType, 'emoji');
+
+    for (const status of ['archived', 'purged'] as const) {
+      assert.doesNotThrow(() => {
+        db.prepare('UPDATE managed_resources SET status = ? WHERE id = ?').run(status, inserted.id);
+      }, `status '${status}' should be accepted by the widened CHECK constraint`);
+    }
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('migration 2 renames season channel keys for every season number, not just season 1', () => {
+  // Codex review finding on this PR: the original migration hardcoded
+  // `season:1:...` renames only. /season create accepts any positive season
+  // number, so a deployment that already provisioned season 2+ before this
+  // upgrade would have left those rows under the old key format -- a retry
+  // then misses the renamed key, re-adopts the same Discord channel under
+  // the "new" row, and violates UNIQUE (guild_id, discord_resource_id). The
+  // fix rewrites the fixed, known suffix via LIKE + REPLACE instead of a
+  // hardcoded season number, so it isn't scoped to season 1 at all.
+  const db = new Database(':memory:');
+  try {
+    db.exec(migrations[0].sql); // 'init' only -- pre-key-authoring schema.
+
+    const insertOldRow = db.prepare(`
+      INSERT INTO managed_resources (discord_resource_id, guild_id, resource_type, logical_key, scaffold_domain)
+      VALUES (?, ?, 'text_channel', ?, 'season')
+    `);
+    insertOldRow.run('season1-schedule', 'guild-1', 'season:1:schedule:text_channel');
+    insertOldRow.run('season2-schedule', 'guild-1', 'season:2:schedule:text_channel');
+    insertOldRow.run('season7-rosters', 'guild-1', 'season:7:rosters:text_channel');
+
+    db.exec(migrations[1].sql); // 'authored_logical_keys_and_widened_lifecycle'.
+
+    const rows = db
+      .prepare('SELECT discord_resource_id, logical_key FROM managed_resources ORDER BY discord_resource_id')
+      .all() as { discord_resource_id: string; logical_key: string }[];
+
+    assert.deepEqual(
+      rows.map((row) => row.logical_key),
+      [
+        'season:1:channel:schedule:text_channel',
+        'season:2:channel:schedule:text_channel',
+        'season:7:channel:rosters:text_channel',
+      ],
+    );
+  } finally {
+    db.close();
   }
 });
 

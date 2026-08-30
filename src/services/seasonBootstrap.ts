@@ -9,28 +9,44 @@ import type { Season } from '../db/types.js';
 // so #rosters is the single home for both rather than splitting them across
 // two channels.
 export type SeasonChannelSpec = {
+  // Stable identity, authored once and never derived from `name` -- see #31
+  // Defect 2. A config-side display-name rename must not change identity.
+  key: string;
   name: string;
   readOnly: true;
 };
 
 export const SEASON_CHANNELS: readonly SeasonChannelSpec[] = [
-  { name: 'banned-content', readOnly: true },
-  { name: 'schedule', readOnly: true },
-  { name: 'standings', readOnly: true },
-  { name: 'rosters', readOnly: true },
-  { name: 'transactions', readOnly: true },
+  { key: 'banned_content', name: 'banned-content', readOnly: true },
+  { key: 'schedule', name: 'schedule', readOnly: true },
+  { key: 'standings', name: 'standings', readOnly: true },
+  { key: 'rosters', name: 'rosters', readOnly: true },
+  { key: 'transactions', name: 'transactions', readOnly: true },
 ];
 
-function slugify(name: string): string {
-  return name.toLowerCase().replace(/\s+/g, '-');
+// Fails loudly at module load if two season channels were authored with the
+// same key -- same rationale as assertNoDuplicateServerLogicalKeys.
+function assertNoDuplicateSeasonChannelKeys(channels: readonly SeasonChannelSpec[]): void {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const channel of channels) {
+    if (seen.has(channel.key)) duplicates.add(channel.key);
+    seen.add(channel.key);
+  }
+  if (duplicates.size > 0) {
+    throw new Error(`Duplicate season channel key(s): ${Array.from(duplicates).join(', ')}`);
+  }
 }
+
+assertNoDuplicateSeasonChannelKeys(SEASON_CHANNELS);
 
 // Every season channel is text-only today, but the kind suffix mirrors
 // serverChannelLogicalKey's format (#16) for consistency across scaffold
 // domains rather than assuming a season channel can never be a voice
-// channel in the future.
-export function seasonChannelLogicalKey(seasonNumber: number, channelName: string): string {
-  return `season:${seasonNumber}:${slugify(channelName)}:text_channel`;
+// channel in the future. `key` is authored (config's SeasonChannelSpec.key),
+// never derived from a channel's display name -- see #31 Defect 2.
+export function seasonChannelLogicalKey(seasonNumber: number, key: string): string {
+  return `season:${seasonNumber}:channel:${key}:text_channel`;
 }
 
 export type SeasonCreateEligibility =

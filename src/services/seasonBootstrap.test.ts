@@ -26,8 +26,23 @@ test('SEASON_CHANNELS is exactly the five canonical season channels, all read-on
 });
 
 test('seasonChannelLogicalKey is stable and namespaced by season number', () => {
-  assert.equal(seasonChannelLogicalKey(2, 'schedule'), 'season:2:schedule:text_channel');
+  assert.equal(seasonChannelLogicalKey(2, 'schedule'), 'season:2:channel:schedule:text_channel');
   assert.notEqual(seasonChannelLogicalKey(1, 'schedule'), seasonChannelLogicalKey(2, 'schedule'));
+});
+
+test('seasonChannelLogicalKey: renaming a channel spec\'s display name alone (key unchanged) never changes the key -- #31 Defect 2', () => {
+  // seasonChannelLogicalKey takes spec.key directly and has no name-based
+  // parameter at all -- so unlike the server domain (which derives a key
+  // from a whole structure object), this property holds by construction
+  // rather than needing to be proven against a structure. This test pins
+  // that guarantee against the real SEASON_CHANNELS config, computing keys
+  // from an edited copy that only changes `name`, to make the invariant
+  // explicit and catch any future refactor that reintroduces a name-derived
+  // key (e.g. switching the function to accept the whole spec object).
+  const before = SEASON_CHANNELS.map((spec) => seasonChannelLogicalKey(1, spec.key));
+  const renamedDisplayNamesOnly = SEASON_CHANNELS.map((spec) => ({ ...spec, name: `${spec.name}-renamed` }));
+  const after = renamedDisplayNamesOnly.map((spec) => seasonChannelLogicalKey(1, spec.key));
+  assert.deepEqual(after, before);
 });
 
 test('season channels are publicly viewable but read-only for non-staff members', () => {

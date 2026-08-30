@@ -152,18 +152,22 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   const ambiguous: string[] = [];
 
   for (const spec of SEASON_CHANNELS) {
-    const logicalKey = seasonChannelLogicalKey(season.seasonNumber, spec.name);
+    const logicalKey = seasonChannelLogicalKey(season.seasonNumber, spec.key);
     const permissionOverwrites = resolveChannelPermissionOverwrites(guild.roles.everyone.id, resolveRoleId, STAFF_ROLES, spec);
 
     const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
     if (managed) {
       const resolved = guild.channels.cache.get(managed.discordResourceId);
-      // Also require the name/parent to still match, not just the type --
-      // e.g. if the season category was deleted and recreated (a new
-      // Discord id, updated via setSeasonDiscordCategoryId), a previously
-      // registered channel would otherwise be silently "accepted" even
-      // though it no longer actually sits inside the current category.
-      if (resolved && resolved.type === ChannelType.GuildText && resolved.name === spec.name && resolved.parentId === category.id) {
+      // Also require the parent to still match, not just the type -- e.g.
+      // if the season category was deleted and recreated (a new Discord id,
+      // updated via setSeasonDiscordCategoryId), a previously registered
+      // channel would otherwise be silently "accepted" even though it no
+      // longer actually sits inside the current category. Deliberately NOT
+      // checking resolved.name === spec.name: name is presentational only
+      // (#31 Defect 2) -- a config-side rename of spec.name must not make an
+      // otherwise-valid managed channel look stale, or this would reintroduce
+      // the exact orphan-and-duplicate bug authored keys exist to prevent.
+      if (resolved && resolved.type === ChannelType.GuildText && resolved.parentId === category.id) {
         if (permissionOverwrites) {
           await resolved.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr season bootstrap permission reconciliation');
         }

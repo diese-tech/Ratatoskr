@@ -1,4 +1,12 @@
+import { assertNoDuplicateServerLogicalKeys } from '../services/serverBootstrap.js';
+
 export type GuildRoleSpec = {
+  // Stable identity, authored once and never derived from `name`. Renaming
+  // `name` must never change `key` -- that's what lets a config-side
+  // display-name rename resolve to the same Discord resource instead of
+  // creating a duplicate. See src/services/serverBootstrap.ts's key
+  // builders and the Ratatoskr Hardening Master Plan (#31 Defect 2).
+  key: string;
   name: string;
   color?: number;
   hoist?: boolean;
@@ -7,6 +15,7 @@ export type GuildRoleSpec = {
 };
 
 export type GuildChannelSpec = {
+  key: string;
   name: string;
   type: 'text' | 'voice';
   access?: string[];
@@ -18,6 +27,7 @@ export type GuildChannelSpec = {
 };
 
 export type GuildCategorySpec = {
+  key: string;
   name: string;
   access?: string[];
   channels: GuildChannelSpec[];
@@ -46,80 +56,105 @@ export const DIVISION_ROLE_COLORS: Partial<Record<DivisionName, number>> = {
 
 export const yslGuildStructure = {
   roles: [
-    { name: 'Allfather', hoist: true },
-    { name: 'Aesir', hoist: true },
-    { name: 'Valkyries', hoist: true },
-    { name: 'Production', hoist: true },
-    { name: 'Org Owner', hoist: true },
-    { name: 'Captain', hoist: true },
-    { name: 'Player', hoist: false },
-    { name: 'Free Agent', hoist: false },
+    { key: 'allfather', name: 'Allfather', hoist: true },
+    { key: 'aesir', name: 'Aesir', hoist: true },
+    { key: 'valkyries', name: 'Valkyries', hoist: true },
+    { key: 'production', name: 'Production', hoist: true },
+    { key: 'org_owner', name: 'Org Owner', hoist: true },
+    { key: 'captain', name: 'Captain', hoist: true },
+    { key: 'player', name: 'Player', hoist: false },
+    { key: 'free_agent', name: 'Free Agent', hoist: false },
   ] satisfies GuildRoleSpec[],
 
   categories: [
     {
+      key: 'welcome',
       name: 'Welcome',
       channels: [
-        { name: 'welcome', type: 'text', topic: 'Start here for YSL information and onboarding.', readOnly: true },
-        { name: 'rules', type: 'text', topic: 'League and server rules.', readOnly: true },
-        { name: 'announcements', type: 'text', topic: 'Official YSL announcements.', readOnly: true },
+        { key: 'welcome', name: 'welcome', type: 'text', topic: 'Start here for YSL information and onboarding.', readOnly: true },
+        { key: 'rules', name: 'rules', type: 'text', topic: 'League and server rules.', readOnly: true },
+        { key: 'announcements', name: 'announcements', type: 'text', topic: 'Official YSL announcements.', readOnly: true },
       ],
     },
     {
+      key: 'league_information',
       name: 'League Information',
       channels: [
-        { name: 'about-ysl', type: 'text', topic: 'What Yggdrasil Smite League is and how it works.', readOnly: true },
-        { name: 'league-rules', type: 'text', topic: 'Canonical competitive YSL rulebook.', readOnly: true },
-        { name: 'faq', type: 'text', topic: 'Frequently asked questions.', readOnly: true },
         {
+          key: 'about_ysl',
+          name: 'about-ysl',
+          type: 'text',
+          topic: 'What Yggdrasil Smite League is and how it works.',
+          readOnly: true,
+        },
+        {
+          key: 'league_rules',
+          name: 'league-rules',
+          type: 'text',
+          topic: 'Canonical competitive YSL rulebook.',
+          readOnly: true,
+        },
+        { key: 'faq', name: 'faq', type: 'text', topic: 'Frequently asked questions.', readOnly: true },
+        {
+          key: 'sign_ups',
           name: 'sign-ups',
           type: 'text',
           topic: 'Player, organization, coach, staff, production, and caster sign-up links.',
           readOnly: true,
         },
-        { name: 'patch-notes', type: 'text', topic: 'SMITE 2 patch notes.', readOnly: true },
-        { name: 'role-select', type: 'text', topic: 'Self-service notification roles.', readOnly: true },
+        { key: 'patch_notes', name: 'patch-notes', type: 'text', topic: 'SMITE 2 patch notes.', readOnly: true },
+        { key: 'role_select', name: 'role-select', type: 'text', topic: 'Self-service notification roles.', readOnly: true },
       ],
     },
     {
+      key: 'community',
       name: 'Community',
       channels: [
-        { name: 'general', type: 'text' },
-        { name: 'smite-chat', type: 'text' },
-        { name: 'lfg', type: 'text' },
-        { name: 'self-promo', type: 'text' },
-        { name: 'clips-and-highlights', type: 'text' },
-        { name: 'General', type: 'voice' },
+        { key: 'general', name: 'general', type: 'text' },
+        { key: 'smite_chat', name: 'smite-chat', type: 'text' },
+        { key: 'lfg', name: 'lfg', type: 'text' },
+        { key: 'self_promo', name: 'self-promo', type: 'text' },
+        { key: 'clips_and_highlights', name: 'clips-and-highlights', type: 'text' },
+        { key: 'general_voice', name: 'General', type: 'voice' },
       ],
     },
     {
+      key: 'org_owners',
       name: 'Org Owners',
       access: ['Org Owner', 'Aesir', 'Allfather'],
       channels: [
-        { name: 'org-owner-lounge', type: 'text' },
-        { name: 'org-admin-discussion', type: 'text' },
-        { name: 'Org Owner Meeting', type: 'voice' },
+        { key: 'org_owner_lounge', name: 'org-owner-lounge', type: 'text' },
+        { key: 'org_admin_discussion', name: 'org-admin-discussion', type: 'text' },
+        { key: 'org_owner_meeting', name: 'Org Owner Meeting', type: 'voice' },
       ],
     },
     {
+      key: 'production',
       name: 'Production',
       access: ['Production', 'Aesir', 'Allfather'],
       channels: [
-        { name: 'production-chat', type: 'text' },
-        { name: 'broadcast-planning', type: 'text' },
-        { name: 'org-graphics', type: 'text' },
-        { name: 'Production Room', type: 'voice' },
+        { key: 'production_chat', name: 'production-chat', type: 'text' },
+        { key: 'broadcast_planning', name: 'broadcast-planning', type: 'text' },
+        { key: 'org_graphics', name: 'org-graphics', type: 'text' },
+        { key: 'production_room', name: 'Production Room', type: 'voice' },
       ],
     },
     {
+      key: 'admin',
       name: 'Admin',
       access: ['Valkyries', 'Aesir', 'Allfather'],
       channels: [
-        { name: 'meeting-of-the-minds', type: 'text' },
-        { name: 'staff-ops', type: 'text' },
-        { name: 'audit-log', type: 'text' },
-        { name: 'Staff Room', type: 'voice' },
+        { key: 'meeting_of_the_minds', name: 'meeting-of-the-minds', type: 'text' },
+        { key: 'staff_ops', name: 'staff-ops', type: 'text' },
+        { key: 'audit_log', name: 'audit-log', type: 'text' },
+        { key: 'staff_room', name: 'Staff Room', type: 'voice' },
       ],
     },
   ] satisfies GuildCategorySpec[],
 };
+
+// Fails fast at process start (not at first reconciliation run) if two
+// entries were authored with the same key -- see #31 Defect 2/§8. A
+// collision here would otherwise silently corrupt managed-resource
+// tracking the same way the old name-derived scheme did before PR #18.
+assertNoDuplicateServerLogicalKeys(yslGuildStructure);

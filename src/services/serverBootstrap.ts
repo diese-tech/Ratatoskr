@@ -2,8 +2,8 @@ import { PermissionFlagsBits } from 'discord.js';
 import type { ManagedResource, ManagedResourceType } from '../db/types.js';
 
 export type ServerStructureLike = {
-  roles: readonly { name: string }[];
-  categories: readonly { name: string; channels: readonly { name: string; type: 'text' | 'voice' }[] }[];
+  roles: readonly { key: string }[];
+  categories: readonly { key: string; channels: readonly { key: string; type: 'text' | 'voice' }[] }[];
 };
 
 // Pure ownership-determination and obsolete-detection logic for Server
@@ -67,32 +67,29 @@ export function detectObsoleteManagedResources(
   return managedResources.filter((resource) => resource.status === 'active' && !currentLogicalKeys.has(resource.logicalKey));
 }
 
-function slugify(name: string): string {
-  return name.toLowerCase().replace(/\s+/g, '-');
+// Logical keys are authored (config's `key` field), never derived from
+// `name` -- see #31 Defect 2. A config-side display-name rename must not
+// change identity, so these builders only ever consume `key`. `kind` stays
+// a required, separate segment (not folded into the author's key) as a
+// mechanical safety net: Discord lets a text and a voice channel share a
+// name under one category, and scoping by kind means even an authoring
+// mistake that reuses one channel key for both can't silently collide the
+// way the old name-derived scheme did (confirmed live before PR #18: two
+// channels quietly clobbered each other's managed_resources tracking).
+export function serverRoleLogicalKey(key: string): string {
+  return `server:role:${key}`;
 }
 
-export function serverRoleLogicalKey(roleName: string): string {
-  return `server:${slugify(roleName)}:role`;
+export function serverCategoryLogicalKey(key: string): string {
+  return `server:category:${key}`;
 }
 
-export function serverCategoryLogicalKey(categoryName: string): string {
-  return `server:${slugify(categoryName)}:category`;
-}
-
-// `kind` is required, not optional: Discord lets a text and a voice channel
-// share the same (case-insensitive) name under one category -- e.g.
-// Community's "general" text channel and "General" voice channel. Without
-// the resource type in the key, both would slugify to the same logical key
-// and silently clobber each other's managed_resources tracking on every
-// run (confirmed live: the second one processed would find the first one's
-// row, see a type mismatch, mark it obsolete, and re-adopt itself under the
-// same key -- flip-flopping which one is "tracked" on every subsequent run).
 export function serverChannelLogicalKey(
-  categoryName: string,
-  channelName: string,
+  categoryKey: string,
+  channelKey: string,
   kind: Extract<ManagedResourceType, 'text_channel' | 'voice_channel'>,
 ): string {
-  return `server:${slugify(categoryName)}:${slugify(channelName)}:${kind}`;
+  return `server:channel:${categoryKey}:${channelKey}:${kind}`;
 }
 
 // Every logical key the current template defines -- the full set that
@@ -103,17 +100,43 @@ export function currentServerLogicalKeys(structure: ServerStructureLike): Set<st
   const keys = new Set<string>();
 
   for (const role of structure.roles) {
-    keys.add(serverRoleLogicalKey(role.name));
+    keys.add(serverRoleLogicalKey(role.key));
   }
 
   for (const category of structure.categories) {
-    keys.add(serverCategoryLogicalKey(category.name));
+    keys.add(serverCategoryLogicalKey(category.key));
     for (const channel of category.channels) {
-      keys.add(serverChannelLogicalKey(category.name, channel.name, channel.type === 'voice' ? 'voice_channel' : 'text_channel'));
+      keys.add(serverChannelLogicalKey(category.key, channel.key, channel.type === 'voice' ? 'voice_channel' : 'text_channel'));
     }
   }
 
   return keys;
+}
+
+// Fails loudly and immediately (module load, not first reconciliation run)
+// if two config entries were authored with the same logical key. This is
+// the load-bearing check that makes "keys are authored" safe: nothing else
+// catches an authoring mistake before it corrupts managed-resource tracking.
+export function assertNoDuplicateServerLogicalKeys(structure: ServerStructureLike): void {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+
+  function record(key: string) {
+    if (seen.has(key)) duplicates.add(key);
+    seen.add(key);
+  }
+
+  for (const role of structure.roles) record(serverRoleLogicalKey(role.key));
+  for (const category of structure.categories) {
+    record(serverCategoryLogicalKey(category.key));
+    for (const channel of category.channels) {
+      record(serverChannelLogicalKey(category.key, channel.key, channel.type === 'voice' ? 'voice_channel' : 'text_channel'));
+    }
+  }
+
+  if (duplicates.size > 0) {
+    throw new Error(`Duplicate server logical key(s) in guild structure config: ${Array.from(duplicates).join(', ')}`);
+  }
 }
 
 export type ChannelAccessSpec = {
