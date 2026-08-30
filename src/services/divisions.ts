@@ -15,6 +15,7 @@ import {
   getDivisionByKey,
   insertManagedResource,
   markManagedResourceObsolete,
+  setDivisionStatus,
   upsertDivision,
 } from '../db/index.js';
 import {
@@ -375,11 +376,30 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
 
   const division = getDivisionSpec(divisionKey);
   const existingRecord = getDivisionByKey(db, guild.id, division.key);
+  const reactivatedFromArchived = existingRecord?.status === 'archived';
+
+  // Reset status to 'active' *before* any of the ensureRole/ensureCategory/
+  // ensureChannel calls below, not only in upsertDivision at the end of this
+  // function (Codex review, round 2 on #33): those calls unconditionally
+  // restore active-state permission overwrites regardless of prior archived
+  // status, so if this were deferred until the end and a later step threw
+  // (an ambiguous classifyMatch result, a transient Discord API error),
+  // Discord access could already be partially restored while the row still
+  // said 'archived' -- letting /division delete's safety gate pass against a
+  // division that, in reality, is no longer archived. Doing it first closes
+  // that window: the worst case on an early failure is the row saying
+  // 'active' while Discord still looks archived, which only makes delete's
+  // gate more conservative, never less. upsertDivision's own reset stays too
+  // as a harmless backstop for the normal end-of-run write.
+  if (reactivatedFromArchived) {
+    setDivisionStatus(db, guild.id, division.key, 'active');
+  }
+
   const result: DivisionProvisionResult = {
     division: division.name,
     created: [],
     reused: [],
-    reactivatedFromArchived: existingRecord?.status === 'archived',
+    reactivatedFromArchived,
   };
   const template = getDivisionTemplate(division);
 
