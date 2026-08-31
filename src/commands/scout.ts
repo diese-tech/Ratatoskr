@@ -26,6 +26,9 @@ export const scoutCommand = new SlashCommandBuilder()
     subcommand.setName('create').setDescription('Create a scout setup in this division signup channel.'),
   )
   .addSubcommand((subcommand) =>
+    subcommand.setName('cancel').setDescription('Cancel an open scout setup in this division signup channel.'),
+  )
+  .addSubcommand((subcommand) =>
     subcommand
       .setName('config')
       .setDescription('Configure scout staff, role emoji, and timezone.')
@@ -87,6 +90,11 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
   if (subcommand === 'create') {
     const { handleScoutCreateCommand } = await import('../services/scoutCreate.js');
     await handleScoutCreateCommand(interaction, db);
+    return;
+  }
+  if (subcommand === 'cancel') {
+    const { handleScoutCancelCommand } = await import('../services/scoutCancel.js');
+    await handleScoutCancelCommand(interaction, db);
     return;
   }
   if (subcommand !== 'config') return;
