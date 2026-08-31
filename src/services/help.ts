@@ -18,6 +18,16 @@ export type HelpSection = {
 // appears once a command actually exists for it.
 export const HELP_SECTIONS: readonly HelpSection[] = [
   {
+    title: '🔎 Scout Commands',
+    entries: [
+      {
+        usage: '/scout create',
+        description:
+          'Starts a private setup preview from a division scout-signups channel, then posts it for player reactions.',
+      },
+    ],
+  },
+  {
     title: '🛡️ Admin Commands',
     entries: [
       {

@@ -42,7 +42,15 @@ test('fresh database initializes successfully', () => {
       .all()
       .map((row) => (row as { name: string }).name);
 
-    for (const expected of ['managed_resources', 'seasons', 'divisions', 'schema_migrations']) {
+    for (const expected of [
+      'managed_resources',
+      'seasons',
+      'divisions',
+      'scout_config',
+      'scout_setups',
+      'scout_signups',
+      'schema_migrations',
+    ]) {
       assert.ok(tables.includes(expected), `expected table "${expected}" to exist`);
     }
   } finally {

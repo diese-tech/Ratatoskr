@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { closeDatabase, openDatabase } from './db/index.js';
 import { syncCaptainAccess } from './services/divisions.js';
 import { tryHandleScoutEmojiBinding } from './services/scoutEmojiBinding.js';
+import { handleScoutSignupReactionAdd, handleScoutSignupReactionRemove } from './services/scoutSignups.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -89,9 +90,18 @@ client.on('guildMemberUpdate', async (_oldMember, newMember) => {
 
 client.on('messageReactionAdd', async (reaction, user) => {
   try {
-    await tryHandleScoutEmojiBinding(reaction, user, db);
+    if (await tryHandleScoutEmojiBinding(reaction, user, db)) return;
+    await handleScoutSignupReactionAdd(reaction, user, db);
   } catch (error) {
-    console.error('Scout emoji binding reaction failed', error);
+    console.error('Scout reaction add failed', error);
+  }
+});
+
+client.on('messageReactionRemove', async (reaction, user) => {
+  try {
+    await handleScoutSignupReactionRemove(reaction, user, db);
+  } catch (error) {
+    console.error('Scout reaction remove failed', error);
   }
 });
 

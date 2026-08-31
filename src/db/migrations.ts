@@ -235,4 +235,51 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 5,
+    name: 'scout_setups_and_signups',
+    sql: `
+      CREATE TABLE scout_setups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        division_id INTEGER NOT NULL REFERENCES divisions(id),
+        division_key TEXT NOT NULL,
+        division_display_name TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        signup_channel_id TEXT NOT NULL,
+        results_channel_id TEXT NOT NULL,
+        division_role_id TEXT NOT NULL,
+        solo_emoji_id TEXT NOT NULL,
+        jungle_emoji_id TEXT NOT NULL,
+        mid_emoji_id TEXT NOT NULL,
+        support_emoji_id TEXT NOT NULL,
+        carry_emoji_id TEXT NOT NULL,
+        signup_message_id TEXT UNIQUE,
+        start_at INTEGER NOT NULL,
+        role_limit INTEGER NOT NULL CHECK (role_limit BETWEEN 1 AND 5),
+        note TEXT,
+        status TEXT NOT NULL DEFAULT 'posting'
+          CHECK (status IN ('posting', 'open', 'roster_ready', 'published', 'cancelled', 'posting_failed')),
+        version INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
+      CREATE INDEX idx_scout_setups_guild_division_status
+        ON scout_setups(guild_id, division_id, status);
+      CREATE INDEX idx_scout_setups_signup_message
+        ON scout_setups(signup_message_id);
+
+      CREATE TABLE scout_signups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id INTEGER NOT NULL REFERENCES scout_setups(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('solo', 'jungle', 'mid', 'support', 'carry')),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        UNIQUE (setup_id, user_id, role)
+      );
+
+      CREATE INDEX idx_scout_signups_setup ON scout_signups(setup_id);
+    `,
+  },
 ];

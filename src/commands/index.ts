@@ -31,8 +31,17 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   }
 
   if (interaction.isRoleSelectMenu()) {
-    await handleScoutConfigRoleSelect(interaction, db);
-    return;
+    if (await handleScoutConfigRoleSelect(interaction, db)) return;
+  }
+
+  if (interaction.isButton()) {
+    const { handleScoutCreateButton } = await import('../services/scoutCreate.js');
+    if (await handleScoutCreateButton(interaction, db)) return;
+  }
+
+  if (interaction.isModalSubmit()) {
+    const { handleScoutCreateModal } = await import('../services/scoutCreate.js');
+    if (await handleScoutCreateModal(interaction, db)) return;
   }
 
   if (!interaction.isChatInputCommand()) return;
