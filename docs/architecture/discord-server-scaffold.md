@@ -77,7 +77,7 @@ Discord cannot express `Division AND Captain` directly, so Ratatoskr automatical
 
 Humans should not manually manage these utility roles.
 
-Existing unprefixed `#scout-signups` and `#scout-results` channels are adopted by Discord ID only when exactly one matching channel exists inside the expected division category. Provisioning then renames them to the division-prefixed convention; history and message links remain attached to the same channel IDs.
+Existing unprefixed division text channels—including `#captain-chat`, `#general`, `#tier-list`, `#scheduling`, `#match-reports`, `#scout-signups`, and `#scout-results`—are adopted by Discord ID only when exactly one matching channel of the expected type exists inside the selected division category. Provisioning then renames them to the division-prefixed convention; history and message links remain attached to the same channel IDs. Ambiguous matches fail closed, and extra channels such as a second lobby remain unmanaged and untouched.
 
 ### Division commands
 

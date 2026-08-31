@@ -65,8 +65,8 @@ export type DivisionChannelTemplateSpec = {
   // for voice channel names) -- see channelName() below.
   suffix: string;
   captainOnly?: boolean;
-  // Existing YSL divisions predate the division-prefix convention for the
-  // scout channels. This is an adoption-only alias: new channels use the
+  // Existing YSL divisions predate the division-prefix convention for text
+  // channels. This is an adoption-only alias: new channels use the
   // configured prefixed name, while exactly one matching legacy channel in
   // the expected category may be registered under the stable authored key.
   legacyName?: string;
@@ -76,12 +76,12 @@ export type DivisionChannelTemplateSpec = {
 // actually use it: captain coordination first, then the information
 // channels, then voice last.
 export const DIVISION_CHANNEL_TEMPLATE: readonly DivisionChannelTemplateSpec[] = [
-  { key: 'captain_chat', type: 'text', suffix: 'captain-chat', captainOnly: true },
-  { key: 'announcements', type: 'text', suffix: 'announcements' },
-  { key: 'general', type: 'text', suffix: 'general' },
-  { key: 'tier_list', type: 'text', suffix: 'tier-list' },
-  { key: 'scheduling', type: 'text', suffix: 'scheduling' },
-  { key: 'match_reports', type: 'text', suffix: 'match-reports' },
+  { key: 'captain_chat', type: 'text', suffix: 'captain-chat', legacyName: 'captain-chat', captainOnly: true },
+  { key: 'announcements', type: 'text', suffix: 'announcements', legacyName: 'announcements' },
+  { key: 'general', type: 'text', suffix: 'general', legacyName: 'general' },
+  { key: 'tier_list', type: 'text', suffix: 'tier-list', legacyName: 'tier-list' },
+  { key: 'scheduling', type: 'text', suffix: 'scheduling', legacyName: 'scheduling' },
+  { key: 'match_reports', type: 'text', suffix: 'match-reports', legacyName: 'match-reports' },
   { key: 'scout_signups', type: 'text', suffix: 'scout-signups', legacyName: 'scout-signups' },
   { key: 'scout_results', type: 'text', suffix: 'scout-results', legacyName: 'scout-results' },
   { key: 'lobby', type: 'voice', suffix: 'Lobby' },
