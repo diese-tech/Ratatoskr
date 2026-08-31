@@ -2,10 +2,22 @@ import type { Client, Interaction } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { divisionCommand, handleDivisionCommand } from './division.js';
 import { handleHelpCommand, helpCommand } from './help.js';
+import {
+  handleScoutAutocomplete,
+  handleScoutCommand,
+  handleScoutConfigRoleSelect,
+  scoutCommand,
+} from './scout.js';
 import { handleSeasonCommand, seasonCommand } from './season.js';
 import { handleServerCommand, serverCommand } from './server.js';
 
-export const commandData = [divisionCommand.toJSON(), seasonCommand.toJSON(), serverCommand.toJSON(), helpCommand.toJSON()];
+export const commandData = [
+  divisionCommand.toJSON(),
+  seasonCommand.toJSON(),
+  scoutCommand.toJSON(),
+  serverCommand.toJSON(),
+  helpCommand.toJSON(),
+];
 
 export async function registerGuildCommands(client: Client, guildId: string) {
   const guild = await client.guilds.fetch(guildId);
@@ -13,12 +25,24 @@ export async function registerGuildCommands(client: Client, guildId: string) {
 }
 
 export async function handleInteraction(interaction: Interaction, db: Database.Database) {
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName === 'scout') await handleScoutAutocomplete(interaction);
+    return;
+  }
+
+  if (interaction.isRoleSelectMenu()) {
+    await handleScoutConfigRoleSelect(interaction, db);
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'division') {
     await handleDivisionCommand(interaction, db);
   } else if (interaction.commandName === 'season') {
     await handleSeasonCommand(interaction, db);
+  } else if (interaction.commandName === 'scout') {
+    await handleScoutCommand(interaction, db);
   } else if (interaction.commandName === 'server') {
     await handleServerCommand(interaction, db);
   } else if (interaction.commandName === 'help') {

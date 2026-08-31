@@ -43,6 +43,10 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
           'Refuses to run if a season is already active.',
       },
       {
+        usage: '/scout config [timezone:<IANA zone>] [bind_emoji:true]',
+        description: 'Configures additional scout staff, the scout timezone, and the five role signup emoji.',
+      },
+      {
         usage: '/server bootstrap plan',
         description: 'Previews the base server scaffold (roles, categories, channels) without changing anything.',
       },
