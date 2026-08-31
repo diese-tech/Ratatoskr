@@ -217,4 +217,22 @@ export const migrations: Migration[] = [
       ALTER TABLE divisions ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    id: 4,
+    name: 'scout_config',
+    sql: `
+      CREATE TABLE scout_config (
+        guild_id TEXT PRIMARY KEY,
+        authorized_role_ids TEXT NOT NULL DEFAULT '[]',
+        solo_emoji_id TEXT,
+        jungle_emoji_id TEXT,
+        mid_emoji_id TEXT,
+        support_emoji_id TEXT,
+        carry_emoji_id TEXT,
+        timezone TEXT NOT NULL DEFAULT 'America/New_York',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `,
+  },
 ];

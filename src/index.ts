@@ -1,9 +1,10 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, MessageFlags } from 'discord.js';
+import { Client, GatewayIntentBits, MessageFlags, Partials } from 'discord.js';
 import { handleInteraction, registerGuildCommands } from './commands/index.js';
 import { env } from './config/env.js';
 import { closeDatabase, openDatabase } from './db/index.js';
 import { syncCaptainAccess } from './services/divisions.js';
+import { tryHandleScoutEmojiBinding } from './services/scoutEmojiBinding.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -16,7 +17,10 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildExpressions,
   ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 });
 
 async function shutdown() {
@@ -80,6 +84,14 @@ client.on('guildMemberUpdate', async (_oldMember, newMember) => {
     await syncCaptainAccess(newMember);
   } catch (error) {
     console.error(`Captain access reconciliation failed for ${newMember.id}`, error);
+  }
+});
+
+client.on('messageReactionAdd', async (reaction, user) => {
+  try {
+    await tryHandleScoutEmojiBinding(reaction, user, db);
+  } catch (error) {
+    console.error('Scout emoji binding reaction failed', error);
   }
 });
 

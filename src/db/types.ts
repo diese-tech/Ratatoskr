@@ -1,3 +1,5 @@
+import type { ScoutRole } from '../domain/scoutRoles.js';
+
 // 'emoji' is widened in now (#31 Defect/§7) because this migration already
 // rebuilds the table for the status widening below -- adding it now avoids
 // a second full-table rebuild later for a change already agreed to. No
@@ -60,6 +62,15 @@ export type DivisionRecord = {
   captainAccessRoleId: string | null;
   categoryId: string | null;
   status: DivisionStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScoutConfig = {
+  guildId: string;
+  authorizedRoleIds: string[];
+  emojiByRole: Record<ScoutRole, string | null>;
+  timezone: string;
   createdAt: string;
   updatedAt: string;
 };
