@@ -23,11 +23,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       {
         usage: '/scout create',
         description:
-          'Starts a private setup preview from a division scout-signups channel, then posts it for player reactions.',
+          'Authorized staff or that division\'s captains start a private preview from its scout-signups channel. The public post collects role reactions, then provides private roster review, shuffle/edit, and publish controls.',
       },
       {
         usage: '/scout cancel',
-        description: 'Cancels an open or roster-ready setup from its division scout-signups channel after confirmation.',
+        description: 'Authorized staff or that division\'s captains cancel an open or roster-ready setup after confirmation. Published rosters use their Replace player control instead.',
       },
     ],
   },
@@ -58,7 +58,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       },
       {
         usage: '/scout config [timezone:<IANA zone>] [bind_emoji:true]',
-        description: 'Configures additional scout staff, the scout timezone, and the five role signup emoji.',
+        description: 'Admins configure all-division scout staff, the scout timezone, and the five role signup emoji.',
       },
       {
         usage: '/server bootstrap plan',

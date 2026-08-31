@@ -2,7 +2,7 @@
 
 Ratatoskr is the Discord operations bot for the **Yggdrasil Smite League (YSL)**.
 
-The bot is intended to handle deterministic league administration first: formatted announcements, pins, self-service roles, staff-managed role changes, roster operations, trades, and eventually question answering grounded in league-owned documentation.
+The bot handles deterministic league administration first. Its currently shipped workflows provision the Discord server and divisions, manage season workspaces, and run division-scoped preseason scout signups through roster publication.
 
 ## Design principles
 
@@ -11,6 +11,16 @@ The bot is intended to handle deterministic league administration first: formatt
 - **League canon is source-of-truth.** Rules, policies, terminology, and other league knowledge live under `docs/canon/` and will later feed a small retrieval layer for grounded answers.
 - **No AI required for core operations.** Trades, roles, pins, announcements, and validation should remain predictable even if the future knowledge assistant is unavailable.
 - **Reusable components, YSL-specific rules.** Generic Discord infrastructure can be reused elsewhere; league policy stays isolated from the bot framework.
+
+## Shipped capabilities
+
+- Idempotent base-server and division provisioning
+- Division lifecycle status, archive, and guarded deletion
+- Season workspace creation and lifecycle
+- `/scout config`, `/scout create`, and `/scout cancel`
+- Reaction-based role signups, two-team roster review, and exactly-once result publication
+
+See [`docs/operations/scout-workflow.md`](docs/operations/scout-workflow.md) for the operator flow and permissions.
 
 ## Planned capabilities
 
@@ -48,9 +58,9 @@ docs/
   proposals/      Ideas not yet accepted as league canon
 ```
 
-## Development status
+## Persistence and restart behavior
 
-Scaffold only. Command behavior and persistent storage are intentionally not locked yet.
+Runtime state is stored in SQLite. Production must point `DATABASE_PATH` at a persistent mounted volume. Public scout controls encode a setup identity and resolve current state from SQLite on every interaction. The private `/scout create` preview is intentionally short-lived and must be restarted if the bot restarts before the signup post is created.
 
 ## Local setup
 
@@ -59,5 +69,7 @@ Scaffold only. Command behavior and persistent storage are intentionally not loc
 3. Add the Discord application credentials.
 4. Run `npm install`.
 5. Run `npm run dev`.
+
+Before opening a pull request, run `npm run typecheck`, `npm run typecheck:scripts`, `npm test`, `npm run build`, and `npm audit`.
 
 Do not commit `.env` or Discord tokens.
