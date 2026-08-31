@@ -37,11 +37,15 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   if (interaction.isStringSelectMenu()) {
     const { handleScoutReviewStringSelect } = await import('../services/scoutReview.js');
     if (await handleScoutReviewStringSelect(interaction, db)) return;
+    const { handleScoutPublishedSlotSelect } = await import('../services/scoutPublish.js');
+    if (await handleScoutPublishedSlotSelect(interaction, db)) return;
   }
 
   if (interaction.isUserSelectMenu()) {
     const { handleScoutReviewUserSelect } = await import('../services/scoutReview.js');
     if (await handleScoutReviewUserSelect(interaction, db)) return;
+    const { handleScoutPublishedUserSelect } = await import('../services/scoutPublish.js');
+    if (await handleScoutPublishedUserSelect(interaction, db)) return;
   }
 
   if (interaction.isButton()) {
@@ -49,6 +53,8 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
     if (await handleScoutCreateButton(interaction, db)) return;
     const { handleScoutReviewButton } = await import('../services/scoutReview.js');
     if (await handleScoutReviewButton(interaction, db)) return;
+    const { handleScoutPublishButton } = await import('../services/scoutPublish.js');
+    if (await handleScoutPublishButton(interaction, db)) return;
   }
 
   if (interaction.isModalSubmit()) {

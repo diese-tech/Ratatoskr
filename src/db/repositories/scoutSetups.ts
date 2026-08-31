@@ -19,6 +19,7 @@ type ScoutSetupRow = {
   support_emoji_id: string;
   carry_emoji_id: string;
   signup_message_id: string | null;
+  result_message_id: string | null;
   start_at: number;
   role_limit: number;
   note: string | null;
@@ -55,6 +56,7 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
       carry: row.carry_emoji_id,
     },
     signupMessageId: row.signup_message_id,
+    resultMessageId: row.result_message_id,
     startAt: row.start_at,
     roleLimit: row.role_limit,
     note: row.note,
@@ -67,7 +69,7 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
 
 export type CreateScoutSetupInput = Omit<
   ScoutSetup,
-  'id' | 'signupMessageId' | 'status' | 'version' | 'note' | 'createdAt' | 'updatedAt'
+  'id' | 'signupMessageId' | 'resultMessageId' | 'status' | 'version' | 'note' | 'createdAt' | 'updatedAt'
 > & { note?: string | null };
 
 export function createScoutSetup(db: Database.Database, input: CreateScoutSetupInput): ScoutSetup {
@@ -333,6 +335,77 @@ export function withdrawnScoutRosterUserIds(db: Database.Database, setupId: numb
     )
     .all(setupId) as { user_id: string }[];
   return rows.map((row) => row.user_id);
+}
+
+export type ClaimScoutPublishOutcome = 'claimed' | 'stale' | 'withdrawals';
+
+export function claimScoutPublish(
+  db: Database.Database,
+  setupId: number,
+  expectedVersion: number,
+): ClaimScoutPublishOutcome {
+  return db.transaction(() => {
+    const setup = db.prepare('SELECT status, version FROM scout_setups WHERE id = ?').get(setupId) as
+      | { status: ScoutSetupStatus; version: number }
+      | undefined;
+    if (!setup || setup.status !== 'roster_ready' || setup.version !== expectedVersion) return 'stale';
+    if (withdrawnScoutRosterUserIds(db, setupId).length) return 'withdrawals';
+    const result = db
+      .prepare(
+        `UPDATE scout_setups SET status = 'published', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = 'roster_ready' AND version = ?`,
+      )
+      .run(setupId, expectedVersion);
+    return result.changes === 1 ? 'claimed' : 'stale';
+  })();
+}
+
+export function releaseScoutPublishClaim(db: Database.Database, setupId: number): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups SET status = 'roster_ready', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'published' AND result_message_id IS NULL`,
+    )
+    .run(setupId);
+  return result.changes === 1;
+}
+
+export function setScoutResultMessage(db: Database.Database, setupId: number, resultMessageId: string): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups SET result_message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'published' AND result_message_id IS NULL`,
+    )
+    .run(resultMessageId, setupId);
+  return result.changes === 1;
+}
+
+export function replacePublishedScoutRosterSlotIfVersion(
+  db: Database.Database,
+  setupId: number,
+  expectedVersion: number,
+  slotId: number,
+  userId: string,
+): ReplaceScoutRosterSlotOutcome {
+  return db.transaction(() => {
+    const slot = db.prepare('SELECT id FROM scout_roster_slots WHERE setup_id = ? AND id = ?').get(setupId, slotId);
+    if (!slot) return 'stale';
+    if (db.prepare('SELECT 1 FROM scout_roster_slots WHERE setup_id = ? AND user_id = ?').get(setupId, userId)) {
+      return 'duplicate';
+    }
+    const claimed = db
+      .prepare(
+        `UPDATE scout_setups SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL`,
+      )
+      .run(setupId, expectedVersion);
+    if (claimed.changes !== 1) return 'stale';
+    db.prepare(
+      `UPDATE scout_roster_slots SET user_id = ?, staff_assigned = 1,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
+    ).run(userId, slotId);
+    return 'updated';
+  })();
 }
 
 export function replaceScoutRosterIfVersion(

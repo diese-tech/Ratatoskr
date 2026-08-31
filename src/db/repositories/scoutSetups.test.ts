@@ -4,14 +4,18 @@ import { closeDatabase, openDatabase } from '../client.js';
 import { upsertDivision } from './divisions.js';
 import {
   addScoutSignup,
+  claimScoutPublish,
   createScoutSetup,
   getScoutSetupBySignupMessageId,
   listScoutSignups,
   listScoutRosterSlots,
   replaceScoutRosterIfVersion,
   replaceScoutRosterSlotIfVersion,
+  replacePublishedScoutRosterSlotIfVersion,
+  releaseScoutPublishClaim,
   removeScoutSignup,
   setScoutSetupSignupMessage,
+  setScoutResultMessage,
   swapScoutRosterSlotsIfVersion,
   tryCreateInitialScoutRoster,
   withdrawnScoutRosterUserIds,
@@ -193,6 +197,42 @@ test('roster edits preserve uniqueness, mark overrides, flag withdrawals, and re
     assert.equal(replaceScoutRosterSlotIfVersion(db, setup.id, 2, jungle.id, 'another-sub', true), 'stale');
     assert.equal(replaceScoutRosterSlotIfVersion(db, setup.id, 3, jungle.id, mid.userId, false), 'duplicate');
     assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.userId === 'staff-sub')?.staffAssigned, true);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('publishing is an exclusive retryable claim and published replacement is versioned', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const setup = createScoutSetup(db, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'captain-1', signupChannelId: 'signups-1',
+      resultsChannelId: 'results-1', divisionRoleId: 'division-role', emojiByRole,
+      startAt: 2_000_000_000, roleLimit: 2,
+    });
+    setScoutSetupSignupMessage(db, setup.id, 'message-publish');
+    const slots: ScoutRosterSlot[] = SCOUT_ROLES.flatMap((role) =>
+      SCOUT_TEAMS.map((team, index) => ({ team, role, userId: `${role}-${index}` })),
+    );
+    for (const slot of slots) addScoutSignup(db, setup.id, slot.userId, slot.role);
+    tryCreateInitialScoutRoster(db, setup.id, slots);
+
+    const firstSlot = listScoutRosterSlots(db, setup.id)[0]!;
+    removeScoutSignup(db, setup.id, firstSlot.userId, firstSlot.role);
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'withdrawals');
+    addScoutSignup(db, setup.id, firstSlot.userId, firstSlot.role);
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'claimed');
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'stale');
+    assert.equal(releaseScoutPublishClaim(db, setup.id), true);
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'claimed');
+    assert.equal(setScoutResultMessage(db, setup.id, 'result-1'), true);
+    assert.equal(releaseScoutPublishClaim(db, setup.id), false);
+
+    assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'replacement'), 'updated');
+    assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'stale-replacement'), 'stale');
+    assert.equal(getScoutSetupBySignupMessageId(db, 'message-publish')?.resultMessageId, 'result-1');
+    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, 'replacement');
   } finally {
     closeDatabase(db);
   }

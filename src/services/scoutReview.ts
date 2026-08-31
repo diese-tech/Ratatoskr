@@ -42,7 +42,7 @@ export function scoutReviewButtonRow(setupId: number) {
   );
 }
 
-function rosterView(db: Database.Database, setupId: number, version: number, slots: ReturnType<typeof listScoutRosterSlots>, notice?: string) {
+export function buildScoutRosterReviewView(db: Database.Database, setupId: number, version: number, slots: ReturnType<typeof listScoutRosterSlots>, notice?: string) {
   const withdrawn = new Set(withdrawnScoutRosterUserIds(db, setupId));
   const lines = [notice, '**Private scout roster review**'];
   for (const [index, team] of SCOUT_TEAMS.entries()) {
@@ -66,6 +66,11 @@ function rosterView(db: Database.Database, setupId: number, version: number, slo
         new ButtonBuilder().setCustomId(`scout:edit:swap:${setupId}:${version}`).setLabel('Swap teams').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`scout:edit:role:${setupId}:${version}`).setLabel('Change roles').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`scout:edit:replace:${setupId}:${version}`).setLabel('Replace slot').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`scout:publish:${setupId}:${version}`)
+          .setLabel('Publish')
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(withdrawn.size > 0),
       ),
     ],
   };
@@ -135,7 +140,7 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
   }
 
   if (parts[1] === 'review') {
-    await interaction.reply({ ...rosterView(db, setup.id, setup.version, listScoutRosterSlots(db, setup.id)), flags: MessageFlags.Ephemeral });
+    await interaction.reply({ ...buildScoutRosterReviewView(db, setup.id, setup.version, listScoutRosterSlots(db, setup.id)), flags: MessageFlags.Ephemeral });
     return true;
   }
 
@@ -153,16 +158,16 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
   const signups = listScoutSignups(db, setup.id);
   const generated = generateDifferentScoutRoster(signups, scoutRosterFingerprint(current));
   if (!generated.result.feasible || !generated.isDifferent) {
-    await interaction.update(rosterView(db, setup.id, setup.version, current, 'No different valid roster is available.'));
+    await interaction.update(buildScoutRosterReviewView(db, setup.id, setup.version, current, 'No different valid roster is available.'));
     return true;
   }
   if (!replaceScoutRosterIfVersion(db, setup.id, expectedVersion, generated.result.slots)) {
     const latest = getScoutSetupById(db, setup.id)!;
-    await interaction.update(rosterView(db, setup.id, latest.version, listScoutRosterSlots(db, setup.id), 'That view was stale; showing the current roster.'));
+    await interaction.update(buildScoutRosterReviewView(db, setup.id, latest.version, listScoutRosterSlots(db, setup.id), 'That view was stale; showing the current roster.'));
     return true;
   }
   const updated = getScoutSetupById(db, setup.id)!;
-  await interaction.update(rosterView(db, setup.id, updated.version, listScoutRosterSlots(db, setup.id), 'Roster shuffled.'));
+  await interaction.update(buildScoutRosterReviewView(db, setup.id, updated.version, listScoutRosterSlots(db, setup.id), 'Roster shuffled.'));
   return true;
 }
 
@@ -188,7 +193,7 @@ export async function handleScoutReviewStringSelect(
     const pair = slots.filter((slot) => slot.role === selected);
     const changed = pair.length === 2 && swapScoutRosterSlotsIfVersion(db, setupId, expectedVersion, pair[0]!.id, pair[1]!.id, false);
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.update(rosterView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Players swapped between teams.' : 'That view was stale; no change was made.'));
+    await interaction.update(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Players swapped between teams.' : 'That view was stale; no change was made.'));
     return true;
   }
 
@@ -199,12 +204,12 @@ export async function handleScoutReviewStringSelect(
       (signup) => signup.userId === selected && signup.role === slot.role,
     );
     if (!stillEligible) {
-      await interaction.update(rosterView(db, setupId, setup.version, slots, 'That player is no longer an eligible signup for this slot.'));
+      await interaction.update(buildScoutRosterReviewView(db, setupId, setup.version, slots, 'That player is no longer an eligible signup for this slot.'));
       return true;
     }
     const outcome = replaceScoutRosterSlotIfVersion(db, setupId, expectedVersion, slotId, selected!, false);
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.update(rosterView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Eligible signup seated.' : `No change was made (${outcome}).`));
+    await interaction.update(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Eligible signup seated.' : `No change was made (${outcome}).`));
     return true;
   }
 
@@ -225,7 +230,7 @@ export async function handleScoutReviewStringSelect(
     const originalSourceId = Number(parts[5]);
     const changed = swapScoutRosterSlotsIfVersion(db, setupId, expectedVersion, originalSourceId, sourceId, true);
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.update(rosterView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Role assignments exchanged and marked as staff overrides.' : 'That view was stale; no change was made.'));
+    await interaction.update(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Role assignments exchanged and marked as staff overrides.' : 'That view was stale; no change was made.'));
     return true;
   }
   if (action === 'replacefirst') {
@@ -273,6 +278,6 @@ export async function handleScoutReviewUserSelect(
   }
   const outcome = replaceScoutRosterSlotIfVersion(db, setupId, expectedVersion, slotId, selectedUserId, true);
   const latest = getScoutSetupById(db, setupId)!;
-  await interaction.update(rosterView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Staff substitute seated and marked as an override.' : `No change was made (${outcome}).`));
+  await interaction.update(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Staff substitute seated and marked as an override.' : `No change was made (${outcome}).`));
   return true;
 }
