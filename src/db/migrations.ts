@@ -299,4 +299,12 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_scout_roster_slots_setup ON scout_roster_slots(setup_id);
     `,
   },
+  {
+    id: 7,
+    name: 'scout_roster_staff_override',
+    sql: `
+      ALTER TABLE scout_roster_slots ADD COLUMN staff_assigned INTEGER NOT NULL DEFAULT 0
+        CHECK (staff_assigned IN (0, 1));
+    `,
+  },
 ];
