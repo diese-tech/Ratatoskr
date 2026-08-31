@@ -2,3 +2,4 @@
 // Keep this layer independent from Discord APIs wherever possible.
 
 export * from './scoutRoles.js';
+export * from './scoutRoster.js';

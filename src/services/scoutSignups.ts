@@ -4,9 +4,13 @@ import {
   addScoutSignup,
   getScoutSetupBySignupMessageId,
   removeScoutSignup,
+  listScoutSignups,
+  tryCreateInitialScoutRoster,
   type ScoutSetup,
 } from '../db/index.js';
 import { SCOUT_ROLES, SCOUT_ROLE_LABELS, type ScoutRole } from '../domain/index.js';
+import { generateScoutRoster } from '../domain/scoutRoster.js';
+import { scoutReviewButtonRow } from './scoutReview.js';
 
 export function scoutRoleForEmoji(
   emojiByRole: Readonly<Record<ScoutRole, string>>,
@@ -52,6 +56,13 @@ export async function handleScoutSignupReactionAdd(
   if (!resolved) return;
 
   const outcome = addScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
+  if (outcome.status === 'added') {
+    const roster = generateScoutRoster(listScoutSignups(db, resolved.setup.id));
+    if (roster.feasible && tryCreateInitialScoutRoster(db, resolved.setup.id, roster.slots)) {
+      await hydrated.reaction.message.edit({ components: [scoutReviewButtonRow(resolved.setup.id)] });
+    }
+    return;
+  }
   if (outcome.status !== 'over_limit') return;
 
   await hydrated.reaction.users.remove(hydrated.user.id).catch((error) => {

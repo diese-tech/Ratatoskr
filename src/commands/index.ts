@@ -37,6 +37,8 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   if (interaction.isButton()) {
     const { handleScoutCreateButton } = await import('../services/scoutCreate.js');
     if (await handleScoutCreateButton(interaction, db)) return;
+    const { handleScoutReviewButton } = await import('../services/scoutReview.js');
+    if (await handleScoutReviewButton(interaction, db)) return;
   }
 
   if (interaction.isModalSubmit()) {

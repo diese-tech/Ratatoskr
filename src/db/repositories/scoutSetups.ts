@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { ScoutRole } from '../../domain/index.js';
-import type { ScoutSetup, ScoutSetupStatus, ScoutSignup } from '../types.js';
+import type { ScoutRosterSlot, ScoutTeam } from '../../domain/scoutRoster.js';
+import type { ScoutRosterSlotRecord, ScoutSetup, ScoutSetupStatus, ScoutSignup } from '../types.js';
 
 type ScoutSetupRow = {
   id: number;
@@ -189,4 +190,83 @@ export function listScoutSignups(db: Database.Database, setupId: number): ScoutS
     role: row.role,
     createdAt: row.created_at,
   }));
+}
+
+type ScoutRosterSlotRow = {
+  id: number;
+  setup_id: number;
+  team: ScoutTeam;
+  role: ScoutRole;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function assertCompleteScoutRoster(slots: readonly ScoutRosterSlot[]): void {
+  if (slots.length !== 10 || new Set(slots.map((slot) => slot.userId)).size !== 10) {
+    throw new Error('A scout roster must contain exactly ten unique players.');
+  }
+}
+
+function insertScoutRosterSlots(db: Database.Database, setupId: number, slots: readonly ScoutRosterSlot[]): void {
+  assertCompleteScoutRoster(slots);
+  const insert = db.prepare(
+    'INSERT INTO scout_roster_slots (setup_id, team, role, user_id) VALUES (?, ?, ?, ?)',
+  );
+  for (const slot of slots) insert.run(setupId, slot.team, slot.role, slot.userId);
+}
+
+export function tryCreateInitialScoutRoster(
+  db: Database.Database,
+  setupId: number,
+  slots: readonly ScoutRosterSlot[],
+): boolean {
+  return db.transaction(() => {
+    const claimed = db
+      .prepare(
+        `UPDATE scout_setups SET status = 'roster_ready', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = 'open'`,
+      )
+      .run(setupId);
+    if (claimed.changes !== 1) return false;
+    insertScoutRosterSlots(db, setupId, slots);
+    return true;
+  })();
+}
+
+export function listScoutRosterSlots(db: Database.Database, setupId: number): ScoutRosterSlotRecord[] {
+  const rows = db
+    .prepare('SELECT * FROM scout_roster_slots WHERE setup_id = ? ORDER BY team, role')
+    .all(setupId) as ScoutRosterSlotRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    setupId: row.setup_id,
+    team: row.team,
+    role: row.role,
+    userId: row.user_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+export function replaceScoutRosterIfVersion(
+  db: Database.Database,
+  setupId: number,
+  expectedVersion: number,
+  slots: readonly ScoutRosterSlot[],
+): boolean {
+  return db.transaction(() => {
+    assertCompleteScoutRoster(slots);
+    const claimed = db
+      .prepare(
+        `UPDATE scout_setups
+         SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = 'roster_ready' AND version = ?`,
+      )
+      .run(setupId, expectedVersion);
+    if (claimed.changes !== 1) return false;
+    db.prepare('DELETE FROM scout_roster_slots WHERE setup_id = ?').run(setupId);
+    insertScoutRosterSlots(db, setupId, slots);
+    return true;
+  })();
 }

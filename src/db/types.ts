@@ -1,4 +1,5 @@
 import type { ScoutRole } from '../domain/scoutRoles.js';
+import type { ScoutTeam } from '../domain/scoutRoster.js';
 
 // 'emoji' is widened in now (#31 Defect/§7) because this migration already
 // rebuilds the table for the status widening below -- adding it now avoids
@@ -104,4 +105,14 @@ export type ScoutSignup = {
   userId: string;
   role: ScoutRole;
   createdAt: string;
+};
+
+export type ScoutRosterSlotRecord = {
+  id: number;
+  setupId: number;
+  team: ScoutTeam;
+  role: ScoutRole;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
 };

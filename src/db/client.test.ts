@@ -49,6 +49,7 @@ test('fresh database initializes successfully', () => {
       'scout_config',
       'scout_setups',
       'scout_signups',
+      'scout_roster_slots',
       'schema_migrations',
     ]) {
       assert.ok(tables.includes(expected), `expected table "${expected}" to exist`);
