@@ -307,4 +307,12 @@ export const migrations: Migration[] = [
         CHECK (staff_assigned IN (0, 1));
     `,
   },
+  {
+    id: 8,
+    name: 'scout_result_message',
+    sql: `
+      ALTER TABLE scout_setups ADD COLUMN result_message_id TEXT;
+      CREATE UNIQUE INDEX idx_scout_setups_result_message ON scout_setups(result_message_id);
+    `,
+  },
 ];

@@ -90,6 +90,7 @@ export type ScoutSetup = {
   divisionRoleId: string;
   emojiByRole: Record<ScoutRole, string>;
   signupMessageId: string | null;
+  resultMessageId: string | null;
   startAt: number;
   roleLimit: number;
   note: string | null;
