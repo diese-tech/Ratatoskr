@@ -12,6 +12,7 @@ import type Database from 'better-sqlite3';
 import { divisions, type DivisionKey } from '../config/guild-structure.js';
 import {
   getDivisionByKey,
+  listDivisionScoutLifecycleBlockers,
   listManagedResourcesByDomain,
   markManagedResourcePurged,
   setDivisionStatus,
@@ -177,6 +178,22 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
       ].join('\n'),
     });
     return;
+  }
+
+  if ((subcommand === 'archive' || subcommand === 'delete') && record) {
+    const blockers = listDivisionScoutLifecycleBlockers(db, guild.id, record.id);
+    if (blockers.length > 0) {
+      await interaction.reply({
+        content: [
+          `Cannot ${subcommand} **${division.name}** while it has active scout setups:`,
+          ...blockers.map((setup) => `- Setup #${setup.id}: <t:${setup.startAt}:F> (${setup.status === 'roster_ready' ? 'roster ready' : 'open'})`),
+          '',
+          `Cancel ${blockers.length === 1 ? 'it' : 'them'} from the division scout-signups channel, then retry.`,
+        ].join('\n'),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
   }
 
   if (subcommand === 'delete') {

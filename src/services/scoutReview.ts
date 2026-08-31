@@ -32,6 +32,7 @@ import {
   SCOUT_TEAMS,
 } from '../domain/index.js';
 import { hasScoutManagementAccess } from './scoutAuthorization.js';
+import { scoutCancelButton } from './scoutCancel.js';
 
 export function scoutReviewButtonRow(setupId: number) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -39,6 +40,7 @@ export function scoutReviewButtonRow(setupId: number) {
       .setCustomId(`scout:review:${setupId}`)
       .setLabel('Review roster')
       .setStyle(ButtonStyle.Primary),
+    scoutCancelButton(setupId, 0),
   );
 }
 

@@ -31,6 +31,7 @@ import { SCOUT_ROLES, type ScoutRole } from '../domain/index.js';
 import { hasScoutManagementAccess } from './scoutAuthorization.js';
 import { resolveScoutChannelGroup, type ScoutChannelGroup } from './scoutChannels.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
+import { scoutCancelButtonRow } from './scoutCancel.js';
 
 const DRAFT_TTL_MS = 15 * 60 * 1_000;
 const CUSTOM_ID_PREFIX = 'scout:create:';
@@ -392,6 +393,7 @@ export async function handleScoutCreateButton(
         roleLimit: draft.roleLimit,
         note: draft.note,
       }),
+      components: [scoutCancelButtonRow(setup.id, setup.version)],
       allowedMentions: { parse: [], roles: [draft.divisionRoleId], users: [] },
     });
     if (!setScoutSetupSignupMessage(db, setup.id, signupMessage.id)) {

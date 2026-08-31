@@ -114,6 +114,48 @@ export function getScoutSetupBySignupMessageId(
   return row ? toScoutSetup(row) : undefined;
 }
 
+export function listCancellableScoutSetups(
+  db: Database.Database,
+  guildId: string,
+  divisionId: number,
+): ScoutSetup[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM scout_setups
+       WHERE guild_id = ? AND division_id = ? AND status IN ('open', 'roster_ready')
+       ORDER BY start_at, id`,
+    )
+    .all(guildId, divisionId) as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
+
+export const listDivisionScoutLifecycleBlockers = listCancellableScoutSetups;
+
+export type CancelScoutSetupOutcome = 'cancelled' | 'published' | 'already_cancelled' | 'stale';
+
+export function cancelScoutSetupIfVersion(
+  db: Database.Database,
+  setupId: number,
+  expectedVersion: number,
+): CancelScoutSetupOutcome {
+  return db.transaction(() => {
+    const setup = db.prepare('SELECT status, version FROM scout_setups WHERE id = ?').get(setupId) as
+      | { status: ScoutSetupStatus; version: number }
+      | undefined;
+    if (!setup || setup.version !== expectedVersion) return 'stale';
+    if (setup.status === 'published') return 'published';
+    if (setup.status === 'cancelled') return 'already_cancelled';
+    if (!['open', 'roster_ready'].includes(setup.status)) return 'stale';
+    const result = db
+      .prepare(
+        `UPDATE scout_setups SET status = 'cancelled', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND version = ? AND status IN ('open', 'roster_ready')`,
+      )
+      .run(setupId, expectedVersion);
+    return result.changes === 1 ? 'cancelled' : 'stale';
+  })();
+}
+
 export function setScoutSetupSignupMessage(
   db: Database.Database,
   setupId: number,

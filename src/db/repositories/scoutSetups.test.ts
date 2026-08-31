@@ -4,11 +4,14 @@ import { closeDatabase, openDatabase } from '../client.js';
 import { upsertDivision } from './divisions.js';
 import {
   addScoutSignup,
+  cancelScoutSetupIfVersion,
   claimScoutPublish,
   createScoutSetup,
   getScoutSetupBySignupMessageId,
   listScoutSignups,
   listScoutRosterSlots,
+  listCancellableScoutSetups,
+  listDivisionScoutLifecycleBlockers,
   replaceScoutRosterIfVersion,
   replaceScoutRosterSlotIfVersion,
   replacePublishedScoutRosterSlotIfVersion,
@@ -233,6 +236,50 @@ test('publishing is an exclusive retryable claim and published replacement is ve
     assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'stale-replacement'), 'stale');
     assert.equal(getScoutSetupBySignupMessageId(db, 'message-publish')?.resultMessageId, 'result-1');
     assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, 'replacement');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('cancellation is division-scoped, atomic, and only active setups block division lifecycle', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const otherDivision = upsertDivision(db, {
+      guildId: 'guild-1', divisionKey: 'alfheim', displayName: 'Alfheim', roleId: 'alfheim-role',
+      captainAccessRoleId: 'alfheim-captain', categoryId: 'alfheim-category',
+    });
+    const create = (messageId: string, targetDivision = division) => {
+      const setup = createScoutSetup(db, {
+        guildId: 'guild-1', divisionId: targetDivision.id, divisionKey: targetDivision.divisionKey,
+        divisionDisplayName: targetDivision.displayName, createdBy: 'captain-1', signupChannelId: `signups-${targetDivision.id}`,
+        resultsChannelId: `results-${targetDivision.id}`, divisionRoleId: `division-role-${targetDivision.id}`, emojiByRole,
+        startAt: 2_000_000_000, roleLimit: 2,
+      });
+      setScoutSetupSignupMessage(db, setup.id, messageId);
+      return setup;
+    };
+    const first = create('cancel-1');
+    const second = create('cancel-2');
+    const other = create('cancel-other', otherDivision);
+
+    assert.deepEqual(listCancellableScoutSetups(db, 'guild-1', division.id).map((setup) => setup.id), [first.id, second.id]);
+    assert.deepEqual(listCancellableScoutSetups(db, 'guild-1', otherDivision.id).map((setup) => setup.id), [other.id]);
+    assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).map((setup) => setup.id), [first.id, second.id]);
+    assert.equal(cancelScoutSetupIfVersion(db, first.id, 0), 'cancelled');
+    assert.equal(cancelScoutSetupIfVersion(db, first.id, 0), 'already_cancelled');
+    assert.deepEqual(listCancellableScoutSetups(db, 'guild-1', division.id).map((setup) => setup.id), [second.id]);
+    assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).map((setup) => setup.id), [second.id]);
+
+    const slots: ScoutRosterSlot[] = SCOUT_ROLES.flatMap((role) =>
+      SCOUT_TEAMS.map((team, index) => ({ team, role, userId: `cancel-${role}-${index}` })),
+    );
+    for (const slot of slots) addScoutSignup(db, second.id, slot.userId, slot.role);
+    assert.equal(tryCreateInitialScoutRoster(db, second.id, slots), true);
+    assert.equal(claimScoutPublish(db, second.id, 0), 'claimed');
+    assert.equal(setScoutResultMessage(db, second.id, 'cancel-result'), true);
+    assert.equal(cancelScoutSetupIfVersion(db, second.id, 0), 'published');
+    assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id), []);
+    assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', otherDivision.id).map((setup) => setup.id), [other.id]);
   } finally {
     closeDatabase(db);
   }
