@@ -10,6 +10,7 @@ import {
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { divisions, DIVISION_ROLE_COLORS, type DivisionKey, type DivisionSpec } from '../config/guild-structure.js';
+import type { ManagedResourceType } from '../db/types.js';
 import {
   getActiveManagedResourceByLogicalKey,
   getDivisionByKey,
@@ -64,6 +65,11 @@ export type DivisionChannelTemplateSpec = {
   // for voice channel names) -- see channelName() below.
   suffix: string;
   captainOnly?: boolean;
+  // Existing YSL divisions predate the division-prefix convention for the
+  // scout channels. This is an adoption-only alias: new channels use the
+  // configured prefixed name, while exactly one matching legacy channel in
+  // the expected category may be registered under the stable authored key.
+  legacyName?: string;
 };
 
 // Ordered so a division's channel list reads top-to-bottom the way staff
@@ -76,6 +82,8 @@ export const DIVISION_CHANNEL_TEMPLATE: readonly DivisionChannelTemplateSpec[] =
   { key: 'tier_list', type: 'text', suffix: 'tier-list' },
   { key: 'scheduling', type: 'text', suffix: 'scheduling' },
   { key: 'match_reports', type: 'text', suffix: 'match-reports' },
+  { key: 'scout_signups', type: 'text', suffix: 'scout-signups', legacyName: 'scout-signups' },
+  { key: 'scout_results', type: 'text', suffix: 'scout-results', legacyName: 'scout-results' },
   { key: 'lobby', type: 'voice', suffix: 'Lobby' },
 ];
 
@@ -104,12 +112,53 @@ export function getDivisionTemplate(division: DivisionSpec) {
       name: channelName(division, template),
       type: template.type,
       captainOnly: template.captainOnly ?? false,
+      legacyName: template.legacyName,
     })),
   };
 }
 
 export function getExpectedChannelNames(division: DivisionSpec): string[] {
   return getDivisionTemplate(division).channels.map((channel) => channel.name);
+}
+
+export type DivisionChannelMatchTarget = {
+  name: string;
+  kind: Extract<ManagedResourceType, 'text_channel' | 'voice_channel'>;
+  parentId: string;
+  legacyName?: string;
+};
+
+export type DivisionChannelMatchResult =
+  | { outcome: 'none' }
+  | { outcome: 'exact'; candidate: CandidateResource; source: 'configured' | 'legacy' }
+  | { outcome: 'ambiguous'; candidates: CandidateResource[] };
+
+/**
+ * Resolve a division channel by its current configured name, with one narrow
+ * compatibility path for a legacy unprefixed name inside the expected
+ * division category. Legacy names in other divisions must not make a valid
+ * local match ambiguous, and a wrong type/parent must never be adopted.
+ */
+export function classifyDivisionChannelMatch(
+  candidates: readonly CandidateResource[],
+  target: DivisionChannelMatchTarget,
+): DivisionChannelMatchResult {
+  const current = classifyMatch(candidates, target);
+  if (current.outcome === 'exact') return { ...current, source: 'configured' };
+  if (current.outcome === 'ambiguous' || !target.legacyName) return current;
+
+  const legacyCandidates = candidates.filter(
+    (candidate) =>
+      candidate.name === target.legacyName &&
+      candidate.kind === target.kind &&
+      candidate.parentId === target.parentId,
+  );
+
+  if (legacyCandidates.length === 0) return { outcome: 'none' };
+  if (legacyCandidates.length === 1) {
+    return { outcome: 'exact', candidate: legacyCandidates[0]!, source: 'legacy' };
+  }
+  return { outcome: 'ambiguous', candidates: legacyCandidates };
 }
 
 function roleByName(guild: Guild, name: string) {
@@ -282,6 +331,7 @@ async function ensureChannel(
   logicalKey: string,
   name: string,
   type: 'text' | 'voice',
+  legacyName: string | undefined,
   permissionOverwrites: ReturnType<typeof captainOverwrites> | undefined,
   result: DivisionProvisionResult,
 ): Promise<void> {
@@ -317,7 +367,12 @@ async function ensureChannel(
       kind: channel.type === ChannelType.GuildVoice ? 'voice_channel' : 'text_channel',
       parentId: channel.parentId,
     }));
-  const match = classifyMatch(candidates, { name, kind: resourceType, parentId: category.id });
+  const match = classifyDivisionChannelMatch(candidates, {
+    name,
+    kind: resourceType,
+    parentId: category.id,
+    legacyName,
+  });
 
   if (match.outcome === 'ambiguous') {
     throw new Error(
@@ -328,6 +383,9 @@ async function ensureChannel(
 
   if (match.outcome === 'exact') {
     const channel = guild.channels.cache.get(match.candidate.discordId) as TextChannel | VoiceChannel;
+    if (match.source === 'legacy') {
+      await channel.setName(name, 'Ratatoskr adopt legacy division channel');
+    }
     if (permissionOverwrites) {
       await channel.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile division channel permissions');
     } else {
@@ -425,7 +483,17 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
     const kind = channelSpec.type === 'voice' ? ('voice_channel' as const) : ('text_channel' as const);
     const logicalKey = divisionChannelLogicalKey(division.key, channelSpec.key, kind);
     const permissionOverwrites = channelSpec.captainOnly ? captainOverwrites(guild, captainAccessRole) : undefined;
-    await ensureChannel(db, guild, category, logicalKey, channelSpec.name, channelSpec.type, permissionOverwrites, result);
+    await ensureChannel(
+      db,
+      guild,
+      category,
+      logicalKey,
+      channelSpec.name,
+      channelSpec.type,
+      channelSpec.legacyName,
+      permissionOverwrites,
+      result,
+    );
   }
 
   upsertDivision(db, {
