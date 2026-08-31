@@ -97,6 +97,26 @@ function publishedDirection(setup: ScoutSetup): string {
   return `That setup is already published and cannot be cancelled. Use **Replace player** on ${resultUrl}.`;
 }
 
+async function markCancelledSignupPost(
+  interaction: MessageComponentInteraction,
+  setup: ScoutSetup,
+): Promise<string | undefined> {
+  try {
+    const channel = await interaction.client.channels.fetch(setup.signupChannelId);
+    if (!channel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
+    const message = await channel.messages.fetch(setup.signupMessageId);
+    await message.edit({
+      content: `${renderScoutSignupPost(setup)}\n\n🚫 **This scout setup was cancelled.**`,
+      components: [],
+      allowedMentions: { parse: [] },
+    });
+    await message.reactions.removeAll().catch(() => undefined);
+    return undefined;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
 export async function handleScoutCancelCommand(
   interaction: ChatInputCommandInteraction,
   db: Database.Database,
@@ -221,6 +241,16 @@ export async function handleScoutCancelButton(
     else await interaction.update(response);
     return true;
   }
+  if (setup.status === 'cancelled' && parts[1] === 'cancel') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const error = await markCancelledSignupPost(interaction, setup);
+    await interaction.editReply({
+      content: error
+        ? `This setup is cancelled, but its post still could not be repaired: ${error}`
+        : `Scout setup #${setup.id} was already cancelled; its signup post is now reconciled.`,
+    });
+    return true;
+  }
   if (!['open', 'roster_ready'].includes(setup.status)) {
     const response = { content: 'That scout setup is no longer cancellable.', components: [] };
     if (parts[1] === 'cancel') await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
@@ -242,20 +272,12 @@ export async function handleScoutCancelButton(
     return true;
   }
 
-  try {
-    const channel = await interaction.client.channels.fetch(setup.signupChannelId);
-    if (!channel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
-    const message = await channel.messages.fetch(setup.signupMessageId);
-    await message.edit({
-      content: `${renderScoutSignupPost(setup)}\n\n🚫 **This scout setup was cancelled.**`,
-      components: [],
-      allowedMentions: { parse: [] },
-    });
-    await message.reactions.removeAll().catch(() => undefined);
+  const postError = await markCancelledSignupPost(interaction, setup);
+  if (!postError) {
     await interaction.editReply({ content: `Scout setup #${setup.id} was cancelled.`, components: [] });
-  } catch (error) {
+  } else {
     await interaction.editReply({
-      content: `Scout setup #${setup.id} was cancelled, but its original post could not be updated: ${(error as Error).message}`,
+      content: `Scout setup #${setup.id} was cancelled, but its original post could not be updated: ${postError}. Use its existing Cancel control to retry the post repair.`,
       components: [],
     });
   }

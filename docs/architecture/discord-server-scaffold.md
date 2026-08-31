@@ -44,7 +44,7 @@ Highest to lowest:
 4. `Muspelheim`
 5. `Svartalfheim`
 
-Named after realms from Norse mythology, matching the server's Yggdrasil theme. All five are currently just defined templates (available as `/division` choices) -- none are provisioned on Discord yet. The base bootstrap does **not** create any of them automatically; each division is provisioned only when YSL activates it via `/division add`.
+Named after realms from Norse mythology, matching the server's Yggdrasil theme. All five are defined templates available as `/division` choices. The base bootstrap does **not** create them automatically; each division is provisioned only when YSL activates it via `/division add`.
 
 ## Division provisioning
 
@@ -63,6 +63,8 @@ A provisioned division contains:
 ├─ #<division>-tier-list
 ├─ #<division>-scheduling
 ├─ #<division>-match-reports
+├─ #<division>-scout-signups
+├─ #<division>-scout-results
 └─ 🔊 <Division> Lobby
 ```
 
@@ -75,11 +77,16 @@ Discord cannot express `Division AND Captain` directly, so Ratatoskr automatical
 
 Humans should not manually manage these utility roles.
 
+Existing unprefixed `#scout-signups` and `#scout-results` channels are adopted by Discord ID only when exactly one matching channel exists inside the expected division category. Provisioning then renames them to the division-prefixed convention; history and message links remain attached to the same channel IDs.
+
 ### Division commands
 
 - `/division add` — idempotently create or repair a selected division
 - `/division status` — report missing role/category/channel pieces
 - `/division archive` — hide the category and all child channels from normal division access while preserving history
+- `/division delete` — permanently remove an already archived, fully managed division
+
+Archive and delete refuse while that division has an open or roster-ready scout setup. Published and cancelled setups preserve history but do not block the lifecycle.
 
 Division commands are gated by the ADMIN policy in `src/services/authorization.ts`: only members holding the role configured as `ROLE_ALLFATHER_ID` or `ROLE_AESIR_ID` may manage divisions. This is a runtime role-ID check, not Discord's native Administrator permission -- holding Administrator alone does not grant access.
 

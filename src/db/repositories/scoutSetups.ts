@@ -450,6 +450,35 @@ export function replacePublishedScoutRosterSlotIfVersion(
   })();
 }
 
+export function rollbackPublishedScoutRosterReplacement(
+  db: Database.Database,
+  setupId: number,
+  updatedVersion: number,
+  slotId: number,
+  replacementUserId: string,
+  originalUserId: string,
+  originalStaffAssigned: boolean,
+): boolean {
+  return db.transaction(() => {
+    const slot = db
+      .prepare('SELECT user_id FROM scout_roster_slots WHERE setup_id = ? AND id = ?')
+      .get(setupId, slotId) as { user_id: string } | undefined;
+    if (!slot || slot.user_id !== replacementUserId) return false;
+    const restored = db
+      .prepare(
+        `UPDATE scout_setups SET version = version - 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL`,
+      )
+      .run(setupId, updatedVersion);
+    if (restored.changes !== 1) return false;
+    db.prepare(
+      `UPDATE scout_roster_slots SET user_id = ?, staff_assigned = ?,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
+    ).run(originalUserId, originalStaffAssigned ? 1 : 0, slotId);
+    return true;
+  })();
+}
+
 export function replaceScoutRosterIfVersion(
   db: Database.Database,
   setupId: number,

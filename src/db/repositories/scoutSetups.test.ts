@@ -15,6 +15,7 @@ import {
   replaceScoutRosterIfVersion,
   replaceScoutRosterSlotIfVersion,
   replacePublishedScoutRosterSlotIfVersion,
+  rollbackPublishedScoutRosterReplacement,
   releaseScoutPublishClaim,
   removeScoutSignup,
   setScoutSetupSignupMessage,
@@ -234,8 +235,10 @@ test('publishing is an exclusive retryable claim and published replacement is ve
 
     assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'replacement'), 'updated');
     assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'stale-replacement'), 'stale');
+    assert.equal(rollbackPublishedScoutRosterReplacement(db, setup.id, 1, firstSlot.id, 'replacement', firstSlot.userId, firstSlot.staffAssigned), true);
+    assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'replacement-final'), 'updated');
     assert.equal(getScoutSetupBySignupMessageId(db, 'message-publish')?.resultMessageId, 'result-1');
-    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, 'replacement');
+    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, 'replacement-final');
   } finally {
     closeDatabase(db);
   }

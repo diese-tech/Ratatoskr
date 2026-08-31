@@ -20,6 +20,7 @@ import {
   getScoutSetupById,
   listScoutRosterSlots,
   releaseScoutPublishClaim,
+  rollbackPublishedScoutRosterReplacement,
   replacePublishedScoutRosterSlotIfVersion,
   setScoutResultMessage,
   type ScoutSetup,
@@ -208,6 +209,16 @@ export async function handleScoutPublishedUserSelect(
     return true;
   }
   const oldSlot = listScoutRosterSlots(db, setupId).find((slot) => slot.id === slotId);
+  const channel = await interaction.client.channels.fetch(setup.resultsChannelId).catch(() => undefined);
+  if (!channel?.isTextBased() || !setup.resultMessageId) {
+    await interaction.update({ content: 'The published result message is unavailable; no replacement was made.', components: [] });
+    return true;
+  }
+  const message = await channel.messages.fetch(setup.resultMessageId).catch(() => undefined);
+  if (!message) {
+    await interaction.update({ content: 'The published result message was deleted or cannot be accessed; no replacement was made.', components: [] });
+    return true;
+  }
   const outcome = replacePublishedScoutRosterSlotIfVersion(db, setupId, version, slotId, userId);
   if (outcome !== 'updated' || !oldSlot) {
     await interaction.update({ content: `No replacement was made (${outcome}).`, components: [] });
@@ -215,20 +226,43 @@ export async function handleScoutPublishedUserSelect(
   }
   const updated = getScoutSetupById(db, setupId)!;
   const slots = listScoutRosterSlots(db, setupId);
-  const channel = await interaction.client.channels.fetch(updated.resultsChannelId);
-  if (!channel?.isTextBased() || !updated.resultMessageId) throw new Error('Published result channel or message is unavailable.');
-  const message = await channel.messages.fetch(updated.resultMessageId);
-  await message.edit({
-    content: renderScoutResult(updated, slots),
-    components: [replacementRow(setupId, updated.version)],
-    allowedMentions: { parse: [], users: slots.map((slot) => slot.userId), roles: [] },
-  });
+  try {
+    await message.edit({
+      content: renderScoutResult(updated, slots),
+      components: [replacementRow(setupId, updated.version)],
+      allowedMentions: { parse: [], users: slots.map((slot) => slot.userId), roles: [] },
+    });
+  } catch (error) {
+    const rolledBack = rollbackPublishedScoutRosterReplacement(
+      db,
+      setupId,
+      updated.version,
+      slotId,
+      userId,
+      oldSlot.userId,
+      oldSlot.staffAssigned,
+    );
+    await interaction.update({
+      content: rolledBack
+        ? `The result message could not be edited, so no replacement was saved. Fix the channel permissions and retry: ${(error as Error).message}`
+        : `The result message could not be edited and the replacement could not be rolled back safely. Stop and reconcile setup #${setupId}: ${(error as Error).message}`,
+      components: [],
+    });
+    return true;
+  }
   if (channel.isSendable()) {
-    await channel.send({
+    const noticeSent = await channel.send({
       content: `Roster update: <@${oldSlot.userId}> was replaced by <@${userId}> at ${SCOUT_ROLE_LABELS[oldSlot.role]}.`,
       allowedMentions: { parse: [] },
+    }).then(() => true, () => false);
+    await interaction.update({
+      content: noticeSent
+        ? 'Published roster updated.'
+        : 'Published roster updated, but Ratatoskr could not send the replacement notice. Post that notice manually.',
+      components: [],
     });
+    return true;
   }
-  await interaction.update({ content: 'Published roster updated.', components: [] });
+  await interaction.update({ content: 'Published roster updated, but this channel cannot accept the replacement notice. Post it manually.', components: [] });
   return true;
 }
