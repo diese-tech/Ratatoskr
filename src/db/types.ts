@@ -74,3 +74,34 @@ export type ScoutConfig = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type ScoutSetupStatus = 'posting' | 'open' | 'roster_ready' | 'published' | 'cancelled' | 'posting_failed';
+
+export type ScoutSetup = {
+  id: number;
+  guildId: string;
+  divisionId: number;
+  divisionKey: string;
+  divisionDisplayName: string;
+  createdBy: string;
+  signupChannelId: string;
+  resultsChannelId: string;
+  divisionRoleId: string;
+  emojiByRole: Record<ScoutRole, string>;
+  signupMessageId: string | null;
+  startAt: number;
+  roleLimit: number;
+  note: string | null;
+  status: ScoutSetupStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScoutSignup = {
+  id: number;
+  setupId: number;
+  userId: string;
+  role: ScoutRole;
+  createdAt: string;
+};

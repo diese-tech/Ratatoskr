@@ -23,6 +23,9 @@ export const scoutCommand = new SlashCommandBuilder()
   .setDescription('Manage preseason scout setups.')
   .setDMPermission(false)
   .addSubcommand((subcommand) =>
+    subcommand.setName('create').setDescription('Create a scout setup in this division signup channel.'),
+  )
+  .addSubcommand((subcommand) =>
     subcommand
       .setName('config')
       .setDescription('Configure scout staff, role emoji, and timezone.')
@@ -80,10 +83,17 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
     return;
   }
 
+  const subcommand = interaction.options.getSubcommand();
+  if (subcommand === 'create') {
+    const { handleScoutCreateCommand } = await import('../services/scoutCreate.js');
+    await handleScoutCreateCommand(interaction, db);
+    return;
+  }
+  if (subcommand !== 'config') return;
+
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const { requireAccess } = await import('../services/authorization.js');
   if (!(await requireAccess(interaction, member, 'ADMIN'))) return;
-  if (interaction.options.getSubcommand() !== 'config') return;
 
   const timezone = interaction.options.getString('timezone');
   if (timezone && !isValidScoutTimezone(timezone)) {
