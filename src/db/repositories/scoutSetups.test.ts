@@ -7,9 +7,13 @@ import {
   createScoutSetup,
   getScoutSetupBySignupMessageId,
   listScoutSignups,
+  listScoutRosterSlots,
+  replaceScoutRosterIfVersion,
   removeScoutSignup,
   setScoutSetupSignupMessage,
+  tryCreateInitialScoutRoster,
 } from './scoutSetups.js';
+import { SCOUT_ROLES, SCOUT_TEAMS, type ScoutRosterSlot } from '../../domain/index.js';
 
 function setupDatabase() {
   const db = openDatabase(':memory:');
@@ -116,6 +120,35 @@ test('scout signup limits and withdrawals are isolated per setup', () => {
     removeScoutSignup(db, first.id, 'player-1', 'solo');
     assert.equal(listScoutSignups(db, first.id).length, 0);
     assert.equal(listScoutSignups(db, second.id).length, 1);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('initial roster transition is atomic and versioned replacement rejects stale shuffles', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const setup = createScoutSetup(db, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'captain-1', signupChannelId: 'signups-1',
+      resultsChannelId: 'results-1', divisionRoleId: 'division-role', emojiByRole,
+      startAt: 2_000_000_000, roleLimit: 2,
+    });
+    setScoutSetupSignupMessage(db, setup.id, 'message-roster');
+    const slots: ScoutRosterSlot[] = SCOUT_ROLES.flatMap((role) =>
+      SCOUT_TEAMS.map((team, index) => ({ team, role, userId: `${role}-${index}` })),
+    );
+
+    assert.equal(tryCreateInitialScoutRoster(db, setup.id, slots), true);
+    assert.equal(tryCreateInitialScoutRoster(db, setup.id, slots), false);
+    assert.equal(listScoutRosterSlots(db, setup.id).length, 10);
+    assert.equal(getScoutSetupBySignupMessageId(db, 'message-roster')?.status, 'roster_ready');
+
+    const replacement = slots.map((slot) => ({ ...slot, userId: `new-${slot.userId}` }));
+    assert.equal(replaceScoutRosterIfVersion(db, setup.id, 0, replacement), true);
+    assert.equal(replaceScoutRosterIfVersion(db, setup.id, 0, slots), false);
+    assert.ok(listScoutRosterSlots(db, setup.id).every((slot) => slot.userId.startsWith('new-')));
+    assert.equal(getScoutSetupBySignupMessageId(db, 'message-roster')?.version, 1);
   } finally {
     closeDatabase(db);
   }

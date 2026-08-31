@@ -282,4 +282,21 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_scout_signups_setup ON scout_signups(setup_id);
     `,
   },
+  {
+    id: 6,
+    name: 'scout_roster_slots',
+    sql: `
+      CREATE TABLE scout_roster_slots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id INTEGER NOT NULL REFERENCES scout_setups(id) ON DELETE CASCADE,
+        team TEXT NOT NULL CHECK (team IN ('team_one', 'team_two')),
+        role TEXT NOT NULL CHECK (role IN ('solo', 'jungle', 'mid', 'support', 'carry')),
+        user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        UNIQUE (setup_id, team, role)
+      );
+      CREATE INDEX idx_scout_roster_slots_setup ON scout_roster_slots(setup_id);
+    `,
+  },
 ];
