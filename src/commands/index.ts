@@ -34,6 +34,16 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
     if (await handleScoutConfigRoleSelect(interaction, db)) return;
   }
 
+  if (interaction.isStringSelectMenu()) {
+    const { handleScoutReviewStringSelect } = await import('../services/scoutReview.js');
+    if (await handleScoutReviewStringSelect(interaction, db)) return;
+  }
+
+  if (interaction.isUserSelectMenu()) {
+    const { handleScoutReviewUserSelect } = await import('../services/scoutReview.js');
+    if (await handleScoutReviewUserSelect(interaction, db)) return;
+  }
+
   if (interaction.isButton()) {
     const { handleScoutCreateButton } = await import('../services/scoutCreate.js');
     if (await handleScoutCreateButton(interaction, db)) return;

@@ -9,9 +9,12 @@ import {
   listScoutSignups,
   listScoutRosterSlots,
   replaceScoutRosterIfVersion,
+  replaceScoutRosterSlotIfVersion,
   removeScoutSignup,
   setScoutSetupSignupMessage,
+  swapScoutRosterSlotsIfVersion,
   tryCreateInitialScoutRoster,
+  withdrawnScoutRosterUserIds,
 } from './scoutSetups.js';
 import { SCOUT_ROLES, SCOUT_TEAMS, type ScoutRosterSlot } from '../../domain/index.js';
 
@@ -149,6 +152,47 @@ test('initial roster transition is atomic and versioned replacement rejects stal
     assert.equal(replaceScoutRosterIfVersion(db, setup.id, 0, slots), false);
     assert.ok(listScoutRosterSlots(db, setup.id).every((slot) => slot.userId.startsWith('new-')));
     assert.equal(getScoutSetupBySignupMessageId(db, 'message-roster')?.version, 1);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('roster edits preserve uniqueness, mark overrides, flag withdrawals, and reject stale versions', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const setup = createScoutSetup(db, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'captain-1', signupChannelId: 'signups-1',
+      resultsChannelId: 'results-1', divisionRoleId: 'division-role', emojiByRole,
+      startAt: 2_000_000_000, roleLimit: 2,
+    });
+    setScoutSetupSignupMessage(db, setup.id, 'message-edits');
+    const slots: ScoutRosterSlot[] = SCOUT_ROLES.flatMap((role) =>
+      SCOUT_TEAMS.map((team, index) => ({ team, role, userId: `${role}-${index}` })),
+    );
+    for (const slot of slots) addScoutSignup(db, setup.id, slot.userId, slot.role);
+    tryCreateInitialScoutRoster(db, setup.id, slots);
+
+    let stored = listScoutRosterSlots(db, setup.id);
+    const soloOne = stored.find((slot) => slot.team === 'team_one' && slot.role === 'solo')!;
+    const soloTwo = stored.find((slot) => slot.team === 'team_two' && slot.role === 'solo')!;
+    assert.equal(swapScoutRosterSlotsIfVersion(db, setup.id, 0, soloOne.id, soloTwo.id, false), true);
+    assert.ok(listScoutRosterSlots(db, setup.id).every((slot) => !slot.staffAssigned));
+
+    stored = listScoutRosterSlots(db, setup.id);
+    const changedSolo = stored.find((slot) => slot.team === 'team_one' && slot.role === 'solo')!;
+    const jungle = stored.find((slot) => slot.team === 'team_one' && slot.role === 'jungle')!;
+    assert.equal(swapScoutRosterSlotsIfVersion(db, setup.id, 1, changedSolo.id, jungle.id, true), true);
+    assert.equal(listScoutRosterSlots(db, setup.id).filter((slot) => slot.staffAssigned).length, 2);
+
+    const mid = listScoutRosterSlots(db, setup.id).find((slot) => slot.role === 'mid')!;
+    removeScoutSignup(db, setup.id, mid.userId, mid.role);
+    assert.deepEqual(withdrawnScoutRosterUserIds(db, setup.id), [mid.userId]);
+
+    assert.equal(replaceScoutRosterSlotIfVersion(db, setup.id, 2, changedSolo.id, 'staff-sub', true), 'updated');
+    assert.equal(replaceScoutRosterSlotIfVersion(db, setup.id, 2, jungle.id, 'another-sub', true), 'stale');
+    assert.equal(replaceScoutRosterSlotIfVersion(db, setup.id, 3, jungle.id, mid.userId, false), 'duplicate');
+    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.userId === 'staff-sub')?.staffAssigned, true);
   } finally {
     closeDatabase(db);
   }

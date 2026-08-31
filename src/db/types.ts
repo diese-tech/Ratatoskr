@@ -113,6 +113,7 @@ export type ScoutRosterSlotRecord = {
   team: ScoutTeam;
   role: ScoutRole;
   userId: string;
+  staffAssigned: boolean;
   createdAt: string;
   updatedAt: string;
 };

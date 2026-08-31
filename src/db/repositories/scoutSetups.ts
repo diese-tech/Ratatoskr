@@ -198,6 +198,7 @@ type ScoutRosterSlotRow = {
   team: ScoutTeam;
   role: ScoutRole;
   user_id: string;
+  staff_assigned: number;
   created_at: string;
   updated_at: string;
 };
@@ -244,9 +245,94 @@ export function listScoutRosterSlots(db: Database.Database, setupId: number): Sc
     team: row.team,
     role: row.role,
     userId: row.user_id,
+    staffAssigned: row.staff_assigned === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+export function swapScoutRosterSlotsIfVersion(
+  db: Database.Database,
+  setupId: number,
+  expectedVersion: number,
+  firstSlotId: number,
+  secondSlotId: number,
+  staffOverride: boolean,
+): boolean {
+  return db.transaction(() => {
+    const rows = db
+      .prepare('SELECT * FROM scout_roster_slots WHERE setup_id = ? AND id IN (?, ?)')
+      .all(setupId, firstSlotId, secondSlotId) as ScoutRosterSlotRow[];
+    if (rows.length !== 2 || firstSlotId === secondSlotId) return false;
+    const claimed = db
+      .prepare(
+        `UPDATE scout_setups SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = 'roster_ready' AND version = ?`,
+      )
+      .run(setupId, expectedVersion);
+    if (claimed.changes !== 1) return false;
+    const first = rows.find((row) => row.id === firstSlotId)!;
+    const second = rows.find((row) => row.id === secondSlotId)!;
+    const update = db.prepare(
+      `UPDATE scout_roster_slots
+       SET user_id = ?, staff_assigned = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
+    );
+    update.run(second.user_id, staffOverride || second.staff_assigned === 1 ? 1 : 0, first.id);
+    update.run(first.user_id, staffOverride || first.staff_assigned === 1 ? 1 : 0, second.id);
+    return true;
+  })();
+}
+
+export type ReplaceScoutRosterSlotOutcome = 'updated' | 'stale' | 'duplicate';
+
+export function replaceScoutRosterSlotIfVersion(
+  db: Database.Database,
+  setupId: number,
+  expectedVersion: number,
+  slotId: number,
+  userId: string,
+  staffAssigned: boolean,
+): ReplaceScoutRosterSlotOutcome {
+  return db.transaction(() => {
+    const slot = db
+      .prepare('SELECT id FROM scout_roster_slots WHERE setup_id = ? AND id = ?')
+      .get(setupId, slotId);
+    if (!slot) return 'stale';
+    const duplicate = db
+      .prepare('SELECT 1 FROM scout_roster_slots WHERE setup_id = ? AND user_id = ?')
+      .get(setupId, userId);
+    if (duplicate) return 'duplicate';
+    const claimed = db
+      .prepare(
+        `UPDATE scout_setups SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = 'roster_ready' AND version = ?`,
+      )
+      .run(setupId, expectedVersion);
+    if (claimed.changes !== 1) return 'stale';
+    db.prepare(
+      `UPDATE scout_roster_slots SET user_id = ?, staff_assigned = ?,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
+    ).run(userId, staffAssigned ? 1 : 0, slotId);
+    return 'updated';
+  })();
+}
+
+export function withdrawnScoutRosterUserIds(db: Database.Database, setupId: number): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT slots.user_id
+       FROM scout_roster_slots slots
+       WHERE slots.setup_id = ? AND slots.staff_assigned = 0
+         AND NOT EXISTS (
+           SELECT 1 FROM scout_signups signups
+           WHERE signups.setup_id = slots.setup_id
+             AND signups.user_id = slots.user_id
+             AND signups.role = slots.role
+         )
+       ORDER BY slots.user_id`,
+    )
+    .all(setupId) as { user_id: string }[];
+  return rows.map((row) => row.user_id);
 }
 
 export function replaceScoutRosterIfVersion(
