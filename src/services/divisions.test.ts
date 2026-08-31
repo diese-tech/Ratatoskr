@@ -3,6 +3,8 @@ import { ChannelType, Collection, type Guild } from 'discord.js';
 import { test } from 'node:test';
 import type { DivisionSpec } from '../config/guild-structure.js';
 import { closeDatabase, openDatabase } from '../db/client.js';
+import { insertManagedResource, listManagedResourcesByDomain } from '../db/repositories/managedResources.js';
+import { divisionChannelLogicalKey } from './divisionScaffold.js';
 import {
   classifyDivisionChannelMatch,
   getDivisionSpec,
@@ -87,13 +89,15 @@ test('classifyDivisionChannelMatch adopts one legacy unprefixed scout channel fr
   assert.equal(result.outcome === 'exact' && result.source, 'legacy');
 });
 
-test('getDivisionTemplate declares unprefixed legacy adoption names only for scout channels', () => {
+test('getDivisionTemplate declares safe unprefixed legacy adoption names for every text channel', () => {
   const template = getDivisionTemplate({ key: 'vanaheim', name: 'Vanaheim' });
   const legacyByKey = new Map(template.channels.map((channel) => [channel.key, channel.legacyName]));
 
   assert.equal(legacyByKey.get('scout_signups'), 'scout-signups');
   assert.equal(legacyByKey.get('scout_results'), 'scout-results');
-  assert.equal(legacyByKey.get('general'), undefined);
+  assert.equal(legacyByKey.get('captain_chat'), 'captain-chat');
+  assert.equal(legacyByKey.get('general'), 'general');
+  assert.equal(legacyByKey.get('lobby'), undefined);
 });
 
 test('classifyDivisionChannelMatch refuses multiple legacy scout channels in the expected category', () => {
@@ -117,7 +121,7 @@ test('classifyDivisionChannelMatch refuses multiple legacy scout channels in the
   ]);
 });
 
-test('provisionDivision adopts and renames exact legacy scout channels without creating replacements', async () => {
+test('provisionDivision adopts and renames the observed legacy division channels without creating replacements', async () => {
   const db = openDatabase(':memory:');
   const renamed: Array<[string, string]> = [];
   const division = getDivisionSpec('vanaheim');
@@ -138,9 +142,21 @@ test('provisionDivision adopts and renames exact legacy scout channels without c
     permissionOverwrites: { set: async () => undefined },
   });
 
+  const observedLegacyNames = new Map([
+    ['captain_chat', 'captain-chat'],
+    ['announcements', 'vanaheim-announcements'],
+    ['general', 'general'],
+    ['tier_list', 'tier-list'],
+    ['scheduling', 'scheduling'],
+    ['match_reports', 'match-reports'],
+    ['scout_signups', 'scout-signups'],
+    ['scout_results', 'scout-results'],
+    ['lobby', 'Vanaheim Lobby'],
+  ]);
+
   for (const channelSpec of template.channels) {
     const id = `channel-${channelSpec.key}`;
-    const legacyName = channelSpec.legacyName ?? channelSpec.name;
+    const legacyName = observedLegacyNames.get(channelSpec.key)!;
     channels.set(id, {
       id,
       name: legacyName,
@@ -156,6 +172,12 @@ test('provisionDivision adopts and renames exact legacy scout channels without c
       },
     });
   }
+  channels.set('unmanaged-lobby-2', {
+    id: 'unmanaged-lobby-2',
+    name: 'Vanaheim Lobby 2',
+    type: ChannelType.GuildVoice,
+    parentId: categoryId,
+  });
 
   const guild = {
     id: 'guild-1',
@@ -177,11 +199,33 @@ test('provisionDivision adopts and renames exact legacy scout channels without c
   } as unknown as Guild;
 
   try {
+    insertManagedResource(db, {
+      discordResourceId: 'deleted-prefixed-general',
+      guildId: 'guild-1',
+      resourceType: 'text_channel',
+      logicalKey: divisionChannelLogicalKey('vanaheim', 'general', 'text_channel'),
+      parentResourceId: categoryId,
+      scaffoldDomain: 'division',
+    });
     await provisionDivision(db, guild, 'vanaheim');
     assert.deepEqual(renamed, [
+      ['channel-captain_chat', 'vanaheim-captain-chat'],
+      ['channel-general', 'vanaheim-general'],
+      ['channel-tier_list', 'vanaheim-tier-list'],
+      ['channel-scheduling', 'vanaheim-scheduling'],
+      ['channel-match_reports', 'vanaheim-match-reports'],
       ['channel-scout_signups', 'vanaheim-scout-signups'],
       ['channel-scout_results', 'vanaheim-scout-results'],
     ]);
+    const generalRows = listManagedResourcesByDomain(db, 'guild-1', 'division')
+      .filter((resource) => resource.logicalKey === divisionChannelLogicalKey('vanaheim', 'general', 'text_channel'));
+    assert.deepEqual(generalRows.map((resource) => [resource.discordResourceId, resource.status]), [
+      ['channel-general', 'active'],
+      ['deleted-prefixed-general', 'obsolete'],
+    ]);
+    assert.equal(channels.get('unmanaged-lobby-2')?.name, 'Vanaheim Lobby 2');
+    assert.equal(listManagedResourcesByDomain(db, 'guild-1', 'division')
+      .some((resource) => resource.discordResourceId === 'unmanaged-lobby-2'), false);
   } finally {
     closeDatabase(db);
   }
