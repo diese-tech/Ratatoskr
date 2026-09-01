@@ -28,6 +28,11 @@ export type ResolveScoutChannelScopeInput = {
   >;
 };
 
+export type ResolveScoutChannelGroupForDivisionInput = Omit<ResolveScoutChannelScopeInput, 'channelId'> & {
+  divisionKey: string;
+  operationsCategoryId: string;
+};
+
 const SCOUT_CHANNEL_KEYS: Readonly<Record<ScoutChannelPurpose, string>> = {
   signups: 'scout_signups',
   results: 'scout_results',
@@ -106,5 +111,50 @@ export function resolveScoutChannelGroup(
     divisionKey: source.divisionKey,
     signupChannelId: source.channelId,
     resultsChannelId: results[0]!.discordResourceId,
+  };
+}
+
+export function resolveScoutChannelGroupForDivision(
+  input: ResolveScoutChannelGroupForDivisionInput,
+): ScoutChannelGroup | undefined {
+  const division = input.divisions.find(
+    (candidate) =>
+      candidate.guildId === input.guildId &&
+      candidate.divisionKey === input.divisionKey &&
+      candidate.status === 'active',
+  );
+  if (!division) return undefined;
+
+  const resolvePurpose = (purpose: ScoutChannelPurpose): ManagedResource | undefined => {
+    const logicalKey = divisionChannelLogicalKey(
+      division.divisionKey,
+      SCOUT_CHANNEL_KEYS[purpose],
+      'text_channel',
+    );
+    const matches = input.managedResources.filter((candidate) => {
+      const liveChannel = input.liveChannels.get(candidate.discordResourceId);
+      return (
+        candidate.guildId === input.guildId &&
+        candidate.resourceType === 'text_channel' &&
+        candidate.scaffoldDomain === 'division' &&
+        candidate.status === 'active' &&
+        candidate.logicalKey === logicalKey &&
+        candidate.parentResourceId === input.operationsCategoryId &&
+        liveChannel?.resourceType === 'text_channel' &&
+        liveChannel.parentId === input.operationsCategoryId
+      );
+    });
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+
+  const signups = resolvePurpose('signups');
+  const results = resolvePurpose('results');
+  if (!signups || !results) return undefined;
+
+  return {
+    divisionId: division.id,
+    divisionKey: division.divisionKey,
+    signupChannelId: signups.discordResourceId,
+    resultsChannelId: results.discordResourceId,
   };
 }

@@ -2,13 +2,12 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelType,
   MessageFlags,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  type Client,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
-  type Guild,
   type MessageComponentInteraction,
   type StringSelectMenuInteraction,
 } from 'discord.js';
@@ -18,14 +17,14 @@ import {
   getDivisionByKey,
   getScoutConfig,
   getScoutSetupById,
+  listCancelledScoutSetupsNeedingSignupPostReconciliation,
   listCancellableScoutSetups,
-  listDivisions,
-  listManagedResourcesByDomain,
+  markCancelledScoutSignupPostReconciled,
   type ScoutSetup,
 } from '../db/index.js';
-import { hasScoutManagementAccess } from './scoutAuthorization.js';
-import { resolveScoutChannelScope } from './scoutChannels.js';
+import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
+import { updateScoutControlPanel } from './scoutControlPanel.js';
 
 export function scoutCancelButton(setupId: number, version: number): ButtonBuilder {
   return new ButtonBuilder()
@@ -38,20 +37,6 @@ export function scoutCancelButtonRow(setupId: number, version: number) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(scoutCancelButton(setupId, version));
 }
 
-function liveChannelMap(guild: Guild) {
-  return new Map(
-    guild.channels.cache
-      .filter((channel) => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice)
-      .map((channel) => [
-        channel.id,
-        {
-          resourceType: channel.type === ChannelType.GuildText ? ('text_channel' as const) : ('voice_channel' as const),
-          parentId: channel.parentId,
-        },
-      ]),
-  );
-}
-
 async function canManageSetup(
   interaction: MessageComponentInteraction,
   db: Database.Database,
@@ -59,17 +44,13 @@ async function canManageSetup(
 ): Promise<ScoutSetup | undefined> {
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || !interaction.guild) return undefined;
+  if (!isScoutOperationsChannel(setup, interaction.channelId)) return undefined;
   const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
   if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const config = getScoutConfig(db, setup.guildId);
   const { hasAccess } = await import('./authorization.js');
-  return hasScoutManagementAccess({
-    isAdmin: hasAccess(member, 'ADMIN'),
-    memberRoleIds: new Set(member.roles.cache.keys()),
-    additionalAuthorizedRoleIds: config?.authorizedRoleIds ?? [],
-    divisionCaptainAccessRoleId: division.captainAccessRoleId,
-  }) ? setup : undefined;
+  return hasScoutDivisionManagementAccess(member, config, division, hasAccess(member, 'ADMIN')) ? setup : undefined;
 }
 
 function confirmation(setup: ScoutSetup) {
@@ -97,12 +78,13 @@ function publishedDirection(setup: ScoutSetup): string {
   return `That setup is already published and cannot be cancelled. Use **Replace player** on ${resultUrl}.`;
 }
 
-async function markCancelledSignupPost(
-  interaction: MessageComponentInteraction,
+export async function reconcileCancelledScoutSignupPost(
+  client: Client,
+  db: Database.Database,
   setup: ScoutSetup,
 ): Promise<string | undefined> {
   try {
-    const channel = await interaction.client.channels.fetch(setup.signupChannelId);
+    const channel = await client.channels.fetch(setup.signupChannelId);
     if (!channel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
     const message = await channel.messages.fetch(setup.signupMessageId);
     await message.edit({
@@ -110,10 +92,26 @@ async function markCancelledSignupPost(
       components: [],
       allowedMentions: { parse: [] },
     });
-    await message.reactions.removeAll().catch(() => undefined);
+    await message.reactions.removeAll();
+    if (!setup.signupPostReconciled && !markCancelledScoutSignupPostReconciled(db, setup.id)) {
+      const current = getScoutSetupById(db, setup.id);
+      if (!current?.signupPostReconciled) throw new Error('The signup post was updated, but reconciliation could not be recorded.');
+    }
+    await updateScoutControlPanel(
+      client,
+      setup,
+      `🚫 **${setup.divisionDisplayName} scout setup #${setup.id} cancelled**`,
+    );
     return undefined;
   } catch (error) {
     return (error as Error).message;
+  }
+}
+
+export async function reconcileCancelledScoutSignupPosts(client: Client, db: Database.Database): Promise<void> {
+  for (const setup of listCancelledScoutSetupsNeedingSignupPostReconciliation(db)) {
+    const error = await reconcileCancelledScoutSignupPost(client, db, setup);
+    if (error) console.error(`Scout cancellation reconciliation failed for setup #${setup.id}: ${error}`);
   }
 }
 
@@ -122,37 +120,24 @@ export async function handleScoutCancelCommand(
   db: Database.Database,
 ): Promise<void> {
   if (!interaction.guild) return;
-  await interaction.guild.channels.fetch();
-  const divisions = listDivisions(db, interaction.guild.id);
-  const scope = resolveScoutChannelScope({
-    guildId: interaction.guild.id,
-    channelId: interaction.channelId,
-    divisions,
-    managedResources: listManagedResourcesByDomain(db, interaction.guild.id, 'division'),
-    liveChannels: liveChannelMap(interaction.guild),
-  });
-  if (!scope || scope.purpose !== 'signups') {
+  const config = getScoutConfig(db, interaction.guild.id);
+  if (!config?.operationsChannelId || interaction.channelId !== config.operationsChannelId) {
     await interaction.reply({
-      content: 'Run `/scout cancel` from the managed scout-signups channel for the division you want to manage.',
+      content: 'Run `/scout cancel` from the configured `scout-ops` channel.',
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  const division = divisions.find((candidate) => candidate.id === scope.divisionId && candidate.status === 'active');
-  if (!division) {
+  const divisionKey = interaction.options.getString('division', true);
+  const division = getDivisionByKey(db, interaction.guild.id, divisionKey);
+  if (!division || division.status !== 'active') {
     await interaction.reply({ content: 'This division is not active.', flags: MessageFlags.Ephemeral });
     return;
   }
   const member = await interaction.guild.members.fetch(interaction.user.id);
-  const config = getScoutConfig(db, interaction.guild.id);
   const { hasAccess } = await import('./authorization.js');
-  const allowed = hasScoutManagementAccess({
-    isAdmin: hasAccess(member, 'ADMIN'),
-    memberRoleIds: new Set(member.roles.cache.keys()),
-    additionalAuthorizedRoleIds: config?.authorizedRoleIds ?? [],
-    divisionCaptainAccessRoleId: division.captainAccessRoleId,
-  });
+  const allowed = hasScoutDivisionManagementAccess(member, config, division, hasAccess(member, 'ADMIN'));
   if (!allowed) {
     await interaction.reply({ content: 'You do not have permission to cancel this division\'s scout setups.', flags: MessageFlags.Ephemeral });
     return;
@@ -194,7 +179,8 @@ export async function handleScoutCancelSelect(
   const setupId = Number(interaction.values[0]);
   if (![divisionId, setupId].every(Number.isInteger)) return false;
   const setup = await canManageSetup(interaction, db, setupId);
-  if (!setup || setup.divisionId !== divisionId || setup.signupChannelId !== interaction.channelId) {
+  const config = interaction.guildId ? getScoutConfig(db, interaction.guildId) : undefined;
+  if (!setup || setup.divisionId !== divisionId || config?.operationsChannelId !== interaction.channelId) {
     await interaction.update({ content: 'That setup is no longer available to you.', components: [] });
     return true;
   }
@@ -243,7 +229,7 @@ export async function handleScoutCancelButton(
   }
   if (setup.status === 'cancelled' && parts[1] === 'cancel') {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const error = await markCancelledSignupPost(interaction, setup);
+    const error = await reconcileCancelledScoutSignupPost(interaction.client, db, setup);
     await interaction.editReply({
       content: error
         ? `This setup is cancelled, but its post still could not be repaired: ${error}`
@@ -272,13 +258,13 @@ export async function handleScoutCancelButton(
     return true;
   }
 
-  const postError = await markCancelledSignupPost(interaction, setup);
+  const postError = await reconcileCancelledScoutSignupPost(interaction.client, db, setup);
   if (!postError) {
     await interaction.editReply({ content: `Scout setup #${setup.id} was cancelled.`, components: [] });
   } else {
     await interaction.editReply({
-      content: `Scout setup #${setup.id} was cancelled, but its original post could not be updated: ${postError}. Use its existing Cancel control to retry the post repair.`,
-      components: [],
+      content: `Scout setup #${setup.id} was cancelled, but its original post could not be updated: ${postError}. Ratatoskr will retry automatically after restart; you can also use this button to retry now.`,
+      components: [scoutCancelButtonRow(setup.id, setup.version)],
     });
   }
   return true;

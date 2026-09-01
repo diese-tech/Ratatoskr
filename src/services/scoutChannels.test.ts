@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { DivisionRecord, ManagedResource } from '../db/types.js';
-import { resolveScoutChannelGroup, resolveScoutChannelScope } from './scoutChannels.js';
+import { resolveScoutChannelGroup, resolveScoutChannelGroupForDivision, resolveScoutChannelScope } from './scoutChannels.js';
 
 function division(overrides: Partial<DivisionRecord> = {}): DivisionRecord {
   return {
@@ -11,7 +11,8 @@ function division(overrides: Partial<DivisionRecord> = {}): DivisionRecord {
     displayName: 'Vanaheim',
     seasonId: null,
     roleId: 'vanaheim-role',
-    captainAccessRoleId: 'vanaheim-captain-access',
+    managerRoleId: 'vanaheim-manager',
+    captainRoleId: 'vanaheim-captain',
     categoryId: 'vanaheim-category',
     status: 'active',
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -92,6 +93,36 @@ test('resolveScoutChannelGroup returns the complete live signup/results pair for
     liveChannels: new Map([
       ['legacy-unprefixed-signups', { resourceType: 'text_channel' as const, parentId: 'vanaheim-category' }],
       ['legacy-unprefixed-results', { resourceType: 'text_channel' as const, parentId: 'vanaheim-category' }],
+    ]),
+  });
+
+  assert.deepEqual(group, {
+    divisionId: 1,
+    divisionKey: 'vanaheim',
+    signupChannelId: 'legacy-unprefixed-signups',
+    resultsChannelId: 'legacy-unprefixed-results',
+  });
+});
+
+test('resolveScoutChannelGroupForDivision resolves both managed channels after they move to Scout Operations', () => {
+  const managedResources = [
+    resource({ parentResourceId: 'scout-ops-category' }),
+    resource({
+      id: 2,
+      discordResourceId: 'legacy-unprefixed-results',
+      logicalKey: 'division:vanaheim:channel:scout_results:text_channel',
+      parentResourceId: 'scout-ops-category',
+    }),
+  ];
+  const group = resolveScoutChannelGroupForDivision({
+    guildId: 'guild-1',
+    divisionKey: 'vanaheim',
+    operationsCategoryId: 'scout-ops-category',
+    divisions: [division()],
+    managedResources,
+    liveChannels: new Map([
+      ['legacy-unprefixed-signups', { resourceType: 'text_channel' as const, parentId: 'scout-ops-category' }],
+      ['legacy-unprefixed-results', { resourceType: 'text_channel' as const, parentId: 'scout-ops-category' }],
     ]),
   });
 

@@ -23,11 +23,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       {
         usage: '/scout create',
         description:
-          'Staff or that division\'s captains run this in its scout-signups channel. Choose the time, signup limit, note, and optional eligibility role, then review and post the game. Fill can cover any missing role. A second game at the same time requires confirmation, and twenty eligible players can build two games. Use the private review controls to Shuffle, edit across games, and Publish; published rosters provide Swap and Replace player controls.',
+          'From scout-ops, authorized staff choose a division, time, signup limit, note, and optional eligibility role, then post the game to that division\'s signup channel. Fill can cover any missing role. A second setup at the same time requires confirmation, and twenty eligible players can build two games. When a roster is ready, its Scout Ops panel pings the creator once; Review roster opens private controls to Shuffle, edit across games, and Publish. Published rosters provide Swap and Replace player controls in the results channel.',
       },
       {
         usage: '/scout cancel',
-        description: 'Authorized staff or that division\'s captains cancel an open or roster-ready setup after confirmation. Published rosters use their Replace player control instead.',
+        description: 'From scout-ops, authorized staff choose a division and cancel one of its open or roster-ready setups after confirmation. Published rosters use their Swap or Replace player controls instead.',
       },
     ],
   },
@@ -61,8 +61,8 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
           'Creates the channels for a new season and makes it active. It stops safely if another season is already active.',
       },
       {
-        usage: '/scout config [timezone:<IANA zone>] [bind_emoji:true]',
-        description: 'Sets all-division scout staff, the game-time timezone, five required role emojis, and optional Fill.',
+        usage: '/scout config [operations_channel:<#scout-ops>] [timezone:<IANA zone>] [bind_emoji:true]',
+        description: 'Binds the Scout Ops control channel and sets additional all-division scout staff, the game-time timezone, five required role emojis, and optional Fill.',
       },
       {
         usage: '/server bootstrap plan',

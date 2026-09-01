@@ -6,6 +6,11 @@ import { closeDatabase, openDatabase } from './db/index.js';
 import { syncCaptainAccess } from './services/divisions.js';
 import { tryHandleScoutEmojiBinding } from './services/scoutEmojiBinding.js';
 import { handleScoutSignupReactionAdd, handleScoutSignupReactionRemove } from './services/scoutSignups.js';
+import { reconcileActiveScoutSignups } from './services/scoutSignups.js';
+import { reconcileScoutControlPanels } from './services/scoutControlPanel.js';
+import { reconcileCancelledScoutSignupPosts } from './services/scoutCancel.js';
+import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
+import { reconcilePendingScoutPublishes } from './services/scoutPublish.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -59,6 +64,16 @@ client.once('clientReady', async () => {
   console.log(`Ratatoskr online as ${client.user?.tag ?? 'unknown user'}`);
   await registerGuildCommands(client, env.DISCORD_GUILD_ID);
   console.log('Guild slash commands registered.');
+  await reconcilePostingScoutSetups(client, db);
+  console.log('Pending scout signup posts reconciled.');
+  await reconcilePendingScoutPublishes(client, db);
+  console.log('Pending scout publishes reconciled.');
+  await reconcileActiveScoutSignups(client, db);
+  console.log('Active scout signups reconciled.');
+  await reconcileCancelledScoutSignupPosts(client, db);
+  console.log('Cancelled scout signup posts reconciled.');
+  await reconcileScoutControlPanels(client, db);
+  console.log('Scout control panels reconciled.');
 });
 
 client.on('interactionCreate', async (interaction) => {

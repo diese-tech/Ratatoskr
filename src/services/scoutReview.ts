@@ -33,7 +33,7 @@ import {
   SCOUT_ROLE_LABELS,
   SCOUT_TEAMS,
 } from '../domain/index.js';
-import { hasScoutManagementAccess } from './scoutAuthorization.js';
+import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
 import { eligibleScoutSignups, isScoutUserEligible } from './scoutEligibility.js';
 import { scoutCancelButton } from './scoutCancel.js';
 
@@ -128,17 +128,13 @@ async function reviewViewWithExpansion(
 async function authorized(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || setup.status !== 'roster_ready' || !interaction.guild) return undefined;
+  if (!isScoutOperationsChannel(setup, interaction.channelId)) return undefined;
   const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
   if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const config = getScoutConfig(db, setup.guildId);
   const { hasAccess } = await import('./authorization.js');
-  const allowed = hasScoutManagementAccess({
-    isAdmin: hasAccess(member, 'ADMIN'),
-    memberRoleIds: new Set(member.roles.cache.keys()),
-    additionalAuthorizedRoleIds: config?.authorizedRoleIds ?? [],
-    divisionCaptainAccessRoleId: division.captainAccessRoleId,
-  });
+  const allowed = hasScoutDivisionManagementAccess(member, config, division, hasAccess(member, 'ADMIN'));
   return allowed ? setup : undefined;
 }
 

@@ -129,6 +129,18 @@ export function markManagedResourceObsolete(db: Database.Database, id: number): 
   );
 }
 
+export function setManagedResourceParent(
+  db: Database.Database,
+  id: number,
+  parentResourceId: string | null,
+): void {
+  db.prepare(
+    `UPDATE managed_resources
+     SET parent_resource_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ? AND status = 'active'`,
+  ).run(parentResourceId, id);
+}
+
 // Flips a managed resource to purged after its underlying Discord resource
 // has actually been destroyed (#31 Decision 1) -- the row itself is kept as
 // a tombstone, never hard-deleted. Distinct from markManagedResourceObsolete,

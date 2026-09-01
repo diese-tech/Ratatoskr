@@ -14,21 +14,146 @@ import type { ManagedResourceType } from '../db/types.js';
 import {
   getActiveManagedResourceByLogicalKey,
   getDivisionByKey,
+  getScoutConfig,
   insertManagedResource,
   markManagedResourceObsolete,
+  setManagedResourceParent,
   setDivisionStatus,
   upsertDivision,
 } from '../db/index.js';
 import {
-  divisionCaptainAccessRoleLogicalKey,
+  divisionCaptainRoleLogicalKey,
   divisionCategoryLogicalKey,
   divisionChannelLogicalKey,
+  divisionManagerRoleLogicalKey,
   divisionRoleLogicalKey,
   assertNoDuplicateKeys,
 } from './divisionScaffold.js';
 import { classifyMatch, type CandidateResource } from './serverBootstrap.js';
 
 export const STAFF_ROLES = ['Valkyries', 'Aesir', 'Allfather'] as const;
+export const DIVISION_ADMIN_ROLES = ['Aesir', 'Allfather'] as const;
+export const FRANCHISE_REPRESENTATIVE_ROLE = 'Franchise Representative';
+
+export type DivisionPermissionProfile =
+  | 'category'
+  | 'captain_only'
+  | 'announcements'
+  | 'captain_work'
+  | 'scout_signups'
+  | 'scout_results';
+
+export type DivisionPermissionRoleIds = {
+  everyone: string;
+  division: string;
+  manager: string;
+  captain: string;
+  franchiseRepresentative: string;
+  admins: readonly string[];
+};
+
+export type DivisionPermissionOverwrite = {
+  id: string;
+  allow: bigint[];
+  deny: bigint[];
+};
+
+const DIVISION_POST_PERMISSIONS = [
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.CreatePublicThreads,
+  PermissionFlagsBits.CreatePrivateThreads,
+  PermissionFlagsBits.SendMessagesInThreads,
+  PermissionFlagsBits.SendVoiceMessages,
+  PermissionFlagsBits.SendPolls,
+];
+
+export function resolveDivisionPermissionOverwrites(
+  roleIds: DivisionPermissionRoleIds,
+  profile: DivisionPermissionProfile,
+): DivisionPermissionOverwrite[] {
+  if (profile === 'category') {
+    return [
+      { id: roleIds.everyone, allow: [], deny: [PermissionFlagsBits.ViewChannel] },
+      ...[
+        roleIds.division,
+        roleIds.manager,
+        roleIds.captain,
+        roleIds.franchiseRepresentative,
+        ...roleIds.admins,
+      ].map((id) => ({ id, allow: [PermissionFlagsBits.ViewChannel], deny: [] })),
+    ];
+  }
+
+  if (profile === 'captain_only') {
+    return [
+      { id: roleIds.everyone, allow: [], deny: [PermissionFlagsBits.ViewChannel] },
+      ...[roleIds.manager, roleIds.captain, ...roleIds.admins].map((id) => ({
+        id,
+        allow: [PermissionFlagsBits.ViewChannel],
+        deny: [],
+      })),
+    ];
+  }
+
+  if (profile === 'announcements') {
+    return [
+      { id: roleIds.everyone, allow: [], deny: [PermissionFlagsBits.ViewChannel, ...DIVISION_POST_PERMISSIONS] },
+      ...[roleIds.manager, ...roleIds.admins].map((id) => ({
+        id,
+        allow: [PermissionFlagsBits.ViewChannel, ...DIVISION_POST_PERMISSIONS],
+        deny: [],
+      })),
+      ...[roleIds.division, roleIds.captain, roleIds.franchiseRepresentative].map((id) => ({
+        id,
+        allow: [PermissionFlagsBits.ViewChannel],
+        deny: [],
+      })),
+    ];
+  }
+
+  if (profile === 'captain_work') {
+    return [
+      { id: roleIds.everyone, allow: [], deny: [PermissionFlagsBits.ViewChannel, ...DIVISION_POST_PERMISSIONS] },
+      ...[roleIds.manager, roleIds.captain, ...roleIds.admins].map((id) => ({
+        id,
+        allow: [PermissionFlagsBits.ViewChannel, ...DIVISION_POST_PERMISSIONS],
+        deny: [],
+      })),
+      ...[roleIds.division, roleIds.franchiseRepresentative].map((id) => ({
+        id,
+        allow: [PermissionFlagsBits.ViewChannel],
+        deny: [],
+      })),
+    ];
+  }
+
+  if (profile === 'scout_signups') {
+    return [
+      { id: roleIds.everyone, allow: [], deny: [PermissionFlagsBits.ViewChannel, ...DIVISION_POST_PERMISSIONS] },
+      ...[roleIds.manager, roleIds.captain, roleIds.franchiseRepresentative, ...roleIds.admins].map((id) => ({
+        id,
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.AddReactions, ...DIVISION_POST_PERMISSIONS],
+        deny: [],
+      })),
+      { id: roleIds.division, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.AddReactions], deny: [] },
+    ];
+  }
+
+  if (profile === 'scout_results') {
+    const restricted = [PermissionFlagsBits.ViewChannel, ...DIVISION_POST_PERMISSIONS, PermissionFlagsBits.AddReactions];
+    return [
+      { id: roleIds.everyone, allow: [], deny: restricted },
+      ...[roleIds.manager, roleIds.captain, roleIds.franchiseRepresentative, ...roleIds.admins].map((id) => ({
+        id,
+        allow: [...restricted],
+        deny: [],
+      })),
+      { id: roleIds.division, allow: [PermissionFlagsBits.ViewChannel], deny: [] },
+    ];
+  }
+
+  return [];
+}
 
 export type DivisionProvisionResult = {
   division: string;
@@ -64,7 +189,7 @@ export type DivisionChannelTemplateSpec = {
   // channels become `${division.name} ${suffix}` (Discord's usual Title Case
   // for voice channel names) -- see channelName() below.
   suffix: string;
-  captainOnly?: boolean;
+  permissionProfile?: Exclude<DivisionPermissionProfile, 'category'>;
   // Existing YSL divisions predate the division-prefix convention for text
   // channels. This is an adoption-only alias: new channels use the
   // configured prefixed name, while exactly one matching legacy channel in
@@ -76,14 +201,14 @@ export type DivisionChannelTemplateSpec = {
 // actually use it: captain coordination first, then the information
 // channels, then voice last.
 export const DIVISION_CHANNEL_TEMPLATE: readonly DivisionChannelTemplateSpec[] = [
-  { key: 'captain_chat', type: 'text', suffix: 'captain-chat', legacyName: 'captain-chat', captainOnly: true },
-  { key: 'announcements', type: 'text', suffix: 'announcements', legacyName: 'announcements' },
+  { key: 'captain_chat', type: 'text', suffix: 'captain-chat', legacyName: 'captain-chat', permissionProfile: 'captain_only' },
+  { key: 'announcements', type: 'text', suffix: 'announcements', legacyName: 'announcements', permissionProfile: 'announcements' },
   { key: 'general', type: 'text', suffix: 'general', legacyName: 'general' },
   { key: 'tier_list', type: 'text', suffix: 'tier-list', legacyName: 'tier-list' },
-  { key: 'scheduling', type: 'text', suffix: 'scheduling', legacyName: 'scheduling' },
-  { key: 'match_reports', type: 'text', suffix: 'match-reports', legacyName: 'match-reports' },
-  { key: 'scout_signups', type: 'text', suffix: 'scout-signups', legacyName: 'scout-signups' },
-  { key: 'scout_results', type: 'text', suffix: 'scout-results', legacyName: 'scout-results' },
+  { key: 'scheduling', type: 'text', suffix: 'scheduling', legacyName: 'scheduling', permissionProfile: 'captain_work' },
+  { key: 'match_reports', type: 'text', suffix: 'match-reports', legacyName: 'match-reports', permissionProfile: 'captain_work' },
+  { key: 'scout_signups', type: 'text', suffix: 'scout-signups', legacyName: 'scout-signups', permissionProfile: 'scout_signups' },
+  { key: 'scout_results', type: 'text', suffix: 'scout-results', legacyName: 'scout-results', permissionProfile: 'scout_results' },
   { key: 'lobby', type: 'voice', suffix: 'Lobby' },
 ];
 
@@ -105,13 +230,15 @@ function channelName(division: DivisionSpec, template: DivisionChannelTemplateSp
 export function getDivisionTemplate(division: DivisionSpec) {
   return {
     divisionRoleName: division.name,
-    captainAccessRoleName: `${division.name} Captain Access`,
+    managerRoleName: `${division.name} Manager`,
+    captainRoleName: `${division.name} Captain`,
     categoryName: division.name,
     channels: DIVISION_CHANNEL_TEMPLATE.map((template) => ({
       key: template.key,
       name: channelName(division, template),
       type: template.type,
-      captainOnly: template.captainOnly ?? false,
+      permissionProfile: template.permissionProfile,
+      captainOnly: template.permissionProfile === 'captain_only',
       legacyName: template.legacyName,
     })),
   };
@@ -165,22 +292,20 @@ function roleByName(guild: Guild, name: string) {
   return guild.roles.cache.find((role) => role.name === name);
 }
 
-function categoryOverwrites(guild: Guild, divisionRole: Role) {
-  const staff = STAFF_ROLES.map((name) => roleByName(guild, name)).filter((role): role is Role => Boolean(role));
-  return [
-    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    { id: divisionRole.id, allow: [PermissionFlagsBits.ViewChannel] },
-    ...staff.map((role) => ({ id: role.id, allow: [PermissionFlagsBits.ViewChannel] })),
-  ];
-}
-
-function captainOverwrites(guild: Guild, captainAccessRole: Role) {
-  const staff = STAFF_ROLES.map((name) => roleByName(guild, name)).filter((role): role is Role => Boolean(role));
-  return [
-    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    { id: captainAccessRole.id, allow: [PermissionFlagsBits.ViewChannel] },
-    ...staff.map((role) => ({ id: role.id, allow: [PermissionFlagsBits.ViewChannel] })),
-  ];
+function permissionRoleIds(guild: Guild, divisionRole: Role, managerRole: Role, captainRole: Role): DivisionPermissionRoleIds {
+  const required = (name: string): Role => {
+    const role = roleByName(guild, name);
+    if (!role) throw new Error(`Required role "${name}" is missing. Create it before provisioning divisions.`);
+    return role;
+  };
+  return {
+    everyone: guild.roles.everyone.id,
+    division: divisionRole.id,
+    manager: managerRole.id,
+    captain: captainRole.id,
+    franchiseRepresentative: required(FRANCHISE_REPRESENTATIVE_ROLE).id,
+    admins: DIVISION_ADMIN_ROLES.map((name) => required(name).id),
+  };
 }
 
 // --- ID-first resolution, mirroring runServerBootstrap in
@@ -210,6 +335,9 @@ async function ensureRole(
 ): Promise<Role> {
   const managedRole = await resolveManagedRole(db, guild, logicalKey);
   if (managedRole) {
+    if (managedRole.name !== name) {
+      await managedRole.setName(name, 'Ratatoskr reconcile division role name');
+    }
     result.reused.push(`role:${name}`);
     return managedRole;
   }
@@ -265,11 +393,9 @@ async function ensureCategory(
   guild: Guild,
   logicalKey: string,
   name: string,
-  divisionRole: Role,
+  overwrites: DivisionPermissionOverwrite[],
   result: DivisionProvisionResult,
 ): Promise<CategoryChannel> {
-  const overwrites = categoryOverwrites(guild, divisionRole);
-
   const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
   if (managed) {
     const resolved = guild.channels.cache.get(managed.discordResourceId);
@@ -332,7 +458,8 @@ async function ensureChannel(
   name: string,
   type: 'text' | 'voice',
   legacyName: string | undefined,
-  permissionOverwrites: ReturnType<typeof captainOverwrites> | undefined,
+  adoptionParentId: string | undefined,
+  permissionOverwrites: DivisionPermissionOverwrite[] | undefined,
   result: DivisionProvisionResult,
 ): Promise<void> {
   const expectedType = type === 'voice' ? ChannelType.GuildVoice : ChannelType.GuildText;
@@ -345,7 +472,11 @@ async function ensureChannel(
     // presentational only (#31 Defect 2) -- a config-side rename of the
     // division's display name changes the expected channel name every run,
     // and that must not make an otherwise-valid managed channel look stale.
-    if (resolved && resolved.type === expectedType && resolved.parentId === category.id) {
+    if (resolved && resolved.type === expectedType) {
+      if (resolved.parentId !== category.id) {
+        await resolved.setParent(category.id, { reason: 'Ratatoskr move division channel to its configured category' });
+        setManagedResourceParent(db, managed.id, category.id);
+      }
       if (!resolved.isThread()) {
         if (permissionOverwrites) {
           await resolved.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile division channel permissions');
@@ -367,12 +498,20 @@ async function ensureChannel(
       kind: channel.type === ChannelType.GuildVoice ? 'voice_channel' : 'text_channel',
       parentId: channel.parentId,
     }));
-  const match = classifyDivisionChannelMatch(candidates, {
+  let match = classifyDivisionChannelMatch(candidates, {
     name,
     kind: resourceType,
     parentId: category.id,
     legacyName,
   });
+  if (match.outcome === 'none' && adoptionParentId && adoptionParentId !== category.id) {
+    match = classifyDivisionChannelMatch(candidates, {
+      name,
+      kind: resourceType,
+      parentId: adoptionParentId,
+      legacyName,
+    });
+  }
 
   if (match.outcome === 'ambiguous') {
     throw new Error(
@@ -383,6 +522,9 @@ async function ensureChannel(
 
   if (match.outcome === 'exact') {
     const channel = guild.channels.cache.get(match.candidate.discordId) as TextChannel | VoiceChannel;
+    if (channel.parentId !== category.id) {
+      await channel.setParent(category.id, { reason: 'Ratatoskr adopt and move division channel' });
+    }
     if (match.source === 'legacy') {
       await channel.setName(name, 'Ratatoskr adopt legacy division channel');
     }
@@ -469,28 +611,71 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
     { color: DIVISION_ROLE_COLORS[division.key] },
     result,
   );
-  const captainAccessRole = await ensureRole(
+  const managerRole = await ensureRole(
     db,
     guild,
-    divisionCaptainAccessRoleLogicalKey(division.key),
-    template.captainAccessRoleName,
+    divisionManagerRoleLogicalKey(division.key),
+    template.managerRoleName,
     { utility: true },
     result,
   );
-  const category = await ensureCategory(db, guild, divisionCategoryLogicalKey(division.key), template.categoryName, divisionRole, result);
+  const captainRole = await ensureRole(
+    db,
+    guild,
+    divisionCaptainRoleLogicalKey(division.key),
+    template.captainRoleName,
+    { utility: true },
+    result,
+  );
+  const roleIds = permissionRoleIds(guild, divisionRole, managerRole, captainRole);
+  const category = await ensureCategory(
+    db,
+    guild,
+    divisionCategoryLogicalKey(division.key),
+    template.categoryName,
+    resolveDivisionPermissionOverwrites(roleIds, 'category'),
+    result,
+  );
+  const scoutConfig = getScoutConfig(db, guild.id);
+  let scoutOperationsCategory: CategoryChannel | undefined;
+  if (scoutConfig?.operationsCategoryId || scoutConfig?.operationsChannelId) {
+    const configuredCategory = scoutConfig.operationsCategoryId
+      ? guild.channels.cache.get(scoutConfig.operationsCategoryId)
+      : undefined;
+    const configuredChannel = scoutConfig.operationsChannelId
+      ? guild.channels.cache.get(scoutConfig.operationsChannelId)
+      : undefined;
+    if (
+      !configuredCategory ||
+      configuredCategory.type !== ChannelType.GuildCategory ||
+      !configuredChannel ||
+      configuredChannel.type !== ChannelType.GuildText ||
+      configuredChannel.parentId !== configuredCategory.id
+    ) {
+      throw new Error('The configured Scout Operations channel or category is missing or no longer linked. Rebind it with `/scout config`.');
+    }
+    scoutOperationsCategory = configuredCategory;
+  }
 
   for (const channelSpec of template.channels) {
     const kind = channelSpec.type === 'voice' ? ('voice_channel' as const) : ('text_channel' as const);
     const logicalKey = divisionChannelLogicalKey(division.key, channelSpec.key, kind);
-    const permissionOverwrites = channelSpec.captainOnly ? captainOverwrites(guild, captainAccessRole) : undefined;
+    const permissionOverwrites = channelSpec.permissionProfile
+      ? resolveDivisionPermissionOverwrites(roleIds, channelSpec.permissionProfile)
+      : undefined;
+    const targetCategory =
+      scoutOperationsCategory && (channelSpec.key === 'scout_signups' || channelSpec.key === 'scout_results')
+        ? scoutOperationsCategory
+        : category;
     await ensureChannel(
       db,
       guild,
-      category,
+      targetCategory,
       logicalKey,
       channelSpec.name,
       channelSpec.type,
       channelSpec.legacyName,
+      scoutOperationsCategory && targetCategory.id === scoutOperationsCategory.id ? category.id : undefined,
       permissionOverwrites,
       result,
     );
@@ -501,9 +686,12 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
     divisionKey: division.key,
     displayName: division.name,
     roleId: divisionRole.id,
-    captainAccessRoleId: captainAccessRole.id,
+    managerRoleId: managerRole.id,
+    captainRoleId: captainRole.id,
     categoryId: category.id,
   });
+
+  await syncExistingDivisionCaptains(guild, divisionRole, captainRole);
 
   return result;
 }
@@ -516,16 +704,35 @@ export async function syncCaptainAccess(member: GuildMember) {
 
   for (const division of divisions) {
     const divisionRole = roleByName(member.guild, division.name);
-    const accessRole = roleByName(member.guild, `${division.name} Captain Access`);
-    if (!divisionRole || !accessRole) continue;
+    const captainDivisionRole = roleByName(member.guild, `${division.name} Captain`);
+    if (!divisionRole || !captainDivisionRole) continue;
 
     const shouldHaveAccess = isCaptain && member.roles.cache.has(divisionRole.id);
-    const hasAccess = member.roles.cache.has(accessRole.id);
+    const hasAccess = member.roles.cache.has(captainDivisionRole.id);
 
     if (shouldHaveAccess && !hasAccess) {
-      await member.roles.add(accessRole, 'Ratatoskr captain access reconciliation');
+      await member.roles.add(captainDivisionRole, 'Ratatoskr division captain reconciliation');
     } else if (!shouldHaveAccess && hasAccess) {
-      await member.roles.remove(accessRole, 'Ratatoskr captain access reconciliation');
+      await member.roles.remove(captainDivisionRole, 'Ratatoskr division captain reconciliation');
+    }
+  }
+}
+
+async function syncExistingDivisionCaptains(
+  guild: Guild,
+  divisionRole: Role,
+  captainDivisionRole: Role,
+): Promise<void> {
+  const captainRole = roleByName(guild, 'Captain');
+  if (!captainRole) return;
+  const members = await guild.members.fetch();
+  for (const member of members.values()) {
+    const shouldHaveAccess = member.roles.cache.has(captainRole.id) && member.roles.cache.has(divisionRole.id);
+    const hasAccess = member.roles.cache.has(captainDivisionRole.id);
+    if (shouldHaveAccess && !hasAccess) {
+      await member.roles.add(captainDivisionRole, 'Ratatoskr initial division captain reconciliation');
+    } else if (!shouldHaveAccess && hasAccess) {
+      await member.roles.remove(captainDivisionRole, 'Ratatoskr initial division captain reconciliation');
     }
   }
 }

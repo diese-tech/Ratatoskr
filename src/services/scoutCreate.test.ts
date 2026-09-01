@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { scoutSignupEmojiIds } from './scoutCreate.js';
+import { scoutSignupEmojiIds, scoutSignupMarker } from './scoutCreate.js';
 
 const required = {
   solo: 'solo',
@@ -26,4 +26,8 @@ test('new signup posts seed optional Fill last and omit it when skipped', () => 
     'support',
     'carry',
   ]);
+});
+
+test('signup posts have a setup-specific restart recovery marker', () => {
+  assert.equal(scoutSignupMarker(42), 'SCOUT-SIGNUP-42');
 });

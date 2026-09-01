@@ -6,10 +6,10 @@ Run `/help` in Discord for a private, plain-English quickstart covering every sh
 
 ## Scout games
 
-- `/scout config` — admins configure additional scout staff roles, timezone, five required role emoji, and optional Fill.
-- `/scout create` — authorized staff or the current division's captains create a setup from that division's managed scout-signups channel.
-- `/scout cancel` — the same managers select and confirm cancellation for only that channel's division.
-- Public signup, review, publish, replacement, and cancellation controls are tied to one persisted setup and recheck authorization when clicked.
+- `/scout config` — admins bind `#scout-ops` and configure additional scout staff roles, timezone, five required role emoji, and optional Fill.
+- `/scout create division:<division>` — authorized staff or that division's managers/captains create a setup from `#scout-ops`; Ratatoskr posts it to the selected division's managed signup channel.
+- `/scout cancel division:<division>` — the same managers select and confirm cancellation from `#scout-ops`.
+- Public signup posts contain information and reactions only. Durable review/cancel controls live in `#scout-ops`; published replacement and swap controls live in the division results channel. Every handler rechecks division authorization and channel scope.
 
 See [`scout-workflow.md`](scout-workflow.md) for the complete flow.
 

@@ -60,7 +60,8 @@ export type DivisionRecord = {
   displayName: string;
   seasonId: number | null;
   roleId: string | null;
-  captainAccessRoleId: string | null;
+  managerRoleId: string | null;
+  captainRoleId: string | null;
   categoryId: string | null;
   status: DivisionStatus;
   createdAt: string;
@@ -70,6 +71,8 @@ export type DivisionRecord = {
 export type ScoutConfig = {
   guildId: string;
   authorizedRoleIds: string[];
+  operationsCategoryId: string | null;
+  operationsChannelId: string | null;
   emojiByRole: Record<ScoutSignupRole, string | null>;
   timezone: string;
   createdAt: string;
@@ -87,12 +90,15 @@ export type ScoutSetup = {
   createdBy: string;
   signupChannelId: string;
   resultsChannelId: string;
+  operationsChannelId: string | null;
   divisionRoleId: string;
   eligibilityRoleId: string | null;
   gameCount: 1 | 2;
   emojiByRole: Record<ScoutRole, string> & { fill: string | null };
   signupMessageId: string | null;
   resultMessageId: string | null;
+  controlMessageId: string | null;
+  signupPostReconciled: boolean;
   startAt: number;
   roleLimit: number;
   note: string | null;

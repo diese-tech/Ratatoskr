@@ -5,6 +5,8 @@ import type { ScoutConfig } from '../types.js';
 type ScoutConfigRow = {
   guild_id: string;
   authorized_role_ids: string;
+  operations_category_id: string | null;
+  operations_channel_id: string | null;
   solo_emoji_id: string | null;
   jungle_emoji_id: string | null;
   mid_emoji_id: string | null;
@@ -29,6 +31,8 @@ function toScoutConfig(row: ScoutConfigRow): ScoutConfig {
   return {
     guildId: row.guild_id,
     authorizedRoleIds: parseAuthorizedRoleIds(row.authorized_role_ids),
+    operationsCategoryId: row.operations_category_id,
+    operationsChannelId: row.operations_channel_id,
     emojiByRole: {
       solo: row.solo_emoji_id,
       jungle: row.jungle_emoji_id,
@@ -97,6 +101,29 @@ export function setScoutTimezone(db: Database.Database, guildId: string, timezon
      SET timezone = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
      WHERE guild_id = ?`,
   ).run(timezone, guildId);
+  return getScoutConfig(db, guildId)!;
+}
+
+export function setScoutOperationsChannel(
+  db: Database.Database,
+  guildId: string,
+  operationsCategoryId: string,
+  operationsChannelId: string,
+): ScoutConfig {
+  db.transaction(() => {
+    ensureScoutConfig(db, guildId);
+    db.prepare(
+      `UPDATE scout_config
+       SET operations_category_id = ?, operations_channel_id = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE guild_id = ?`,
+    ).run(operationsCategoryId, operationsChannelId, guildId);
+    db.prepare(
+      `UPDATE scout_setups
+       SET operations_channel_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE guild_id = ? AND status IN ('posting', 'open', 'roster_ready')`,
+    ).run(operationsChannelId, guildId);
+  })();
   return getScoutConfig(db, guildId)!;
 }
 
