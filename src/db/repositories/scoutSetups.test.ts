@@ -45,6 +45,7 @@ const emojiByRole = {
   mid: 'emoji-mid',
   support: 'emoji-support',
   carry: 'emoji-carry',
+  fill: 'emoji-fill',
 } as const;
 
 test('scout setup snapshots division routing and resolves durably by signup message ID', () => {
@@ -125,12 +126,13 @@ test('scout signup limits and withdrawals are isolated per setup', () => {
       limit: 1,
     });
     assert.deepEqual(addScoutSignup(db, second.id, 'player-1', 'jungle'), { status: 'added' });
+    assert.deepEqual(addScoutSignup(db, second.id, 'player-1', 'fill'), { status: 'added' });
     assert.equal(listScoutSignups(db, first.id).length, 1);
-    assert.equal(listScoutSignups(db, second.id).length, 1);
+    assert.deepEqual(listScoutSignups(db, second.id).map((signup) => signup.role), ['jungle', 'fill']);
 
     removeScoutSignup(db, first.id, 'player-1', 'solo');
     assert.equal(listScoutSignups(db, first.id).length, 0);
-    assert.equal(listScoutSignups(db, second.id).length, 1);
+    assert.equal(listScoutSignups(db, second.id).length, 2);
   } finally {
     closeDatabase(db);
   }
@@ -220,7 +222,12 @@ test('publishing is an exclusive retryable claim and published replacement is ve
       SCOUT_TEAMS.map((team, index) => ({ team, role, userId: `${role}-${index}` })),
     );
     for (const slot of slots) addScoutSignup(db, setup.id, slot.userId, slot.role);
+    const fillAssigned = slots.find((slot) => slot.team === 'team_two' && slot.role === 'support')!;
+    removeScoutSignup(db, setup.id, fillAssigned.userId, fillAssigned.role);
+    addScoutSignup(db, setup.id, fillAssigned.userId, 'fill');
     tryCreateInitialScoutRoster(db, setup.id, slots);
+
+    assert.deepEqual(withdrawnScoutRosterUserIds(db, setup.id), []);
 
     const firstSlot = listScoutRosterSlots(db, setup.id)[0]!;
     removeScoutSignup(db, setup.id, firstSlot.userId, firstSlot.role);

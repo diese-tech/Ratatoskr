@@ -7,7 +7,7 @@ Scout games let preseason players show captains what they can play before a draf
 1. Provision each active division with `/division add`.
 2. An admin runs `/scout config timezone:<IANA zone>`.
 3. The admin selects any additional staff roles in the private config response.
-4. The admin runs `/scout config bind_emoji:true` and reacts with five distinct custom guild emoji in Solo, Jungle, Mid, Support, Carry order.
+4. The admin runs `/scout config bind_emoji:true` and reacts with five distinct custom guild emoji in Solo, Jungle, Mid, Support, Carry order. The admin may then bind a sixth **Fill** emoji or press **Skip Fill**.
 
 Admins and configured additional staff may manage every division. Captains may manage only the division whose Captain Access role they hold.
 
@@ -19,7 +19,7 @@ The bot needs View Channel, Send Messages, Read Message History, Add Reactions, 
 2. Enter the start time, number of roles each player may select, and an optional note.
 3. Review the private preview and post it. The division role is pinged only when the public post is created.
 4. Players react for roles. Ratatoskr enforces the per-player limit separately for each setup.
-5. When ten compatible players can fill Solo, Jungle, Mid, Support, and Carry on both teams, the original post gains Review roster and Cancel setup controls.
+5. When ten compatible players can fill Solo, Jungle, Mid, Support, and Carry on both teams, the original post gains Review roster and Cancel setup controls. A Fill signup counts against the player's selection limit and may satisfy any missing standard role; explicit role selections are preferred.
 6. An authorized manager reviews privately, shuffles, swaps same-role players between teams, exchanges occupied role assignments, or seats a replacement. A withdrawn signup blocks publication until resolved.
 7. Publish only after the confirmation names the correct division results channel. Ratatoskr posts Order and Chaos to the setup's snapshotted `<division>-scout-results` channel and links that result from the signup post.
 

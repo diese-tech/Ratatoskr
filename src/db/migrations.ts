@@ -315,4 +315,27 @@ export const migrations: Migration[] = [
       CREATE UNIQUE INDEX idx_scout_setups_result_message ON scout_setups(result_message_id);
     `,
   },
+  {
+    id: 9,
+    name: 'optional_scout_fill_signup',
+    sql: `
+      ALTER TABLE scout_config ADD COLUMN fill_emoji_id TEXT;
+      ALTER TABLE scout_setups ADD COLUMN fill_emoji_id TEXT;
+
+      CREATE TABLE scout_signups_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id INTEGER NOT NULL REFERENCES scout_setups(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('solo', 'jungle', 'mid', 'support', 'carry', 'fill')),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        UNIQUE (setup_id, user_id, role)
+      );
+
+      INSERT INTO scout_signups_new (id, setup_id, user_id, role, created_at)
+        SELECT id, setup_id, user_id, role, created_at FROM scout_signups;
+      DROP TABLE scout_signups;
+      ALTER TABLE scout_signups_new RENAME TO scout_signups;
+      CREATE INDEX idx_scout_signups_setup ON scout_signups(setup_id);
+    `,
+  },
 ];

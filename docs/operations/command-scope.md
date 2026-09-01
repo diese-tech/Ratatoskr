@@ -4,7 +4,7 @@ This document summarizes Ratatoskr's operational surface. The runtime command re
 
 ## Scout games
 
-- `/scout config` — admins configure additional scout staff roles, timezone, and five role emoji.
+- `/scout config` — admins configure additional scout staff roles, timezone, five required role emoji, and optional Fill.
 - `/scout create` — authorized staff or the current division's captains create a setup from that division's managed scout-signups channel.
 - `/scout cancel` — the same managers select and confirm cancellation for only that channel's division.
 - Public signup, review, publish, replacement, and cancellation controls are tied to one persisted setup and recheck authorization when clicked.

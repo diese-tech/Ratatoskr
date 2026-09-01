@@ -25,6 +25,7 @@ test('ensureScoutConfig creates one guild config with safe defaults and returns 
       mid: null,
       support: null,
       carry: null,
+      fill: null,
     });
 
     assert.deepEqual(getScoutConfig(db, 'guild-1'), created);
@@ -78,6 +79,24 @@ test('setScoutTimezone persists the guild timezone independently of other config
     const updated = setScoutTimezone(db, 'guild-1', 'America/Chicago');
     assert.equal(updated.timezone, 'America/Chicago');
     assert.deepEqual(updated.authorizedRoleIds, ['role-a']);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('Fill emoji is optional and can be configured or cleared independently', () => {
+  const db = openDatabase(':memory:');
+  try {
+    const standard = {
+      solo: 'emoji-solo',
+      jungle: 'emoji-jungle',
+      mid: 'emoji-mid',
+      support: 'emoji-support',
+      carry: 'emoji-carry',
+    };
+    assert.equal(setScoutEmojiByRole(db, 'guild-1', standard).emojiByRole.fill, null);
+    assert.equal(setScoutEmojiByRole(db, 'guild-1', { ...standard, fill: 'emoji-fill' }).emojiByRole.fill, 'emoji-fill');
+    assert.equal(setScoutEmojiByRole(db, 'guild-1', { ...standard, fill: null }).emojiByRole.fill, null);
   } finally {
     closeDatabase(db);
   }

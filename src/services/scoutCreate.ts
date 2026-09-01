@@ -27,7 +27,7 @@ import {
   type DivisionRecord,
 } from '../db/index.js';
 import { parseScoutStartTime } from '../domain/scoutTime.js';
-import { SCOUT_ROLES, type ScoutRole } from '../domain/index.js';
+import { SCOUT_ROLES, SCOUT_SIGNUP_ROLES, type ScoutRole } from '../domain/index.js';
 import { hasScoutManagementAccess } from './scoutAuthorization.js';
 import { resolveScoutChannelGroup, type ScoutChannelGroup } from './scoutChannels.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
@@ -46,7 +46,7 @@ type ScoutCreateDraft = {
   signupChannelId: string;
   resultsChannelId: string;
   divisionRoleId: string;
-  emojiByRole: Record<ScoutRole, string>;
+  emojiByRole: Record<ScoutRole, string> & { fill: string | null };
   timezone: string;
   startInput: string;
   startAt: number | null;
@@ -112,9 +112,23 @@ async function canManageScope(scope: ResolvedScope, guildId: string, db: Databas
   });
 }
 
-function completeEmojiMap(config: NonNullable<ReturnType<typeof getScoutConfig>>): Record<ScoutRole, string> | undefined {
+function completeEmojiMap(
+  config: NonNullable<ReturnType<typeof getScoutConfig>>,
+): (Record<ScoutRole, string> & { fill: string | null }) | undefined {
   if (SCOUT_ROLES.some((role) => !config.emojiByRole[role])) return undefined;
-  return Object.fromEntries(SCOUT_ROLES.map((role) => [role, config.emojiByRole[role]!])) as Record<ScoutRole, string>;
+  return {
+    ...(Object.fromEntries(SCOUT_ROLES.map((role) => [role, config.emojiByRole[role]!])) as Record<ScoutRole, string>),
+    fill: config.emojiByRole.fill,
+  };
+}
+
+export function scoutSignupEmojiIds(
+  emojiByRole: Readonly<Record<ScoutRole, string> & { fill: string | null }>,
+): string[] {
+  return SCOUT_SIGNUP_ROLES.flatMap((role) => {
+    const emojiId = emojiByRole[role];
+    return emojiId ? [emojiId] : [];
+  });
 }
 
 function detailsModal(draft: ScoutCreateDraft): ModalBuilder {
@@ -399,7 +413,7 @@ export async function handleScoutCreateButton(
     if (!setScoutSetupSignupMessage(db, setup.id, signupMessage.id)) {
       throw new Error('Scout setup could not be activated after posting.');
     }
-    for (const role of SCOUT_ROLES) await signupMessage.react(draft.emojiByRole[role]);
+    for (const emojiId of scoutSignupEmojiIds(draft.emojiByRole)) await signupMessage.react(emojiId);
   } catch (error) {
     if (signupMessage) await signupMessage.delete().catch(() => undefined);
     markScoutSetupPostingFailed(db, setup.id);

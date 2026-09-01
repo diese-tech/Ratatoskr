@@ -1,20 +1,26 @@
-import { SCOUT_ROLES, type ScoutRole } from './scoutRoles.js';
+import { SCOUT_ROLES, type ScoutRole, type ScoutSignupRole } from './scoutRoles.js';
 
 export const SCOUT_TEAMS = ['team_one', 'team_two'] as const;
 export type ScoutTeam = (typeof SCOUT_TEAMS)[number];
-export type ScoutSignupRecord = { userId: string; role: ScoutRole; createdAt: string };
+export type ScoutSignupRecord = { userId: string; role: ScoutSignupRole; createdAt: string };
 export type ScoutRosterSlot = { team: ScoutTeam; role: ScoutRole; userId: string };
 export type ScoutRosterResult = { feasible: boolean; slots: ScoutRosterSlot[] };
 export type ScoutRosterOptions = { mode?: 'deterministic' | 'shuffle'; random?: () => number };
 
 function eligibilityFor(signups: readonly ScoutSignupRecord[]) {
-  const rolesByUser = new Map<string, Set<ScoutRole>>();
+  const rolesByUser = new Map<string, Set<ScoutSignupRole>>();
   for (const signup of signups) {
-    const roles = rolesByUser.get(signup.userId) ?? new Set<ScoutRole>();
+    const roles = rolesByUser.get(signup.userId) ?? new Set<ScoutSignupRole>();
     roles.add(signup.role);
     rolesByUser.set(signup.userId, roles);
   }
-  return new Map([...rolesByUser].map(([userId, roles]) => [userId, SCOUT_ROLES.filter((role) => roles.has(role))]));
+  return new Map(
+    [...rolesByUser].map(([userId, roles]) => {
+      const explicit = SCOUT_ROLES.filter((role) => roles.has(role));
+      const fallback = roles.has('fill') ? SCOUT_ROLES.filter((role) => !roles.has(role)) : [];
+      return [userId, [...explicit, ...fallback]] as const;
+    }),
+  );
 }
 
 function earliestFor(signups: readonly ScoutSignupRecord[]) {
@@ -69,8 +75,22 @@ export function generateScoutRoster(
   const earliest = earliestFor(signups);
   const random = options.random ?? Math.random;
   let players = [...eligibility.keys()];
-  if (options.mode === 'shuffle') shuffle(players, random);
-  else players.sort((a, b) => (earliest.get(a) ?? '').localeCompare(earliest.get(b) ?? '') || a.localeCompare(b));
+  const hasExplicitRole = (userId: string) =>
+    signups.some((signup) => signup.userId === userId && signup.role !== 'fill');
+  if (options.mode === 'shuffle') {
+    players = [
+      ...shuffle(players.filter(hasExplicitRole), random),
+      ...shuffle(players.filter((userId) => !hasExplicitRole(userId)), random),
+    ];
+  }
+  else {
+    players.sort(
+      (a, b) =>
+        Number(hasExplicitRole(b)) - Number(hasExplicitRole(a)) ||
+        (earliest.get(a) ?? '').localeCompare(earliest.get(b) ?? '') ||
+        a.localeCompare(b),
+    );
+  }
 
   const assignment = new Map(SCOUT_ROLES.map((role) => [role, [] as string[]]));
   for (const player of players) tryAssign(player, eligibility, assignment, new Set());

@@ -13,7 +13,7 @@ import {
   setScoutTimezone,
   type ScoutConfig,
 } from '../db/index.js';
-import { SCOUT_ROLES, SCOUT_ROLE_LABELS } from '../domain/index.js';
+import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS } from '../domain/index.js';
 import { isValidScoutTimezone, listScoutTimezones } from '../services/scoutConfig.js';
 
 export const SCOUT_CONFIG_ROLES_CUSTOM_ID = 'scout:config:authorized_roles';
@@ -42,7 +42,7 @@ export const scoutCommand = new SlashCommandBuilder()
       .addBooleanOption((option) =>
         option
           .setName('bind_emoji')
-          .setDescription('Start the public five-reaction role emoji binding flow.')
+          .setDescription('Bind five required role emoji and optional Fill.')
           .setRequired(false),
       ),
   );
@@ -54,9 +54,10 @@ function renderScoutConfig(config: ScoutConfig): {
   const staffRoles = config.authorizedRoleIds.length
     ? config.authorizedRoleIds.map((roleId) => `<@&${roleId}>`).join(', ')
     : 'None (admins and each division\'s own captains still retain their built-in access)';
-  const emoji = SCOUT_ROLES.map((role) => {
+  const emoji = SCOUT_SIGNUP_ROLES.map((role) => {
     const emojiId = config.emojiByRole[role];
-    return `${SCOUT_ROLE_LABELS[role]}: ${emojiId ? `<:role:${emojiId}>` : 'not bound'}`;
+    const missing = role === 'fill' ? 'not bound (optional)' : 'not bound';
+    return `${SCOUT_SIGNUP_ROLE_LABELS[role]}: ${emojiId ? `<:role:${emojiId}>` : missing}`;
   }).join('\n');
 
   const menu = new RoleSelectMenuBuilder()

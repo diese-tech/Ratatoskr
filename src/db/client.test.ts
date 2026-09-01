@@ -166,6 +166,51 @@ test('migration 2 renames season channel keys for every season number, not just 
   }
 });
 
+test('migration 9 preserves existing scout data while adding optional Fill signups', () => {
+  const db = new Database(':memory:');
+  try {
+    db.pragma('foreign_keys = ON');
+    for (const migration of migrations.slice(0, 8)) db.exec(migration.sql);
+    db.prepare("INSERT INTO scout_config (guild_id, solo_emoji_id) VALUES ('guild-1', 'solo-emoji')").run();
+    db.prepare(`
+      INSERT INTO divisions (guild_id, division_key, display_name)
+      VALUES ('guild-1', 'vanaheim', 'Vanaheim')
+    `).run();
+    const division = db.prepare("SELECT id FROM divisions WHERE guild_id = 'guild-1'").get() as { id: number };
+    const setup = db.prepare(`
+      INSERT INTO scout_setups (
+        guild_id, division_id, division_key, division_display_name, created_by,
+        signup_channel_id, results_channel_id, division_role_id,
+        solo_emoji_id, jungle_emoji_id, mid_emoji_id, support_emoji_id, carry_emoji_id,
+        start_at, role_limit
+      ) VALUES ('guild-1', ?, 'vanaheim', 'Vanaheim', 'captain-1', 'signups', 'results', 'division-role',
+        'solo', 'jungle', 'mid', 'support', 'carry', 2000000000, 2)
+      RETURNING id
+    `).get(division.id) as { id: number };
+    db.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, 'existing-player', 'solo')").run(setup.id);
+
+    db.exec(migrations[8]!.sql);
+
+    assert.equal(
+      (db.prepare("SELECT role FROM scout_signups WHERE user_id = 'existing-player'").get() as { role: string }).role,
+      'solo',
+    );
+    assert.doesNotThrow(() => {
+      db.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, 'fill-player', 'fill')").run(setup.id);
+    });
+    assert.equal(
+      (db.prepare("SELECT fill_emoji_id FROM scout_config WHERE guild_id = 'guild-1'").get() as { fill_emoji_id: string | null }).fill_emoji_id,
+      null,
+    );
+    assert.equal(
+      (db.prepare('SELECT fill_emoji_id FROM scout_setups WHERE id = ?').get(setup.id) as { fill_emoji_id: string | null }).fill_emoji_id,
+      null,
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test('managed resources can be inserted and read back by Discord ID and logical key', () => {
   const db = openDatabase(join(tempDir, 'managed-resources.db'));
   try {

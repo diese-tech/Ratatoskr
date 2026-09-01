@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { ScoutRole } from '../../domain/index.js';
+import type { ScoutRole, ScoutSignupRole } from '../../domain/index.js';
 import type { ScoutRosterSlot, ScoutTeam } from '../../domain/scoutRoster.js';
 import type { ScoutRosterSlotRecord, ScoutSetup, ScoutSetupStatus, ScoutSignup } from '../types.js';
 
@@ -18,6 +18,7 @@ type ScoutSetupRow = {
   mid_emoji_id: string;
   support_emoji_id: string;
   carry_emoji_id: string;
+  fill_emoji_id: string | null;
   signup_message_id: string | null;
   result_message_id: string | null;
   start_at: number;
@@ -33,7 +34,7 @@ type ScoutSignupRow = {
   id: number;
   setup_id: number;
   user_id: string;
-  role: ScoutRole;
+  role: ScoutSignupRole;
   created_at: string;
 };
 
@@ -54,6 +55,7 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
       mid: row.mid_emoji_id,
       support: row.support_emoji_id,
       carry: row.carry_emoji_id,
+      fill: row.fill_emoji_id,
     },
     signupMessageId: row.signup_message_id,
     resultMessageId: row.result_message_id,
@@ -69,8 +71,11 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
 
 export type CreateScoutSetupInput = Omit<
   ScoutSetup,
-  'id' | 'signupMessageId' | 'resultMessageId' | 'status' | 'version' | 'note' | 'createdAt' | 'updatedAt'
-> & { note?: string | null };
+  'id' | 'emojiByRole' | 'signupMessageId' | 'resultMessageId' | 'status' | 'version' | 'note' | 'createdAt' | 'updatedAt'
+> & {
+  emojiByRole: Record<ScoutRole, string> & { fill?: string | null };
+  note?: string | null;
+};
 
 export function createScoutSetup(db: Database.Database, input: CreateScoutSetupInput): ScoutSetup {
   const row = db
@@ -78,12 +83,12 @@ export function createScoutSetup(db: Database.Database, input: CreateScoutSetupI
       `INSERT INTO scout_setups (
          guild_id, division_id, division_key, division_display_name, created_by,
          signup_channel_id, results_channel_id, division_role_id,
-         solo_emoji_id, jungle_emoji_id, mid_emoji_id, support_emoji_id, carry_emoji_id,
+         solo_emoji_id, jungle_emoji_id, mid_emoji_id, support_emoji_id, carry_emoji_id, fill_emoji_id,
          start_at, role_limit, note
        ) VALUES (
          @guildId, @divisionId, @divisionKey, @divisionDisplayName, @createdBy,
          @signupChannelId, @resultsChannelId, @divisionRoleId,
-         @soloEmojiId, @jungleEmojiId, @midEmojiId, @supportEmojiId, @carryEmojiId,
+         @soloEmojiId, @jungleEmojiId, @midEmojiId, @supportEmojiId, @carryEmojiId, @fillEmojiId,
          @startAt, @roleLimit, @note
        ) RETURNING *`,
     )
@@ -94,6 +99,7 @@ export function createScoutSetup(db: Database.Database, input: CreateScoutSetupI
       midEmojiId: input.emojiByRole.mid,
       supportEmojiId: input.emojiByRole.support,
       carryEmojiId: input.emojiByRole.carry,
+      fillEmojiId: input.emojiByRole.fill ?? null,
       note: input.note ?? null,
     }) as ScoutSetupRow;
   return toScoutSetup(row);
@@ -188,7 +194,7 @@ export function addScoutSignup(
   db: Database.Database,
   setupId: number,
   userId: string,
-  role: ScoutRole,
+  role: ScoutSignupRole,
 ): AddScoutSignupOutcome {
   return db.transaction((): AddScoutSignupOutcome => {
     const setup = db.prepare('SELECT role_limit, status FROM scout_setups WHERE id = ?').get(setupId) as
@@ -211,7 +217,7 @@ export function removeScoutSignup(
   db: Database.Database,
   setupId: number,
   userId: string,
-  role: ScoutRole,
+  role: ScoutSignupRole,
 ): void {
   db.prepare(
     `DELETE FROM scout_signups
@@ -371,7 +377,7 @@ export function withdrawnScoutRosterUserIds(db: Database.Database, setupId: numb
            SELECT 1 FROM scout_signups signups
            WHERE signups.setup_id = slots.setup_id
              AND signups.user_id = slots.user_id
-             AND signups.role = slots.role
+             AND (signups.role = slots.role OR signups.role = 'fill')
          )
        ORDER BY slots.user_id`,
     )

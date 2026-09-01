@@ -10,6 +10,7 @@ type ScoutConfigRow = {
   mid_emoji_id: string | null;
   support_emoji_id: string | null;
   carry_emoji_id: string | null;
+  fill_emoji_id: string | null;
   timezone: string;
   created_at: string;
   updated_at: string;
@@ -34,6 +35,7 @@ function toScoutConfig(row: ScoutConfigRow): ScoutConfig {
       mid: row.mid_emoji_id,
       support: row.support_emoji_id,
       carry: row.carry_emoji_id,
+      fill: row.fill_emoji_id,
     },
     timezone: row.timezone,
     createdAt: row.created_at,
@@ -68,12 +70,12 @@ export function setScoutAuthorizedRoleIds(
 export function setScoutEmojiByRole(
   db: Database.Database,
   guildId: string,
-  emojiByRole: Record<ScoutRole, string>,
+  emojiByRole: Record<ScoutRole, string> & { fill?: string | null },
 ): ScoutConfig {
   ensureScoutConfig(db, guildId);
   db.prepare(
     `UPDATE scout_config
-     SET solo_emoji_id = ?, jungle_emoji_id = ?, mid_emoji_id = ?, support_emoji_id = ?, carry_emoji_id = ?,
+     SET solo_emoji_id = ?, jungle_emoji_id = ?, mid_emoji_id = ?, support_emoji_id = ?, carry_emoji_id = ?, fill_emoji_id = ?,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
      WHERE guild_id = ?`,
   ).run(
@@ -82,6 +84,7 @@ export function setScoutEmojiByRole(
     emojiByRole.mid,
     emojiByRole.support,
     emojiByRole.carry,
+    emojiByRole.fill ?? null,
     guildId,
   );
   return getScoutConfig(db, guildId)!;
