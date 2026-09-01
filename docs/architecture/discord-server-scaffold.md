@@ -54,7 +54,8 @@ A provisioned division contains:
 
 ```text
 @<Division>
-@<Division> Captain Access   (hidden utility role)
+@<Division> Manager
+@<Division> Captain   (derived utility role)
 
 <Division>
 ├─ #<division>-captain-chat
@@ -63,21 +64,26 @@ A provisioned division contains:
 ├─ #<division>-tier-list
 ├─ #<division>-scheduling
 ├─ #<division>-match-reports
-├─ #<division>-scout-signups
-├─ #<division>-scout-results
 └─ 🔊 <Division> Lobby
+
+Scouting Operations
+├─ #scout-ops
+├─ #<division>-scout-signups
+└─ #<division>-scout-results
 ```
 
-Every text channel is division-prefixed, not just announcements -- with several divisions all sharing generic channel names like "general", an unprefixed `#general` is ambiguous in Discord's mention autocomplete and channel list without checking which category it's under. The division role grants access to the category. `#<division>-captain-chat` is the only tighter-permission exception and is visible to the division-specific captain utility role plus staff.
+Every text channel is division-prefixed, not just announcements -- with several divisions all sharing generic channel names like "general", an unprefixed `#general` is ambiguous in Discord's mention autocomplete and channel list without checking which category it's under. The division role grants access to its division category and scout channel pair. `#<division>-captain-chat` is the only tighter-permission exception and is visible to the division Manager, derived Captain, and admins. Franchise Representatives can view every other division channel but cannot view captain chat unless they also hold an allowed role.
 
 Discord cannot express `Division AND Captain` directly, so Ratatoskr automatically reconciles utility access roles:
 
-- member has `Captain` + `Vanaheim` → ensure `Vanaheim Captain Access`
-- member loses either role → remove `Vanaheim Captain Access`
+- member has `Captain` + `Vanaheim` → ensure `Vanaheim Captain`
+- member loses either role → remove `Vanaheim Captain`
 
 Humans should not manually manage these utility roles.
 
 Existing unprefixed division text channels—including `#captain-chat`, `#general`, `#tier-list`, `#scheduling`, `#match-reports`, `#scout-signups`, and `#scout-results`—are adopted by Discord ID only when exactly one matching channel of the expected type exists inside the selected division category. Provisioning then renames them to the division-prefixed convention; history and message links remain attached to the same channel IDs. Ambiguous matches fail closed, and extra channels such as a second lobby remain unmanaged and untouched.
+
+After an admin binds `#scout-ops` with `/scout config operations_channel:#scout-ops`, `/division add` moves the managed scout channel pair into that channel's parent category by Discord ID. The remaining division channels stay in their division category.
 
 ### Division commands
 

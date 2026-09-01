@@ -14,7 +14,13 @@ import {
   listCancellableScoutSetups,
   listDivisionScoutLifecycleBlockers,
   listOverlappingScoutSetups,
+  listActiveScoutSetups,
+  listPostingScoutSetups,
+  listScoutPublishesNeedingReconciliation,
+  listCancelledScoutSetupsNeedingSignupPostReconciliation,
+  listRosterReadyScoutSetups,
   replaceScoutRosterIfVersion,
+  replaceScoutSignups,
   replaceScoutRosterSlotIfVersion,
   replacePublishedScoutRosterSlotIfVersion,
   rollbackPublishedScoutRosterReplacement,
@@ -22,7 +28,14 @@ import {
   releaseScoutPublishClaim,
   removeScoutSignup,
   setScoutSetupSignupMessage,
+  setScoutPostingMessage,
+  activatePostedScoutSetup,
+  setScoutPendingResultMessage,
+  markPublishedScoutSignupPostReconciled,
   setScoutResultMessage,
+  setScoutControlMessage,
+  markCancelledScoutSignupPostReconciled,
+  replaceScoutControlMessage,
   swapScoutRosterSlotsIfVersion,
   swapPublishedScoutRosterSlotsIfVersion,
   tryCreateInitialScoutRoster,
@@ -37,7 +50,8 @@ function setupDatabase() {
     divisionKey: 'vanaheim',
     displayName: 'Vanaheim',
     roleId: 'division-role',
-    captainAccessRoleId: 'captain-role',
+    managerRoleId: 'manager-role',
+    captainRoleId: 'captain-role',
     categoryId: 'division-category',
   });
   return { db, division };
@@ -63,6 +77,7 @@ test('scout setup snapshots division routing and resolves durably by signup mess
       createdBy: 'captain-1',
       signupChannelId: 'signups-1',
       resultsChannelId: 'results-1',
+      operationsChannelId: 'scout-ops',
       divisionRoleId: 'division-role',
       eligibilityRoleId: 'silver-role',
       emojiByRole,
@@ -92,6 +107,8 @@ test('scout setup snapshots division routing and resolves durably by signup mess
     assert.equal(restored?.divisionId, division.id);
     assert.equal(restored?.signupChannelId, 'signups-1');
     assert.equal(restored?.resultsChannelId, 'results-1');
+    assert.equal(restored?.operationsChannelId, 'scout-ops');
+    assert.equal(restored?.controlMessageId, null);
     assert.equal(restored?.divisionRoleId, 'division-role');
     assert.equal(restored?.eligibilityRoleId, 'silver-role');
     assert.deepEqual(restored?.emojiByRole, emojiByRole);
@@ -150,7 +167,7 @@ test('initial roster transition is atomic and versioned replacement rejects stal
     const setup = createScoutSetup(db, {
       guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
       divisionDisplayName: division.displayName, createdBy: 'captain-1', signupChannelId: 'signups-1',
-      resultsChannelId: 'results-1', divisionRoleId: 'division-role', emojiByRole,
+      resultsChannelId: 'results-1', operationsChannelId: 'scout-ops', divisionRoleId: 'division-role', emojiByRole,
       startAt: 2_000_000_000, roleLimit: 2,
     });
     setScoutSetupSignupMessage(db, setup.id, 'message-roster');
@@ -162,6 +179,14 @@ test('initial roster transition is atomic and versioned replacement rejects stal
     assert.equal(tryCreateInitialScoutRoster(db, setup.id, slots), false);
     assert.equal(listScoutRosterSlots(db, setup.id).length, 10);
     assert.equal(getScoutSetupBySignupMessageId(db, 'message-roster')?.status, 'roster_ready');
+    assert.deepEqual(listRosterReadyScoutSetups(db).map((candidate) => candidate.id), [setup.id]);
+    assert.equal(setScoutControlMessage(db, setup.id, 'control-message'), true);
+    assert.equal(setScoutControlMessage(db, setup.id, 'second-control-message'), false);
+    assert.equal(getScoutSetupBySignupMessageId(db, 'message-roster')?.controlMessageId, 'control-message');
+    assert.deepEqual(listRosterReadyScoutSetups(db).map((candidate) => candidate.id), [setup.id]);
+    assert.equal(replaceScoutControlMessage(db, setup.id, 'wrong-message', 'replacement-message'), false);
+    assert.equal(replaceScoutControlMessage(db, setup.id, 'control-message', 'replacement-message'), true);
+    assert.equal(getScoutSetupBySignupMessageId(db, 'message-roster')?.controlMessageId, 'replacement-message');
 
     const replacement = slots.map((slot) => ({ ...slot, userId: `new-${slot.userId}` }));
     assert.equal(replaceScoutRosterIfVersion(db, setup.id, 0, replacement), true);
@@ -323,7 +348,7 @@ test('cancellation is division-scoped, atomic, and only active setups block divi
   try {
     const otherDivision = upsertDivision(db, {
       guildId: 'guild-1', divisionKey: 'alfheim', displayName: 'Alfheim', roleId: 'alfheim-role',
-      captainAccessRoleId: 'alfheim-captain', categoryId: 'alfheim-category',
+      managerRoleId: 'alfheim-manager', captainRoleId: 'alfheim-captain', categoryId: 'alfheim-category',
     });
     const create = (messageId: string, targetDivision = division) => {
       const setup = createScoutSetup(db, {
@@ -343,6 +368,13 @@ test('cancellation is division-scoped, atomic, and only active setups block divi
     assert.deepEqual(listCancellableScoutSetups(db, 'guild-1', otherDivision.id).map((setup) => setup.id), [other.id]);
     assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).map((setup) => setup.id), [first.id, second.id]);
     assert.equal(cancelScoutSetupIfVersion(db, first.id, 0), 'cancelled');
+    assert.deepEqual(
+      listCancelledScoutSetupsNeedingSignupPostReconciliation(db).map((setup) => setup.id),
+      [first.id],
+    );
+    assert.equal(markCancelledScoutSignupPostReconciled(db, first.id), true);
+    assert.equal(markCancelledScoutSignupPostReconciled(db, first.id), false);
+    assert.deepEqual(listCancelledScoutSetupsNeedingSignupPostReconciliation(db), []);
     assert.equal(cancelScoutSetupIfVersion(db, first.id, 0), 'already_cancelled');
     assert.deepEqual(listCancellableScoutSetups(db, 'guild-1', division.id).map((setup) => setup.id), [second.id]);
     assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).map((setup) => setup.id), [second.id]);
@@ -357,6 +389,64 @@ test('cancellation is division-scoped, atomic, and only active setups block divi
     assert.equal(cancelScoutSetupIfVersion(db, second.id, 0), 'published');
     assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id), []);
     assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', otherDivision.id).map((setup) => setup.id), [other.id]);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('posting, offline signup, and interrupted publish state expose durable restart transitions', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const setup = createScoutSetup(db, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'captain-1', signupChannelId: 'restart-signups',
+      resultsChannelId: 'restart-results', operationsChannelId: 'scout-ops', divisionRoleId: 'division-role',
+      emojiByRole, startAt: 2_000_000_000, roleLimit: 2,
+    });
+    assert.deepEqual(listPostingScoutSetups(db).map((candidate) => candidate.id), [setup.id]);
+    assert.equal(setScoutPostingMessage(db, setup.id, 'restart-signup-message'), true);
+    assert.equal(activatePostedScoutSetup(db, setup.id), true);
+    assert.deepEqual(listActiveScoutSetups(db).map((candidate) => candidate.id), [setup.id]);
+
+    assert.equal(replaceScoutSignups(db, setup.id, [
+      { userId: 'player-1', role: 'solo' },
+      { userId: 'player-1', role: 'jungle' },
+      { userId: 'player-1', role: 'mid' },
+      { userId: 'player-2', role: 'fill' },
+    ]), true);
+    assert.deepEqual(
+      listScoutSignups(db, setup.id).map(({ userId, role }) => `${userId}:${role}`).sort(),
+      ['player-1:jungle', 'player-1:solo', 'player-2:fill'],
+    );
+    db.prepare(
+      "UPDATE scout_signups SET created_at = '2020-01-01T00:00:00.000Z' WHERE setup_id = ? AND user_id = 'player-1' AND role = 'solo'",
+    ).run(setup.id);
+    assert.equal(replaceScoutSignups(db, setup.id, [
+      { userId: 'player-1', role: 'solo' },
+      { userId: 'player-1', role: 'jungle' },
+      { userId: 'player-2', role: 'fill' },
+    ]), true);
+    assert.equal(
+      listScoutSignups(db, setup.id).find((signup) => signup.userId === 'player-1' && signup.role === 'solo')?.createdAt,
+      '2020-01-01T00:00:00.000Z',
+    );
+
+    const slots: ScoutRosterSlot[] = SCOUT_ROLES.flatMap((role) =>
+      SCOUT_TEAMS.map((team, index) => ({ team, role, userId: `restart-${role}-${index}` })),
+    );
+    assert.equal(replaceScoutSignups(
+      db,
+      setup.id,
+      slots.map((slot) => ({ userId: slot.userId, role: slot.role })),
+    ), true);
+    assert.equal(tryCreateInitialScoutRoster(db, setup.id, slots), true);
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'claimed');
+    assert.deepEqual(listScoutPublishesNeedingReconciliation(db).map((candidate) => candidate.id), [setup.id]);
+    assert.equal(setScoutPendingResultMessage(db, setup.id, 'pending-result'), true);
+    assert.deepEqual(listScoutPublishesNeedingReconciliation(db).map((candidate) => candidate.id), [setup.id]);
+    assert.equal(markPublishedScoutSignupPostReconciled(db, setup.id, 'pending-result'), true);
+    assert.deepEqual(listScoutPublishesNeedingReconciliation(db), []);
+    assert.equal(releaseScoutPublishClaim(db, setup.id, 'pending-result'), true);
   } finally {
     closeDatabase(db);
   }

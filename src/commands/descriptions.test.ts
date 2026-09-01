@@ -35,12 +35,20 @@ test('every slash command, subcommand, and option uses readable English', () => 
 
   const scout = asCommand(scoutCommand);
   assert.equal(scout.description, 'Create and manage preseason scouting games.');
-  assert.equal(child(scout, 'create').description, 'Set up and post a scouting game for this division.');
-  assert.equal(child(scout, 'cancel').description, 'Cancel an open scouting game for this division.');
+  const scoutCreate = child(scout, 'create');
+  assert.equal(scoutCreate.description, 'Set up and post a scouting game for a division.');
+  assert.equal(child(scoutCreate, 'division').description, 'Division whose signup and results channels will be used.');
+  const scoutCancel = child(scout, 'cancel');
+  assert.equal(scoutCancel.description, 'Cancel an open scouting game for a division.');
+  assert.equal(child(scoutCancel, 'division').description, 'Division whose scouting game should be cancelled.');
   const scoutConfig = child(scout, 'config');
   assert.equal(scoutConfig.description, 'Set scout staff roles, timezone, and signup emojis.');
   assert.equal(child(scoutConfig, 'timezone').description, 'Timezone used to read game times, such as America/New_York.');
   assert.equal(child(scoutConfig, 'bind_emoji').description, 'Bind five role emojis and optional Fill.');
+  assert.equal(
+    child(scoutConfig, 'operations_channel').description,
+    'Bind the staff control channel inside the manually created Scout Operations category.',
+  );
 
   const division = asCommand(divisionCommand);
   assert.equal(division.description, 'Create, check, archive, or delete division channels and roles.');

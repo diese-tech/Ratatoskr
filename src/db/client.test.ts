@@ -18,6 +18,7 @@ import {
   SeasonAlreadyActiveError,
   setActiveSeason,
   setDivisionStatus,
+  setManagedResourceParent,
   upsertDivision,
 } from './index.js';
 
@@ -411,6 +412,39 @@ test('divisions table identifies rows by division_key, not division_name (migrat
   }
 });
 
+test('managed channel parent tracking follows an ID-preserving move', () => {
+  const db = openDatabase(join(tempDir, 'managed-resource-parent.db'));
+  try {
+    const resource = insertManagedResource(db, {
+      discordResourceId: 'channel-1',
+      guildId: 'guild-1',
+      resourceType: 'text_channel',
+      logicalKey: 'division:vanaheim:channel:scout_signups:text_channel',
+      parentResourceId: 'vanaheim-category',
+      scaffoldDomain: 'division',
+    });
+    setManagedResourceParent(db, resource.id, 'scout-ops-category');
+    assert.equal(
+      getActiveManagedResourceByLogicalKey(db, 'guild-1', resource.logicalKey)?.parentResourceId,
+      'scout-ops-category',
+    );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('division permission roles are stored as manager and captain roles without the obsolete access suffix', () => {
+  const db = openDatabase(join(tempDir, 'division-permission-roles-schema.db'));
+  try {
+    const columns = (db.prepare('PRAGMA table_info(divisions)').all() as { name: string }[]).map((column) => column.name);
+    assert.ok(columns.includes('manager_role_id'));
+    assert.ok(columns.includes('captain_role_id'));
+    assert.ok(!columns.includes('captain_access_role_id'));
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test('upsertDivision: a config-side display-name rename (key unchanged) updates display_name in place -- never a duplicate row -- and role/category ids stay linked (#31 Defect 1/Defect 2)', () => {
   const db = openDatabase(join(tempDir, 'divisions-rename.db'));
   try {
@@ -419,7 +453,8 @@ test('upsertDivision: a config-side display-name rename (key unchanged) updates 
       divisionKey: 'vanaheim',
       displayName: 'Vanaheim',
       roleId: 'role-1',
-      captainAccessRoleId: 'captain-role-1',
+      managerRoleId: 'manager-role-1',
+      captainRoleId: 'captain-role-1',
       categoryId: 'category-1',
     });
 
@@ -431,7 +466,8 @@ test('upsertDivision: a config-side display-name rename (key unchanged) updates 
       divisionKey: 'vanaheim',
       displayName: 'Vanir Prime',
       roleId: 'role-1',
-      captainAccessRoleId: 'captain-role-1',
+      managerRoleId: 'manager-role-1',
+      captainRoleId: 'captain-role-1',
       categoryId: 'category-1',
     });
 

@@ -40,11 +40,11 @@ test('persisted controls and three simultaneous setups remain isolated across re
     db = openDatabase(databasePath);
     const vanaheim = upsertDivision(db, {
       guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim', roleId: 'vanaheim-role',
-      captainAccessRoleId: 'vanaheim-captain', categoryId: 'vanaheim-category',
+      managerRoleId: 'vanaheim-manager', captainRoleId: 'vanaheim-captain', categoryId: 'vanaheim-category',
     });
     const alfheim = upsertDivision(db, {
       guildId: 'guild', divisionKey: 'alfheim', displayName: 'Alfheim', roleId: 'alfheim-role',
-      captainAccessRoleId: 'alfheim-captain', categoryId: 'alfheim-category',
+      managerRoleId: 'alfheim-manager', captainRoleId: 'alfheim-captain', categoryId: 'alfheim-category',
     });
     const create = (division: typeof vanaheim, suffix: string) => {
       const setup = createScoutSetup(db!, {

@@ -6,6 +6,7 @@ import {
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
   UserSelectMenuBuilder,
+  type Client,
   type ButtonInteraction,
   type MessageActionRowComponentBuilder,
   type MessageComponentInteraction,
@@ -18,21 +19,94 @@ import {
   getDivisionByKey,
   getScoutConfig,
   getScoutSetupById,
+  listScoutPublishesNeedingReconciliation,
   listScoutRosterSlots,
+  markPublishedScoutSignupPostReconciled,
   releaseScoutPublishClaim,
   rollbackPublishedScoutRosterReplacement,
   rollbackPublishedScoutRosterSwap,
   replacePublishedScoutRosterSlotIfVersion,
-  setScoutResultMessage,
+  setScoutPendingResultMessage,
   swapPublishedScoutRosterSlotsIfVersion,
   type ScoutSetup,
 } from '../db/index.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
-import { hasScoutManagementAccess } from './scoutAuthorization.js';
-import { scoutReviewButtonRow } from './scoutReview.js';
+import {
+  hasScoutDivisionManagementAccess,
+  isScoutOperationsChannel,
+  isScoutResultsChannel,
+} from './scoutAuthorization.js';
 import { renderScoutResult } from './scoutResults.js';
+import { updateScoutControlPanel } from './scoutControlPanel.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
+import { renderPersistedScoutSignupPost } from './scoutCreate.js';
+
+export function scoutResultMarker(setupId: number): string {
+  return `SCOUT-RESULT-${setupId}`;
+}
+
+function renderPersistedScoutResult(setup: ScoutSetup, slots: ReturnType<typeof listScoutRosterSlots>): string {
+  return `${renderScoutResult(setup, slots)}\n\n\`${scoutResultMarker(setup.id)}\``;
+}
+
+async function findRecoverableResultMessage(client: Client, setup: ScoutSetup) {
+  const channel = await client.channels.fetch(setup.resultsChannelId);
+  if (!channel?.isTextBased()) throw new Error('The snapshotted results channel is unavailable.');
+  if (setup.resultMessageId) {
+    return channel.messages.fetch(setup.resultMessageId);
+  }
+  let before: string | undefined;
+  while (true) {
+    const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    const found = messages.find((message) =>
+      message.author.id === client.user?.id && message.content.includes(scoutResultMarker(setup.id)));
+    if (found || messages.size < 100) return found;
+    before = messages.last()?.id;
+    if (!before) return undefined;
+  }
+}
+
+async function attachRecoveredScoutResult(
+  client: Client,
+  db: Database.Database,
+  setup: ScoutSetup,
+  resultMessage: { id: string; url: string },
+): Promise<void> {
+  if (!setup.resultMessageId && !setScoutPendingResultMessage(db, setup.id, resultMessage.id)) {
+    const current = getScoutSetupById(db, setup.id);
+    if (current?.resultMessageId !== resultMessage.id) throw new Error('Could not record the recovered result message.');
+  }
+  const signupChannel = await client.channels.fetch(setup.signupChannelId);
+  if (!signupChannel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
+  const signupMessage = await signupChannel.messages.fetch(setup.signupMessageId);
+  await signupMessage.edit({
+    content: `${renderScoutSignupPost(setup)}\n\n✅ Roster published: ${resultMessage.url}`,
+    components: [],
+    allowedMentions: { parse: [] },
+  });
+  if (!setup.signupPostReconciled && !markPublishedScoutSignupPostReconciled(db, setup.id, resultMessage.id)) {
+    const current = getScoutSetupById(db, setup.id);
+    if (!current?.signupPostReconciled) throw new Error('Could not record the repaired signup post.');
+  }
+}
+
+export async function reconcilePendingScoutPublishes(client: Client, db: Database.Database): Promise<void> {
+  for (const setup of listScoutPublishesNeedingReconciliation(db)) {
+    try {
+      const resultMessage = await findRecoverableResultMessage(client, setup);
+      if (!resultMessage) {
+        if (!releaseScoutPublishClaim(db, setup.id)) {
+          throw new Error('No result post was found and the publish claim could not be released.');
+        }
+        continue;
+      }
+      await attachRecoveredScoutResult(client, db, setup, resultMessage);
+    } catch (error) {
+      console.error(`Scout publish reconciliation failed for setup #${setup.id}`, error);
+    }
+  }
+}
 
 function managementRow(setupId: number, version: number) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -59,17 +133,16 @@ async function authorized(
 ): Promise<ScoutSetup | undefined> {
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || setup.status !== status || !interaction.guild) return undefined;
+  const correctChannel = status === 'roster_ready'
+    ? isScoutOperationsChannel(setup, interaction.channelId)
+    : isScoutResultsChannel(setup, interaction.channelId);
+  if (!correctChannel) return undefined;
   const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
   if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const config = getScoutConfig(db, setup.guildId);
   const { hasAccess } = await import('./authorization.js');
-  return hasScoutManagementAccess({
-    isAdmin: hasAccess(member, 'ADMIN'),
-    memberRoleIds: new Set(member.roles.cache.keys()),
-    additionalAuthorizedRoleIds: config?.authorizedRoleIds ?? [],
-    divisionCaptainAccessRoleId: division.captainAccessRoleId,
-  }) ? setup : undefined;
+  return hasScoutDivisionManagementAccess(member, config, division, hasAccess(member, 'ADMIN')) ? setup : undefined;
 }
 
 export async function handleScoutPublishButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
@@ -161,19 +234,22 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
   let resultMessage;
   let signupMessage;
   let signupPostUpdated = false;
+  let resultSendAttempted = false;
   try {
     const channel = await interaction.client.channels.fetch(setup.resultsChannelId);
     if (!channel?.isSendable()) throw new Error('The snapshotted results channel is not sendable.');
+    resultSendAttempted = true;
     resultMessage = await channel.send({
-      content: renderScoutResult(setup, slots),
+      content: renderPersistedScoutResult(setup, slots),
       components: [managementRow(setupId, setup.version)],
       allowedMentions: { parse: [], users: slots.map((slot) => slot.userId), roles: [] },
     });
+    if (!setScoutPendingResultMessage(db, setupId, resultMessage.id)) {
+      throw new Error('Could not record the pending result message.');
+    }
 
     const signupChannel = await interaction.client.channels.fetch(setup.signupChannelId);
-    if (!signupChannel?.isTextBased() || !setup.signupMessageId) {
-      throw new Error('The original signup post is unavailable.');
-    }
+    if (!signupChannel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
     signupMessage = await signupChannel.messages.fetch(setup.signupMessageId);
     await signupMessage.edit({
       content: `${renderScoutSignupPost(setup)}\n\n✅ Roster published: ${resultMessage.url}`,
@@ -181,21 +257,36 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       allowedMentions: { parse: [] },
     });
     signupPostUpdated = true;
-
-    if (!setScoutResultMessage(db, setupId, resultMessage.id)) throw new Error('Could not attach the result message to the setup.');
+    if (!markPublishedScoutSignupPostReconciled(db, setupId, resultMessage.id)) {
+      throw new Error('Could not record the updated signup post.');
+    }
   } catch (error) {
-    if (resultMessage) await resultMessage.delete().catch(() => undefined);
-    releaseScoutPublishClaim(db, setupId);
+    const resultDeleted = resultMessage
+      ? await resultMessage.delete().then(() => true, () => false)
+      : !resultSendAttempted;
+    const released = resultDeleted
+      ? releaseScoutPublishClaim(db, setupId, resultMessage?.id)
+      : false;
     if (signupPostUpdated && signupMessage) {
       await signupMessage.edit({
-        content: renderScoutSignupPost(setup),
-        components: [scoutReviewButtonRow(setup.id)],
+        content: renderPersistedScoutSignupPost(setup),
+        components: [],
         allowedMentions: { parse: [] },
       }).catch(() => undefined);
     }
-    await interaction.editReply({ content: `Publishing failed and is ready to retry: ${(error as Error).message}`, components: [] });
+    await interaction.editReply({
+      content: released
+        ? `Publishing failed and is ready to retry: ${(error as Error).message}`
+        : `Publishing was interrupted after the result post was created. Ratatoskr kept the publish claim and will reconcile it on restart: ${(error as Error).message}`,
+      components: [],
+    });
     return true;
   }
+  await updateScoutControlPanel(
+    interaction.client,
+    setup,
+    `✅ **${setup.divisionDisplayName} scout setup #${setup.id} published**\n${resultMessage.url}`,
+  );
   await interaction.editReply({ content: `Scout roster published: ${resultMessage.url}`, components: [] });
   return true;
 }

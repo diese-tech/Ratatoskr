@@ -373,4 +373,37 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_scout_roster_slots_setup ON scout_roster_slots(setup_id);
     `,
   },
+  {
+    id: 12,
+    name: 'division_manager_and_captain_roles',
+    sql: `
+      ALTER TABLE divisions RENAME COLUMN captain_access_role_id TO captain_role_id;
+      ALTER TABLE divisions ADD COLUMN manager_role_id TEXT;
+
+      UPDATE managed_resources
+      SET logical_key = REPLACE(logical_key, ':captain_access_role', ':captain_role'),
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE scaffold_domain = 'division'
+        AND logical_key LIKE 'division:%:captain_access_role';
+    `,
+  },
+  {
+    id: 13,
+    name: 'scout_operations_binding',
+    sql: `
+      ALTER TABLE scout_config ADD COLUMN operations_category_id TEXT;
+      ALTER TABLE scout_config ADD COLUMN operations_channel_id TEXT;
+    `,
+  },
+  {
+    id: 14,
+    name: 'scout_control_panels',
+    sql: `
+      ALTER TABLE scout_setups ADD COLUMN operations_channel_id TEXT;
+      ALTER TABLE scout_setups ADD COLUMN control_message_id TEXT;
+      ALTER TABLE scout_setups ADD COLUMN signup_post_reconciled INTEGER NOT NULL DEFAULT 0
+        CHECK (signup_post_reconciled IN (0, 1));
+      CREATE UNIQUE INDEX idx_scout_setups_control_message ON scout_setups(control_message_id);
+    `,
+  },
 ];

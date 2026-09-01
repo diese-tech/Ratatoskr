@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { ChannelType, Collection, type Guild } from 'discord.js';
+import { ChannelType, Collection, PermissionFlagsBits, type Guild } from 'discord.js';
 import { test } from 'node:test';
 import type { DivisionSpec } from '../config/guild-structure.js';
 import { closeDatabase, openDatabase } from '../db/client.js';
 import { insertManagedResource, listManagedResourcesByDomain } from '../db/repositories/managedResources.js';
+import { setScoutOperationsChannel } from '../db/repositories/scoutConfig.js';
 import { divisionChannelLogicalKey } from './divisionScaffold.js';
 import {
   classifyDivisionChannelMatch,
@@ -12,6 +13,7 @@ import {
   getExpectedChannelNames,
   isDivisionKey,
   provisionDivision,
+  resolveDivisionPermissionOverwrites,
 } from './divisions.js';
 
 test('isDivisionKey recognizes every configured division key and rejects unknown ones', () => {
@@ -49,6 +51,8 @@ test('getDivisionTemplate: channel names are division-prefixed text (kebab-case)
   const template = getDivisionTemplate({ key: 'vanaheim', name: 'Vanaheim' });
   const byKey = new Map(template.channels.map((channel) => [channel.key, channel.name]));
 
+  assert.equal(template.managerRoleName, 'Vanaheim Manager');
+  assert.equal(template.captainRoleName, 'Vanaheim Captain');
   assert.equal(byKey.get('captain_chat'), 'vanaheim-captain-chat');
   assert.equal(byKey.get('general'), 'vanaheim-general');
   assert.equal(byKey.get('lobby'), 'Vanaheim Lobby');
@@ -67,6 +71,118 @@ test('getExpectedChannelNames includes the division scout signup and results cha
     'alfheim-scout-results',
     'Alfheim Lobby',
   ]);
+});
+
+test('division channels declare the approved posting and visibility profiles', () => {
+  const template = getDivisionTemplate({ key: 'vanaheim', name: 'Vanaheim' });
+  const profiles = new Map(template.channels.map((channel) => [channel.key, channel.permissionProfile]));
+
+  assert.equal(profiles.get('captain_chat'), 'captain_only');
+  assert.equal(profiles.get('announcements'), 'announcements');
+  assert.equal(profiles.get('scheduling'), 'captain_work');
+  assert.equal(profiles.get('match_reports'), 'captain_work');
+  assert.equal(profiles.get('scout_signups'), 'scout_signups');
+  assert.equal(profiles.get('scout_results'), 'scout_results');
+  assert.equal(profiles.get('general'), undefined);
+  assert.equal(profiles.get('tier_list'), undefined);
+  assert.equal(profiles.get('lobby'), undefined);
+});
+
+const permissionRoleIds = {
+  everyone: 'everyone',
+  division: 'division',
+  manager: 'manager',
+  captain: 'captain',
+  franchiseRepresentative: 'franchise',
+  admins: ['allfather', 'aesir'],
+};
+
+const NO_POST_PERMISSIONS = [
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.CreatePublicThreads,
+  PermissionFlagsBits.CreatePrivateThreads,
+  PermissionFlagsBits.SendMessagesInThreads,
+  PermissionFlagsBits.SendVoiceMessages,
+  PermissionFlagsBits.SendPolls,
+];
+
+test('division categories are visible to members, managers, captains, franchise representatives, and admins', () => {
+  const overwrites = resolveDivisionPermissionOverwrites(permissionRoleIds, 'category');
+  const byId = new Map(overwrites.map((overwrite) => [overwrite.id, overwrite]));
+
+  assert.deepEqual(byId.get('everyone')?.deny, [PermissionFlagsBits.ViewChannel]);
+  for (const roleId of ['division', 'manager', 'captain', 'franchise', 'allfather', 'aesir']) {
+    assert.deepEqual(byId.get(roleId)?.allow, [PermissionFlagsBits.ViewChannel]);
+  }
+});
+
+test('captain chat is visible only to division managers, division captains, and admins', () => {
+  const overwrites = resolveDivisionPermissionOverwrites(permissionRoleIds, 'captain_only');
+  const byId = new Map(overwrites.map((overwrite) => [overwrite.id, overwrite]));
+
+  assert.deepEqual(byId.get('everyone')?.deny, [PermissionFlagsBits.ViewChannel]);
+  assert.equal(byId.has('franchise'), false);
+  assert.equal(byId.has('division'), false);
+  for (const roleId of ['manager', 'captain', 'allfather', 'aesir']) {
+    assert.deepEqual(byId.get(roleId)?.allow, [PermissionFlagsBits.ViewChannel]);
+  }
+});
+
+test('announcement channels allow only division managers and admins to post or use threads', () => {
+  const overwrites = resolveDivisionPermissionOverwrites(permissionRoleIds, 'announcements');
+  const byId = new Map(overwrites.map((overwrite) => [overwrite.id, overwrite]));
+
+  assert.deepEqual(byId.get('everyone')?.deny, [PermissionFlagsBits.ViewChannel, ...NO_POST_PERMISSIONS]);
+  for (const roleId of ['manager', 'allfather', 'aesir']) {
+    assert.deepEqual(byId.get(roleId)?.allow, [PermissionFlagsBits.ViewChannel, ...NO_POST_PERMISSIONS]);
+  }
+});
+
+test('announcement channels remain visible to division members, captains, and franchise representatives', () => {
+  const overwrites = resolveDivisionPermissionOverwrites(permissionRoleIds, 'announcements');
+  const byId = new Map(overwrites.map((overwrite) => [overwrite.id, overwrite]));
+
+  for (const roleId of ['division', 'captain', 'franchise']) {
+    assert.deepEqual(byId.get(roleId)?.allow, [PermissionFlagsBits.ViewChannel]);
+  }
+  assert.equal(byId.get('everyone')?.deny.includes(PermissionFlagsBits.ViewChannel), true);
+});
+
+test('scheduling and match reports allow division managers, division captains, and admins to post', () => {
+  const overwrites = resolveDivisionPermissionOverwrites(permissionRoleIds, 'captain_work');
+  const byId = new Map(overwrites.map((overwrite) => [overwrite.id, overwrite]));
+
+  assert.deepEqual(byId.get('everyone')?.deny, [PermissionFlagsBits.ViewChannel, ...NO_POST_PERMISSIONS]);
+  for (const roleId of ['manager', 'captain', 'allfather', 'aesir']) {
+    assert.deepEqual(byId.get(roleId)?.allow, [PermissionFlagsBits.ViewChannel, ...NO_POST_PERMISSIONS]);
+  }
+  for (const roleId of ['division', 'franchise']) {
+    assert.deepEqual(byId.get(roleId)?.allow, [PermissionFlagsBits.ViewChannel]);
+  }
+});
+
+test('scout signups let players react while managers, captains, franchise representatives, and admins may post', () => {
+  const overwrites = resolveDivisionPermissionOverwrites(permissionRoleIds, 'scout_signups');
+  const byId = new Map(overwrites.map((overwrite) => [overwrite.id, overwrite]));
+
+  assert.deepEqual(byId.get('everyone')?.deny, [PermissionFlagsBits.ViewChannel, ...NO_POST_PERMISSIONS]);
+  assert.equal(byId.get('everyone')?.deny.includes(PermissionFlagsBits.AddReactions), false);
+  for (const roleId of ['manager', 'captain', 'franchise', 'allfather', 'aesir']) {
+    assert.deepEqual(byId.get(roleId)?.allow, [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.AddReactions, ...NO_POST_PERMISSIONS]);
+  }
+  assert.deepEqual(byId.get('division')?.allow, [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.AddReactions]);
+});
+
+test('scout results restrict posting, threads, and new reactions to its approved writers', () => {
+  const overwrites = resolveDivisionPermissionOverwrites(permissionRoleIds, 'scout_results');
+  const byId = new Map(overwrites.map((overwrite) => [overwrite.id, overwrite]));
+  const restricted = [PermissionFlagsBits.ViewChannel, ...NO_POST_PERMISSIONS, PermissionFlagsBits.AddReactions];
+
+  assert.deepEqual(byId.get('everyone')?.deny, restricted);
+  for (const roleId of ['manager', 'captain', 'franchise', 'allfather', 'aesir']) {
+    assert.deepEqual(byId.get(roleId)?.allow, restricted);
+  }
+  assert.deepEqual(byId.get('division')?.allow, [PermissionFlagsBits.ViewChannel]);
 });
 
 test('classifyDivisionChannelMatch adopts one legacy unprefixed scout channel from the expected division category', () => {
@@ -124,6 +240,9 @@ test('classifyDivisionChannelMatch refuses multiple legacy scout channels in the
 test('provisionDivision adopts and renames the observed legacy division channels without creating replacements', async () => {
   const db = openDatabase(':memory:');
   const renamed: Array<[string, string]> = [];
+  const renamedRoles: Array<[string, string]> = [];
+  const assignedRoles: string[] = [];
+  const moved: Array<[string, string]> = [];
   const division = getDivisionSpec('vanaheim');
   const template = getDivisionTemplate(division);
   const categoryId = 'vanaheim-category';
@@ -131,7 +250,37 @@ test('provisionDivision adopts and renames the observed legacy division channels
   const roles = new Collection<string, any>([
     ['everyone', { id: 'everyone', name: '@everyone' }],
     ['division-role', { id: 'division-role', name: 'Vanaheim' }],
-    ['captain-access', { id: 'captain-access', name: 'Vanaheim Captain Access' }],
+    ['manager-role', { id: 'manager-role', name: 'Vanaheim Manager' }],
+    ['captain-role', {
+      id: 'captain-role',
+      name: 'Vanaheim Captain Access',
+      setName: async function (nextName: string) {
+        renamedRoles.push([this.id, nextName]);
+        this.name = nextName;
+        return this;
+      },
+    }],
+    ['franchise-role', { id: 'franchise-role', name: 'Franchise Representative' }],
+    ['allfather-role', { id: 'allfather-role', name: 'Allfather' }],
+    ['aesir-role', { id: 'aesir-role', name: 'Aesir' }],
+    ['global-captain-role', { id: 'global-captain-role', name: 'Captain' }],
+  ]);
+  const memberRoles = new Collection<string, any>([
+    ['global-captain-role', roles.get('global-captain-role')],
+    ['division-role', roles.get('division-role')],
+  ]);
+  const members = new Collection<string, any>([
+    ['existing-captain', {
+      id: 'existing-captain',
+      roles: {
+        cache: memberRoles,
+        add: async (role: { id: string }) => {
+          assignedRoles.push(role.id);
+          memberRoles.set(role.id, role);
+        },
+        remove: async (role: { id: string }) => memberRoles.delete(role.id),
+      },
+    }],
   ]);
   const channels = new Collection<string, any>();
   channels.set(categoryId, {
@@ -140,6 +289,19 @@ test('provisionDivision adopts and renames the observed legacy division channels
     type: ChannelType.GuildCategory,
     parentId: null,
     permissionOverwrites: { set: async () => undefined },
+  });
+  channels.set('scout-ops-category', {
+    id: 'scout-ops-category',
+    name: 'Scouting Operations',
+    type: ChannelType.GuildCategory,
+    parentId: null,
+    permissionOverwrites: { set: async () => undefined },
+  });
+  channels.set('scout-ops-channel', {
+    id: 'scout-ops-channel',
+    name: 'scout-ops',
+    type: ChannelType.GuildText,
+    parentId: 'scout-ops-category',
   });
 
   const observedLegacyNames = new Map([
@@ -170,6 +332,11 @@ test('provisionDivision adopts and renames the observed legacy division channels
         this.name = nextName;
         return this;
       },
+      setParent: async function (nextParentId: string) {
+        moved.push([id, nextParentId]);
+        this.parentId = nextParentId;
+        return this;
+      },
     });
   }
   channels.set('unmanaged-lobby-2', {
@@ -196,9 +363,18 @@ test('provisionDivision adopts and renames the observed legacy division channels
         throw new Error('No channel should be created');
       },
     },
+    members: { fetch: async () => members },
   } as unknown as Guild;
 
   try {
+    setScoutOperationsChannel(db, 'guild-1', 'scout-ops-category', 'scout-ops-channel');
+    insertManagedResource(db, {
+      discordResourceId: 'captain-role',
+      guildId: 'guild-1',
+      resourceType: 'role',
+      logicalKey: 'division:vanaheim:captain_role',
+      scaffoldDomain: 'division',
+    });
     insertManagedResource(db, {
       discordResourceId: 'deleted-prefixed-general',
       guildId: 'guild-1',
@@ -208,6 +384,12 @@ test('provisionDivision adopts and renames the observed legacy division channels
       scaffoldDomain: 'division',
     });
     await provisionDivision(db, guild, 'vanaheim');
+    assert.deepEqual(renamedRoles, [['captain-role', 'Vanaheim Captain']]);
+    assert.deepEqual(assignedRoles, ['captain-role']);
+    assert.deepEqual(moved, [
+      ['channel-scout_signups', 'scout-ops-category'],
+      ['channel-scout_results', 'scout-ops-category'],
+    ]);
     assert.deepEqual(renamed, [
       ['channel-captain_chat', 'vanaheim-captain-chat'],
       ['channel-general', 'vanaheim-general'],

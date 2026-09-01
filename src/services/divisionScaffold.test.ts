@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   assertNoDuplicateKeys,
-  divisionCaptainAccessRoleLogicalKey,
+  divisionCaptainRoleLogicalKey,
   divisionCategoryLogicalKey,
   divisionChannelLogicalKey,
+  divisionManagerRoleLogicalKey,
   divisionRoleLogicalKey,
   findUnmanagedCategoryChildren,
   resourcesForDivision,
@@ -12,7 +13,8 @@ import {
 
 test('logical key builders consume the authored division/channel key, not a display name', () => {
   assert.equal(divisionRoleLogicalKey('vanaheim'), 'division:vanaheim:role');
-  assert.equal(divisionCaptainAccessRoleLogicalKey('vanaheim'), 'division:vanaheim:captain_access_role');
+  assert.equal(divisionManagerRoleLogicalKey('vanaheim'), 'division:vanaheim:manager_role');
+  assert.equal(divisionCaptainRoleLogicalKey('vanaheim'), 'division:vanaheim:captain_role');
   assert.equal(divisionCategoryLogicalKey('vanaheim'), 'division:vanaheim:category');
   assert.equal(divisionChannelLogicalKey('vanaheim', 'general', 'text_channel'), 'division:vanaheim:channel:general:text_channel');
 });

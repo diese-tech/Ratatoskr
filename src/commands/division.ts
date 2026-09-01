@@ -12,6 +12,7 @@ import type Database from 'better-sqlite3';
 import { divisions, type DivisionKey } from '../config/guild-structure.js';
 import {
   getDivisionByKey,
+  getScoutConfig,
   listDivisionScoutLifecycleBlockers,
   listManagedResourcesByDomain,
   markManagedResourcePurged,
@@ -20,9 +21,10 @@ import {
 } from '../db/index.js';
 import { requireAccess } from '../services/authorization.js';
 import {
-  divisionCaptainAccessRoleLogicalKey,
+  divisionCaptainRoleLogicalKey,
   divisionCategoryLogicalKey,
   divisionChannelLogicalKey,
+  divisionManagerRoleLogicalKey,
   divisionRoleLogicalKey,
   findUnmanagedCategoryChildren,
   resourcesForDivision,
@@ -150,15 +152,32 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
   if (subcommand === 'status') {
     const roleRow = managedForDivision.find((resource) => resource.logicalKey === divisionRoleLogicalKey(division.key));
     const captainRoleRow = managedForDivision.find(
-      (resource) => resource.logicalKey === divisionCaptainAccessRoleLogicalKey(division.key),
+      (resource) => resource.logicalKey === divisionCaptainRoleLogicalKey(division.key),
+    );
+    const managerRoleRow = managedForDivision.find(
+      (resource) => resource.logicalKey === divisionManagerRoleLogicalKey(division.key),
     );
     const roleManaged = Boolean(roleRow) && managedResourceIsLive(guild, roleRow!);
+    const managerRoleManaged = Boolean(managerRoleRow) && managedResourceIsLive(guild, managerRoleRow!);
     const captainRoleManaged = Boolean(captainRoleRow) && managedResourceIsLive(guild, captainRoleRow!);
+    const scoutOperationsCategoryId = getScoutConfig(db, guild.id)?.operationsCategoryId;
+    const centralizedScoutKeys = new Set([
+      divisionChannelLogicalKey(division.key, 'scout_signups', 'text_channel'),
+      divisionChannelLogicalKey(division.key, 'scout_results', 'text_channel'),
+    ]);
 
     const liveChannelKeys = new Set(
       managedForDivision
         .filter((resource) => resource.resourceType === 'text_channel' || resource.resourceType === 'voice_channel')
-        .filter((resource) => managedResourceIsLive(guild, resource, category?.id))
+        .filter((resource) =>
+          managedResourceIsLive(
+            guild,
+            resource,
+            centralizedScoutKeys.has(resource.logicalKey) && scoutOperationsCategoryId
+              ? scoutOperationsCategoryId
+              : category?.id,
+          ),
+        )
         .map((resource) => resource.logicalKey),
     );
     const missingChannels = DIVISION_CHANNEL_TEMPLATE.filter((channel) => {
@@ -171,7 +190,8 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
       content: [
         `**${division.name} status**`,
         `Division role: ${roleManaged ? 'yes' : 'no'}`,
-        `Captain access role: ${captainRoleManaged ? 'yes' : 'no'}`,
+        `Division manager role: ${managerRoleManaged ? 'yes' : 'no'}`,
+        `Captain role: ${captainRoleManaged ? 'yes' : 'no'}`,
         `Category: ${category ? 'yes' : 'no'}`,
         `Lifecycle status: ${record?.status ?? 'not yet provisioned'}`,
         `Missing channels: ${missingChannels.length ? missingChannels.map((channel) => channel.key).join(', ') : 'none'}`,
@@ -188,7 +208,7 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
           `Cannot ${subcommand} **${division.name}** while it has active scout setups:`,
           ...blockers.map((setup) => `- Setup #${setup.id}: <t:${setup.startAt}:F> (${setup.status === 'roster_ready' ? 'roster ready' : 'open'})`),
           '',
-          `Cancel ${blockers.length === 1 ? 'it' : 'them'} from the division scout-signups channel, then retry.`,
+          `Cancel ${blockers.length === 1 ? 'it' : 'them'} from the configured scout-ops channel, then retry.`,
         ].join('\n'),
         flags: MessageFlags.Ephemeral,
       });
@@ -246,11 +266,14 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
 
     const roleRow = managedForDivision.find((resource) => resource.logicalKey === divisionRoleLogicalKey(division.key));
     const captainRoleRow = managedForDivision.find(
-      (resource) => resource.logicalKey === divisionCaptainAccessRoleLogicalKey(division.key),
+      (resource) => resource.logicalKey === divisionCaptainRoleLogicalKey(division.key),
     );
-    const rolesToDelete = [roleRow, captainRoleRow].filter((row): row is ManagedResource => Boolean(row));
+    const managerRoleRow = managedForDivision.find(
+      (resource) => resource.logicalKey === divisionManagerRoleLogicalKey(division.key),
+    );
+    const rolesToDelete = [roleRow, managerRoleRow, captainRoleRow].filter((row): row is ManagedResource => Boolean(row));
     const channelNames = managedChannels.map(
-      (resource) => (category ? category.children.cache.get(resource.discordResourceId)?.name : undefined) ?? resource.discordResourceId,
+      (resource) => guild.channels.cache.get(resource.discordResourceId)?.name ?? resource.discordResourceId,
     );
     const roleNames = rolesToDelete.map((row) => guild.roles.cache.get(row.discordResourceId)?.name ?? row.discordResourceId);
 
@@ -347,6 +370,13 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
 
   for (const channel of category.children.cache.values()) {
     await channel.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
+  }
+  for (const resource of managedForDivision) {
+    if (resource.resourceType !== 'text_channel' && resource.resourceType !== 'voice_channel') continue;
+    const channel = guild.channels.cache.get(resource.discordResourceId);
+    if (channel && !channel.isThread() && channel.parentId !== category.id) {
+      await channel.permissionOverwrites.set(overwrites, 'Ratatoskr division archive');
+    }
   }
 
   setDivisionStatus(db, guild.id, division.key, 'archived');

@@ -11,33 +11,117 @@ import {
   TextInputStyle,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
+  type Client,
   type Guild,
   type GuildMember,
+  type Message,
   type ModalSubmitInteraction,
   type RoleSelectMenuInteraction,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
+import type { DivisionKey } from '../config/guild-structure.js';
 import {
   createScoutSetup,
   ensureScoutConfig,
   getScoutConfig,
+  getScoutSetupById,
   listDivisions,
   listManagedResourcesByDomain,
   listOverlappingScoutSetups,
+  listPostingScoutSetups,
   markScoutSetupPostingFailed,
   missingScoutConfigFields,
-  setScoutSetupSignupMessage,
+  activatePostedScoutSetup,
+  replaceScoutPostingMessage,
+  setScoutPostingMessage,
   type DivisionRecord,
+  type ScoutSetup,
 } from '../db/index.js';
 import { parseScoutStartTime } from '../domain/scoutTime.js';
 import { SCOUT_ROLES, SCOUT_SIGNUP_ROLES, type ScoutRole } from '../domain/index.js';
-import { hasScoutManagementAccess } from './scoutAuthorization.js';
-import { resolveScoutChannelGroup, type ScoutChannelGroup } from './scoutChannels.js';
+import { hasScoutDivisionManagementAccess } from './scoutAuthorization.js';
+import { resolveScoutChannelGroupForDivision, type ScoutChannelGroup } from './scoutChannels.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
-import { scoutCancelButtonRow } from './scoutCancel.js';
 
 const DRAFT_TTL_MS = 15 * 60 * 1_000;
 const CUSTOM_ID_PREFIX = 'scout:create:';
+
+export function scoutSignupMarker(setupId: number): string {
+  return `SCOUT-SIGNUP-${setupId}`;
+}
+
+export function renderPersistedScoutSignupPost(setup: ScoutSetup): string {
+  return `${renderScoutSignupPost(setup)}\n\n\`${scoutSignupMarker(setup.id)}\``;
+}
+
+async function findRecoverableSignupMessage(
+  channel: { messages: { fetch(options: { limit: number; before?: string }): Promise<{
+    size: number;
+    find(predicate: (message: Message) => boolean): Message | undefined;
+    last(): Message | undefined;
+  }> } },
+  botUserId: string | undefined,
+  setupId: number,
+): Promise<Message | undefined> {
+  if (!botUserId) return undefined;
+  const marker = scoutSignupMarker(setupId);
+  let before: string | undefined;
+  while (true) {
+    const page = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    const found = page.find((message) => message.author.id === botUserId && message.content.includes(marker));
+    if (found || page.size < 100) return found;
+    before = page.last()?.id;
+    if (!before) return undefined;
+  }
+}
+
+export async function ensurePostedScoutSetup(
+  client: Client,
+  db: Database.Database,
+  setup: ScoutSetup,
+): Promise<Message> {
+  if (setup.status !== 'posting') throw new Error(`Scout setup #${setup.id} is not awaiting posting.`);
+  const channel = await client.channels.fetch(setup.signupChannelId);
+  if (!channel?.isSendable()) throw new Error('Signup channel is not sendable.');
+
+  let message = setup.signupMessageId
+    ? await channel.messages.fetch(setup.signupMessageId).catch(() => undefined)
+    : undefined;
+  if (!message) message = await findRecoverableSignupMessage(channel, client.user?.id, setup.id);
+  if (!message) {
+    message = await channel.send({
+      content: renderPersistedScoutSignupPost(setup),
+      components: [],
+      allowedMentions: { parse: [], roles: [setup.divisionRoleId], users: [] },
+    });
+  }
+
+  if (!setup.signupMessageId) {
+    if (!setScoutPostingMessage(db, setup.id, message.id)) {
+      await message.delete().catch(() => undefined);
+      throw new Error('Scout setup could not record its signup post.');
+    }
+  } else if (setup.signupMessageId !== message.id) {
+    if (!replaceScoutPostingMessage(db, setup.id, setup.signupMessageId, message.id)) {
+      await message.delete().catch(() => undefined);
+      throw new Error('Scout setup could not replace its missing signup post.');
+    }
+  }
+
+  for (const emojiId of scoutSignupEmojiIds(setup.emojiByRole)) await message.react(emojiId);
+  if (!activatePostedScoutSetup(db, setup.id)) throw new Error('Scout setup could not be activated after posting.');
+  return message;
+}
+
+export async function reconcilePostingScoutSetups(client: Client, db: Database.Database): Promise<void> {
+  for (const setup of listPostingScoutSetups(db)) {
+    try {
+      await ensurePostedScoutSetup(client, db, setup);
+    } catch (error) {
+      console.error(`Scout signup post reconciliation failed for setup #${setup.id}`, error);
+    }
+  }
+}
 
 type ScoutCreateDraft = {
   id: string;
@@ -46,6 +130,7 @@ type ScoutCreateDraft = {
   divisionId: number;
   divisionKey: string;
   divisionDisplayName: string;
+  operationsChannelId: string;
   signupChannelId: string;
   resultsChannelId: string;
   divisionRoleId: string;
@@ -86,13 +171,21 @@ async function resolveScope(
   guild: Guild,
   userId: string,
   sourceChannelId: string,
+  divisionKey: string,
   db: Database.Database,
 ): Promise<ResolvedScope | undefined> {
+  const config = getScoutConfig(db, guild.id);
+  if (
+    !config?.operationsCategoryId ||
+    !config.operationsChannelId ||
+    sourceChannelId !== config.operationsChannelId
+  ) return undefined;
   const divisions = listDivisions(db, guild.id);
   const managedResources = listManagedResourcesByDomain(db, guild.id, 'division');
-  const group = resolveScoutChannelGroup({
+  const group = resolveScoutChannelGroupForDivision({
     guildId: guild.id,
-    sourceChannelId,
+    divisionKey,
+    operationsCategoryId: config.operationsCategoryId,
     divisions,
     managedResources,
     liveChannels: liveChannelMap(guild),
@@ -108,12 +201,7 @@ async function resolveScope(
 async function canManageScope(scope: ResolvedScope, guildId: string, db: Database.Database): Promise<boolean> {
   const config = getScoutConfig(db, guildId);
   const { hasAccess } = await import('./authorization.js');
-  return hasScoutManagementAccess({
-    isAdmin: hasAccess(scope.member, 'ADMIN'),
-    memberRoleIds: new Set(scope.member.roles.cache.keys()),
-    additionalAuthorizedRoleIds: config?.authorizedRoleIds ?? [],
-    divisionCaptainAccessRoleId: scope.division.captainAccessRoleId,
-  });
+  return hasScoutDivisionManagementAccess(scope.member, config, scope.division, hasAccess(scope.member, 'ADMIN'));
 }
 
 function completeEmojiMap(
@@ -234,10 +322,11 @@ export async function handleScoutCreateCommand(
     return;
   }
 
-  const scope = await resolveScope(interaction.guild, interaction.user.id, interaction.channelId, db);
+  const divisionKey = interaction.options.getString('division', true) as DivisionKey;
+  const scope = await resolveScope(interaction.guild, interaction.user.id, interaction.channelId, divisionKey, db);
   if (!scope) {
     await interaction.reply({
-      content: 'Run `/scout create` from a live managed division `scout-signups` channel.',
+      content: 'Run `/scout create` from the configured `scout-ops` channel after an admin binds it and repairs this division with `/division add`.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -272,6 +361,7 @@ export async function handleScoutCreateCommand(
     divisionId: scope.division.id,
     divisionKey: scope.division.divisionKey,
     divisionDisplayName: scope.division.displayName,
+    operationsChannelId: interaction.channelId,
     signupChannelId: scope.group.signupChannelId,
     resultsChannelId: scope.group.resultsChannelId,
     divisionRoleId: scope.division.roleId,
@@ -344,8 +434,19 @@ async function recheckDraftAccess(
   draft: ScoutCreateDraft,
   db: Database.Database,
 ): Promise<boolean> {
-  if (!interaction.guild || interaction.guild.id !== draft.guildId || interaction.user.id !== draft.userId) return false;
-  const scope = await resolveScope(interaction.guild, interaction.user.id, draft.signupChannelId, db);
+  if (
+    !interaction.guild ||
+    interaction.guild.id !== draft.guildId ||
+    interaction.user.id !== draft.userId ||
+    interaction.channelId !== draft.operationsChannelId
+  ) return false;
+  const scope = await resolveScope(
+    interaction.guild,
+    interaction.user.id,
+    draft.operationsChannelId,
+    draft.divisionKey,
+    db,
+  );
   if (!scope) return false;
   if (
     scope.division.id !== draft.divisionId ||
@@ -449,6 +550,7 @@ export async function handleScoutCreateButton(
       createdBy: draft.userId,
       signupChannelId: draft.signupChannelId,
       resultsChannelId: draft.resultsChannelId,
+      operationsChannelId: draft.operationsChannelId,
       divisionRoleId: draft.divisionRoleId,
       eligibilityRoleId: draft.eligibilityRoleId,
       emojiByRole: draft.emojiByRole,
@@ -467,30 +569,23 @@ export async function handleScoutCreateButton(
 
   let signupMessage;
   try {
-    const channel = await interaction.client.channels.fetch(draft.signupChannelId);
-    if (!channel?.isSendable()) throw new Error('Signup channel is not sendable.');
-    signupMessage = await channel.send({
-      content: renderScoutSignupPost({
-        divisionDisplayName: draft.divisionDisplayName,
-        divisionRoleId: draft.divisionRoleId,
-        startAt: draft.startAt,
-        roleLimit: draft.roleLimit,
-        note: draft.note,
-        eligibilityRoleId: draft.eligibilityRoleId,
-      }),
-      components: [scoutCancelButtonRow(setup.id, setup.version)],
-      allowedMentions: { parse: [], roles: [draft.divisionRoleId], users: [] },
-    });
-    if (!setScoutSetupSignupMessage(db, setup.id, signupMessage.id)) {
-      throw new Error('Scout setup could not be activated after posting.');
-    }
-    for (const emojiId of scoutSignupEmojiIds(draft.emojiByRole)) await signupMessage.react(emojiId);
+    signupMessage = await ensurePostedScoutSetup(interaction.client, db, setup);
   } catch (error) {
-    if (signupMessage) await signupMessage.delete().catch(() => undefined);
-    markScoutSetupPostingFailed(db, setup.id);
+    const persisted = getScoutSetupById(db, setup.id);
+    let postDeletionConfirmed = false;
+    if (persisted?.signupMessageId) {
+      const channel = await interaction.client.channels.fetch(persisted.signupChannelId).catch(() => undefined);
+      if (channel?.isTextBased()) {
+        const message = await channel.messages.fetch(persisted.signupMessageId).catch(() => undefined);
+        if (message) postDeletionConfirmed = await message.delete().then(() => true, () => false);
+      }
+    }
+    if (postDeletionConfirmed) markScoutSetupPostingFailed(db, setup.id);
     draft.posting = false;
     await interaction.editReply({
-      content: `Ratatoskr could not post and seed the scout signup reactions: ${(error as Error).message}`,
+      content: postDeletionConfirmed
+        ? `Ratatoskr could not post and seed the scout signup reactions: ${(error as Error).message}`
+        : `Ratatoskr could not finish seeding the scout signup reactions and could not confirm cleanup of the post. The setup remains pending so startup recovery can finish it safely: ${(error as Error).message}`,
       components: [],
     });
     return true;

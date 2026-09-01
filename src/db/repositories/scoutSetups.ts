@@ -12,6 +12,7 @@ type ScoutSetupRow = {
   created_by: string;
   signup_channel_id: string;
   results_channel_id: string;
+  operations_channel_id: string | null;
   division_role_id: string;
   eligibility_role_id: string | null;
   game_count: 1 | 2;
@@ -23,6 +24,8 @@ type ScoutSetupRow = {
   fill_emoji_id: string | null;
   signup_message_id: string | null;
   result_message_id: string | null;
+  control_message_id: string | null;
+  signup_post_reconciled: 0 | 1;
   start_at: number;
   role_limit: number;
   note: string | null;
@@ -50,6 +53,7 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
     createdBy: row.created_by,
     signupChannelId: row.signup_channel_id,
     resultsChannelId: row.results_channel_id,
+    operationsChannelId: row.operations_channel_id,
     divisionRoleId: row.division_role_id,
     eligibilityRoleId: row.eligibility_role_id,
     gameCount: row.game_count,
@@ -63,6 +67,8 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
     },
     signupMessageId: row.signup_message_id,
     resultMessageId: row.result_message_id,
+    controlMessageId: row.control_message_id,
+    signupPostReconciled: row.signup_post_reconciled === 1,
     startAt: row.start_at,
     roleLimit: row.role_limit,
     note: row.note,
@@ -75,10 +81,11 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
 
 export type CreateScoutSetupInput = Omit<
   ScoutSetup,
-  'id' | 'emojiByRole' | 'eligibilityRoleId' | 'gameCount' | 'signupMessageId' | 'resultMessageId' | 'status' | 'version' | 'note' | 'createdAt' | 'updatedAt'
+  'id' | 'emojiByRole' | 'eligibilityRoleId' | 'gameCount' | 'operationsChannelId' | 'signupMessageId' | 'resultMessageId' | 'controlMessageId' | 'signupPostReconciled' | 'status' | 'version' | 'note' | 'createdAt' | 'updatedAt'
 > & {
   emojiByRole: Record<ScoutRole, string> & { fill?: string | null };
   eligibilityRoleId?: string | null;
+  operationsChannelId?: string | null;
   note?: string | null;
 };
 
@@ -87,12 +94,12 @@ export function createScoutSetup(db: Database.Database, input: CreateScoutSetupI
     .prepare(
       `INSERT INTO scout_setups (
          guild_id, division_id, division_key, division_display_name, created_by,
-         signup_channel_id, results_channel_id, division_role_id, eligibility_role_id,
+         signup_channel_id, results_channel_id, operations_channel_id, division_role_id, eligibility_role_id,
          solo_emoji_id, jungle_emoji_id, mid_emoji_id, support_emoji_id, carry_emoji_id, fill_emoji_id,
          start_at, role_limit, note
        ) VALUES (
          @guildId, @divisionId, @divisionKey, @divisionDisplayName, @createdBy,
-         @signupChannelId, @resultsChannelId, @divisionRoleId, @eligibilityRoleId,
+         @signupChannelId, @resultsChannelId, @operationsChannelId, @divisionRoleId, @eligibilityRoleId,
          @soloEmojiId, @jungleEmojiId, @midEmojiId, @supportEmojiId, @carryEmojiId, @fillEmojiId,
          @startAt, @roleLimit, @note
        ) RETURNING *`,
@@ -105,6 +112,7 @@ export function createScoutSetup(db: Database.Database, input: CreateScoutSetupI
       supportEmojiId: input.emojiByRole.support,
       carryEmojiId: input.emojiByRole.carry,
       fillEmojiId: input.emojiByRole.fill ?? null,
+      operationsChannelId: input.operationsChannelId ?? null,
       eligibilityRoleId: input.eligibilityRoleId ?? null,
       note: input.note ?? null,
     }) as ScoutSetupRow;
@@ -124,6 +132,117 @@ export function getScoutSetupBySignupMessageId(
     .prepare('SELECT * FROM scout_setups WHERE signup_message_id = ?')
     .get(signupMessageId) as ScoutSetupRow | undefined;
   return row ? toScoutSetup(row) : undefined;
+}
+
+export function listPostingScoutSetups(db: Database.Database): ScoutSetup[] {
+  const rows = db.prepare("SELECT * FROM scout_setups WHERE status = 'posting' ORDER BY id").all() as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
+
+export function listActiveScoutSetups(db: Database.Database): ScoutSetup[] {
+  const rows = db
+    .prepare("SELECT * FROM scout_setups WHERE status IN ('open', 'roster_ready') AND signup_message_id IS NOT NULL ORDER BY id")
+    .all() as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
+
+export function listScoutPublishesNeedingReconciliation(db: Database.Database): ScoutSetup[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM scout_setups
+       WHERE status = 'published'
+         AND (result_message_id IS NULL OR signup_post_reconciled = 0)
+       ORDER BY id`,
+    )
+    .all() as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
+
+export function listTerminalScoutSetupsWithControlPanels(db: Database.Database): ScoutSetup[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM scout_setups
+       WHERE status IN ('published', 'cancelled') AND control_message_id IS NOT NULL
+       ORDER BY id`,
+    )
+    .all() as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
+
+export function listRosterReadyScoutSetups(db: Database.Database): ScoutSetup[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM scout_setups
+       WHERE status = 'roster_ready'
+         AND operations_channel_id IS NOT NULL
+       ORDER BY id`,
+    )
+    .all() as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
+
+export function listCancelledScoutSetupsNeedingSignupPostReconciliation(
+  db: Database.Database,
+): ScoutSetup[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM scout_setups
+       WHERE status = 'cancelled'
+         AND signup_post_reconciled = 0
+         AND signup_message_id IS NOT NULL
+       ORDER BY id`,
+    )
+    .all() as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
+
+export function setScoutControlMessage(
+  db: Database.Database,
+  setupId: number,
+  controlMessageId: string,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups
+       SET control_message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'roster_ready'
+         AND operations_channel_id IS NOT NULL
+         AND control_message_id IS NULL`,
+    )
+    .run(controlMessageId, setupId);
+  return result.changes === 1;
+}
+
+export function replaceScoutControlMessage(
+  db: Database.Database,
+  setupId: number,
+  expectedControlMessageId: string,
+  controlMessageId: string,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups
+       SET control_message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'roster_ready'
+         AND operations_channel_id IS NOT NULL
+         AND control_message_id = ?`,
+    )
+    .run(controlMessageId, setupId, expectedControlMessageId);
+  return result.changes === 1;
+}
+
+export function markCancelledScoutSignupPostReconciled(
+  db: Database.Database,
+  setupId: number,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups
+       SET signup_post_reconciled = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'cancelled' AND signup_post_reconciled = 0`,
+    )
+    .run(setupId);
+  return result.changes === 1;
 }
 
 export function listCancellableScoutSetups(
@@ -198,6 +317,48 @@ export function setScoutSetupSignupMessage(
   return result.changes === 1;
 }
 
+export function setScoutPostingMessage(
+  db: Database.Database,
+  setupId: number,
+  signupMessageId: string,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups
+       SET signup_message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'posting' AND signup_message_id IS NULL`,
+    )
+    .run(signupMessageId, setupId);
+  return result.changes === 1;
+}
+
+export function replaceScoutPostingMessage(
+  db: Database.Database,
+  setupId: number,
+  expectedSignupMessageId: string,
+  signupMessageId: string,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups
+       SET signup_message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'posting' AND signup_message_id = ?`,
+    )
+    .run(signupMessageId, setupId, expectedSignupMessageId);
+  return result.changes === 1;
+}
+
+export function activatePostedScoutSetup(db: Database.Database, setupId: number): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups
+       SET status = 'open', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'posting' AND signup_message_id IS NOT NULL`,
+    )
+    .run(setupId);
+  return result.changes === 1;
+}
+
 export function markScoutSetupPostingFailed(db: Database.Database, setupId: number): void {
   db.prepare(
     `UPDATE scout_setups SET status = 'posting_failed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -261,6 +422,42 @@ export function listScoutSignups(db: Database.Database, setupId: number): ScoutS
     role: row.role,
     createdAt: row.created_at,
   }));
+}
+
+export function replaceScoutSignups(
+  db: Database.Database,
+  setupId: number,
+  signups: readonly { userId: string; role: ScoutSignupRole }[],
+): boolean {
+  return db.transaction(() => {
+    const setup = db.prepare('SELECT status, role_limit FROM scout_setups WHERE id = ?').get(setupId) as
+      | { status: ScoutSetupStatus; role_limit: number }
+      | undefined;
+    if (!setup || !['open', 'roster_ready'].includes(setup.status)) return false;
+    const unique = new Map<string, { userId: string; role: ScoutSignupRole }>();
+    const counts = new Map<string, number>();
+    for (const signup of signups) {
+      const key = `${signup.userId}:${signup.role}`;
+      if (unique.has(key)) continue;
+      const count = counts.get(signup.userId) ?? 0;
+      if (count >= setup.role_limit) continue;
+      unique.set(key, signup);
+      counts.set(signup.userId, count + 1);
+    }
+    const acceptedKeys = new Set(unique.keys());
+    const existing = db
+      .prepare('SELECT user_id, role FROM scout_signups WHERE setup_id = ?')
+      .all(setupId) as { user_id: string; role: ScoutSignupRole }[];
+    const remove = db.prepare('DELETE FROM scout_signups WHERE setup_id = ? AND user_id = ? AND role = ?');
+    for (const signup of existing) {
+      if (!acceptedKeys.has(`${signup.user_id}:${signup.role}`)) {
+        remove.run(setupId, signup.user_id, signup.role);
+      }
+    }
+    const insert = db.prepare('INSERT OR IGNORE INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, ?)');
+    for (const signup of unique.values()) insert.run(setupId, signup.userId, signup.role);
+    return true;
+  })();
 }
 
 type ScoutRosterSlotRow = {
@@ -457,17 +654,28 @@ export function claimScoutPublish(
   })();
 }
 
-export function releaseScoutPublishClaim(db: Database.Database, setupId: number): boolean {
+export function releaseScoutPublishClaim(
+  db: Database.Database,
+  setupId: number,
+  expectedResultMessageId?: string,
+): boolean {
   const result = db
     .prepare(
-      `UPDATE scout_setups SET status = 'roster_ready', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND status = 'published' AND result_message_id IS NULL`,
+      `UPDATE scout_setups
+       SET status = 'roster_ready', result_message_id = NULL, signup_post_reconciled = 0,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'published'
+         AND (result_message_id IS NULL OR result_message_id = ?)`,
     )
-    .run(setupId);
+    .run(setupId, expectedResultMessageId ?? null);
   return result.changes === 1;
 }
 
-export function setScoutResultMessage(db: Database.Database, setupId: number, resultMessageId: string): boolean {
+export function setScoutPendingResultMessage(
+  db: Database.Database,
+  setupId: number,
+  resultMessageId: string,
+): boolean {
   const result = db
     .prepare(
       `UPDATE scout_setups SET result_message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -475,6 +683,28 @@ export function setScoutResultMessage(db: Database.Database, setupId: number, re
     )
     .run(resultMessageId, setupId);
   return result.changes === 1;
+}
+
+export function markPublishedScoutSignupPostReconciled(
+  db: Database.Database,
+  setupId: number,
+  resultMessageId: string,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE scout_setups SET signup_post_reconciled = 1,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND status = 'published' AND result_message_id = ?
+         AND signup_post_reconciled = 0`,
+    )
+    .run(setupId, resultMessageId);
+  return result.changes === 1;
+}
+
+export function setScoutResultMessage(db: Database.Database, setupId: number, resultMessageId: string): boolean {
+  return db.transaction(() =>
+    setScoutPendingResultMessage(db, setupId, resultMessageId) &&
+    markPublishedScoutSignupPostReconciled(db, setupId, resultMessageId))();
 }
 
 export function replacePublishedScoutRosterSlotIfVersion(

@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  ChannelType,
   MessageFlags,
   RoleSelectMenuBuilder,
   SlashCommandBuilder,
@@ -7,9 +8,11 @@ import {
   type RoleSelectMenuInteraction,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
+import { divisions } from '../config/guild-structure.js';
 import {
   ensureScoutConfig,
   setScoutAuthorizedRoleIds,
+  setScoutOperationsChannel,
   setScoutTimezone,
   type ScoutConfig,
 } from '../db/index.js';
@@ -17,16 +20,35 @@ import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS } from '../domain/index.js
 import { isValidScoutTimezone, listScoutTimezones } from '../services/scoutConfig.js';
 
 export const SCOUT_CONFIG_ROLES_CUSTOM_ID = 'scout:config:authorized_roles';
+const divisionChoices = divisions.map((division) => ({ name: division.name, value: division.key }));
 
 export const scoutCommand = new SlashCommandBuilder()
   .setName('scout')
   .setDescription('Create and manage preseason scouting games.')
   .setDMPermission(false)
   .addSubcommand((subcommand) =>
-    subcommand.setName('create').setDescription('Set up and post a scouting game for this division.'),
+    subcommand
+      .setName('create')
+      .setDescription('Set up and post a scouting game for a division.')
+      .addStringOption((option) =>
+        option
+          .setName('division')
+          .setDescription('Division whose signup and results channels will be used.')
+          .setRequired(true)
+          .addChoices(...divisionChoices),
+      ),
   )
   .addSubcommand((subcommand) =>
-    subcommand.setName('cancel').setDescription('Cancel an open scouting game for this division.'),
+    subcommand
+      .setName('cancel')
+      .setDescription('Cancel an open scouting game for a division.')
+      .addStringOption((option) =>
+        option
+          .setName('division')
+          .setDescription('Division whose scouting game should be cancelled.')
+          .setRequired(true)
+          .addChoices(...divisionChoices),
+      ),
   )
   .addSubcommand((subcommand) =>
     subcommand
@@ -44,6 +66,13 @@ export const scoutCommand = new SlashCommandBuilder()
           .setName('bind_emoji')
           .setDescription('Bind five role emojis and optional Fill.')
           .setRequired(false),
+      )
+      .addChannelOption((option) =>
+        option
+          .setName('operations_channel')
+          .setDescription('Bind the staff control channel inside the manually created Scout Operations category.')
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(false),
       ),
   );
 
@@ -53,7 +82,7 @@ function renderScoutConfig(config: ScoutConfig): {
 } {
   const staffRoles = config.authorizedRoleIds.length
     ? config.authorizedRoleIds.map((roleId) => `<@&${roleId}>`).join(', ')
-    : 'None (admins and each division\'s own captains still retain their built-in access)';
+    : 'None';
   const emoji = SCOUT_SIGNUP_ROLES.map((role) => {
     const emojiId = config.emojiByRole[role];
     const missing = role === 'fill' ? 'not bound (optional)' : 'not bound';
@@ -72,6 +101,8 @@ function renderScoutConfig(config: ScoutConfig): {
       '**Scout configuration**',
       `Timezone: \`${config.timezone}\``,
       `Additional scout staff: ${staffRoles}`,
+      'Built-in access: Allfather, Aesir, Franchise Representative, and the selected division\'s Manager and Captain.',
+      `Operations channel: ${config.operationsChannelId ? `<#${config.operationsChannelId}>` : 'not bound'}`,
       '',
       emoji,
       '',
@@ -116,13 +147,45 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
   let config = ensureScoutConfig(db, interaction.guild.id);
   if (timezone) config = setScoutTimezone(db, interaction.guild.id, timezone);
 
+  const selectedOperationsChannel = interaction.options.getChannel('operations_channel');
+  const operationsChannel = selectedOperationsChannel
+    ? await interaction.guild.channels.fetch(selectedOperationsChannel.id)
+    : null;
+  if (operationsChannel) {
+    if (operationsChannel.type !== ChannelType.GuildText || !operationsChannel.parentId) {
+      await interaction.reply({
+        content: 'The Scout Operations control channel must be a server text channel inside a category.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    config = setScoutOperationsChannel(
+      db,
+      interaction.guild.id,
+      operationsChannel.parentId,
+      operationsChannel.id,
+    );
+  }
+
   if (interaction.options.getBoolean('bind_emoji')) {
     const { startScoutEmojiBinding } = await import('../services/scoutEmojiBinding.js');
     await startScoutEmojiBinding(interaction);
+    if (operationsChannel) {
+      const { reconcileActiveScoutSignups } = await import('../services/scoutSignups.js');
+      const { reconcileScoutControlPanels } = await import('../services/scoutControlPanel.js');
+      await reconcileActiveScoutSignups(interaction.client, db);
+      await reconcileScoutControlPanels(interaction.client, db);
+    }
     return;
   }
 
   await interaction.reply({ ...renderScoutConfig(config), flags: MessageFlags.Ephemeral });
+  if (operationsChannel) {
+    const { reconcileActiveScoutSignups } = await import('../services/scoutSignups.js');
+    const { reconcileScoutControlPanels } = await import('../services/scoutControlPanel.js');
+    await reconcileActiveScoutSignups(interaction.client, db);
+    await reconcileScoutControlPanels(interaction.client, db);
+  }
 }
 
 export async function handleScoutConfigRoleSelect(

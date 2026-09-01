@@ -8,7 +8,8 @@ type DivisionRow = {
   display_name: string;
   season_id: number | null;
   role_id: string | null;
-  captain_access_role_id: string | null;
+  manager_role_id: string | null;
+  captain_role_id: string | null;
   category_id: string | null;
   status: DivisionStatus;
   created_at: string;
@@ -23,7 +24,8 @@ function toDivisionRecord(row: DivisionRow): DivisionRecord {
     displayName: row.display_name,
     seasonId: row.season_id,
     roleId: row.role_id,
-    captainAccessRoleId: row.captain_access_role_id,
+    managerRoleId: row.manager_role_id,
+    captainRoleId: row.captain_role_id,
     categoryId: row.category_id,
     status: row.status,
     createdAt: row.created_at,
@@ -37,7 +39,8 @@ export type UpsertDivisionInput = {
   displayName: string;
   seasonId?: number | null;
   roleId?: string | null;
-  captainAccessRoleId?: string | null;
+  managerRoleId?: string | null;
+  captainRoleId?: string | null;
   categoryId?: string | null;
 };
 
@@ -58,13 +61,14 @@ export function upsertDivision(db: Database.Database, input: UpsertDivisionInput
   const row = db
     .prepare(
       `
-      INSERT INTO divisions (guild_id, division_key, display_name, season_id, role_id, captain_access_role_id, category_id, status)
-      VALUES (@guildId, @divisionKey, @displayName, @seasonId, @roleId, @captainAccessRoleId, @categoryId, 'active')
+      INSERT INTO divisions (guild_id, division_key, display_name, season_id, role_id, manager_role_id, captain_role_id, category_id, status)
+      VALUES (@guildId, @divisionKey, @displayName, @seasonId, @roleId, @managerRoleId, @captainRoleId, @categoryId, 'active')
       ON CONFLICT (guild_id, division_key) DO UPDATE SET
         display_name = excluded.display_name,
         season_id = excluded.season_id,
         role_id = excluded.role_id,
-        captain_access_role_id = excluded.captain_access_role_id,
+        manager_role_id = excluded.manager_role_id,
+        captain_role_id = excluded.captain_role_id,
         category_id = excluded.category_id,
         status = 'active',
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -77,7 +81,8 @@ export function upsertDivision(db: Database.Database, input: UpsertDivisionInput
       displayName: input.displayName,
       seasonId: input.seasonId ?? null,
       roleId: input.roleId ?? null,
-      captainAccessRoleId: input.captainAccessRoleId ?? null,
+      managerRoleId: input.managerRoleId ?? null,
+      captainRoleId: input.captainRoleId ?? null,
       categoryId: input.categoryId ?? null,
     }) as DivisionRow;
 

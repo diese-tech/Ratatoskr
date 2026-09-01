@@ -16,8 +16,12 @@ export function divisionRoleLogicalKey(divisionKey: string): string {
   return `division:${divisionKey}:role`;
 }
 
-export function divisionCaptainAccessRoleLogicalKey(divisionKey: string): string {
-  return `division:${divisionKey}:captain_access_role`;
+export function divisionManagerRoleLogicalKey(divisionKey: string): string {
+  return `division:${divisionKey}:manager_role`;
+}
+
+export function divisionCaptainRoleLogicalKey(divisionKey: string): string {
+  return `division:${divisionKey}:captain_role`;
 }
 
 export function divisionCategoryLogicalKey(divisionKey: string): string {
