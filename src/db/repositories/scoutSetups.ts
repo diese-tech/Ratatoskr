@@ -141,6 +141,21 @@ export function listCancellableScoutSetups(
 
 export const listDivisionScoutLifecycleBlockers = listCancellableScoutSetups;
 
+export function listOverlappingScoutSetups(
+  db: Database.Database,
+  guildId: string,
+  createdBy: string,
+  startAt: number,
+): ScoutSetup[] {
+  const rows = db.prepare(
+    `SELECT * FROM scout_setups
+     WHERE guild_id = ? AND created_by = ? AND start_at = ?
+       AND status IN ('posting', 'open', 'roster_ready', 'published')
+     ORDER BY id`,
+  ).all(guildId, createdBy, startAt) as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
+
 export type CancelScoutSetupOutcome = 'cancelled' | 'published' | 'already_cancelled' | 'stale';
 
 export function cancelScoutSetupIfVersion(

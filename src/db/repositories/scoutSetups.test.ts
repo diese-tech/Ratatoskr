@@ -12,6 +12,7 @@ import {
   listScoutRosterSlots,
   listCancellableScoutSetups,
   listDivisionScoutLifecycleBlockers,
+  listOverlappingScoutSetups,
   replaceScoutRosterIfVersion,
   replaceScoutRosterSlotIfVersion,
   replacePublishedScoutRosterSlotIfVersion,
@@ -248,6 +249,29 @@ test('publishing is an exclusive retryable claim and published replacement is ve
     assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'replacement-final'), 'updated');
     assert.equal(getScoutSetupBySignupMessageId(db, 'message-publish')?.resultMessageId, 'result-1');
     assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, 'replacement-final');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('same-time overlap lookup is coordinator-scoped and ignores cancelled setups', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const create = (createdBy: string, startAt: number) => createScoutSetup(db, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy, signupChannelId: 'signups-1',
+      resultsChannelId: 'results-1', divisionRoleId: 'division-role', emojiByRole,
+      startAt, roleLimit: 2,
+    });
+    const active = create('captain-1', 2_000_000_000);
+    setScoutSetupSignupMessage(db, active.id, 'active-message');
+    const cancelled = create('captain-1', 2_000_000_000);
+    setScoutSetupSignupMessage(db, cancelled.id, 'cancelled-message');
+    cancelScoutSetupIfVersion(db, cancelled.id, 0);
+    create('captain-2', 2_000_000_000);
+    create('captain-1', 2_000_003_600);
+
+    assert.deepEqual(listOverlappingScoutSetups(db, 'guild-1', 'captain-1', 2_000_000_000).map((setup) => setup.id), [active.id]);
   } finally {
     closeDatabase(db);
   }

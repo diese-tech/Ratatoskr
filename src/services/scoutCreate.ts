@@ -23,6 +23,7 @@ import {
   getScoutConfig,
   listDivisions,
   listManagedResourcesByDomain,
+  listOverlappingScoutSetups,
   markScoutSetupPostingFailed,
   missingScoutConfigFields,
   setScoutSetupSignupMessage,
@@ -292,6 +293,34 @@ export async function handleScoutCreateCommand(
   await interaction.showModal(detailsModal(draft));
 }
 
+function overlapConfirmationView(draft: ScoutCreateDraft, overlaps: ReturnType<typeof listOverlappingScoutSetups>) {
+  const existing = overlaps.map((setup) => {
+    const link = setup.signupMessageId
+      ? `https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}`
+      : '_signup post is still being created_';
+    return `- ${setup.divisionDisplayName} — ${setup.status} — ${link}`;
+  });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${CUSTOM_ID_PREFIX}postanyway:${draft.id}`)
+      .setLabel('Create another setup')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`${CUSTOM_ID_PREFIX}edit:${draft.id}`)
+      .setLabel('Go back')
+      .setStyle(ButtonStyle.Secondary),
+  );
+  return {
+    content: [
+      '**Another setup from you is scheduled for this same time.**',
+      ...existing,
+      '',
+      'This creates a separate signup pool. It is not the two-game shared-roster option.',
+    ].join('\n'),
+    components: [row],
+  };
+}
+
 export async function handleScoutCreateRoleSelect(
   interaction: RoleSelectMenuInteraction,
   db: Database.Database,
@@ -371,7 +400,7 @@ export async function handleScoutCreateButton(
 ): Promise<boolean> {
   if (!interaction.customId.startsWith(CUSTOM_ID_PREFIX)) return false;
   const [, , action, draftId] = interaction.customId.split(':');
-  if (!draftId || !['post', 'edit', 'cancel'].includes(action ?? '')) return false;
+  if (!draftId || !['post', 'postanyway', 'edit', 'cancel'].includes(action ?? '')) return false;
 
   const draft = getLiveDraft(draftId);
   if (!draft || !(await recheckDraftAccess(interaction, draft, db))) {
@@ -398,6 +427,14 @@ export async function handleScoutCreateButton(
   if (draft.startAt === null) {
     await interaction.reply({ content: 'Enter valid setup details before posting.', flags: MessageFlags.Ephemeral });
     return true;
+  }
+
+  if (action === 'post') {
+    const overlaps = listOverlappingScoutSetups(db, draft.guildId, draft.userId, draft.startAt);
+    if (overlaps.length) {
+      await interaction.update(overlapConfirmationView(draft, overlaps));
+      return true;
+    }
   }
 
   draft.posting = true;
