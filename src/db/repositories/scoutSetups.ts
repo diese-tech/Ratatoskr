@@ -13,6 +13,7 @@ type ScoutSetupRow = {
   signup_channel_id: string;
   results_channel_id: string;
   division_role_id: string;
+  eligibility_role_id: string | null;
   solo_emoji_id: string;
   jungle_emoji_id: string;
   mid_emoji_id: string;
@@ -49,6 +50,7 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
     signupChannelId: row.signup_channel_id,
     resultsChannelId: row.results_channel_id,
     divisionRoleId: row.division_role_id,
+    eligibilityRoleId: row.eligibility_role_id,
     emojiByRole: {
       solo: row.solo_emoji_id,
       jungle: row.jungle_emoji_id,
@@ -71,9 +73,10 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
 
 export type CreateScoutSetupInput = Omit<
   ScoutSetup,
-  'id' | 'emojiByRole' | 'signupMessageId' | 'resultMessageId' | 'status' | 'version' | 'note' | 'createdAt' | 'updatedAt'
+  'id' | 'emojiByRole' | 'eligibilityRoleId' | 'signupMessageId' | 'resultMessageId' | 'status' | 'version' | 'note' | 'createdAt' | 'updatedAt'
 > & {
   emojiByRole: Record<ScoutRole, string> & { fill?: string | null };
+  eligibilityRoleId?: string | null;
   note?: string | null;
 };
 
@@ -82,12 +85,12 @@ export function createScoutSetup(db: Database.Database, input: CreateScoutSetupI
     .prepare(
       `INSERT INTO scout_setups (
          guild_id, division_id, division_key, division_display_name, created_by,
-         signup_channel_id, results_channel_id, division_role_id,
+         signup_channel_id, results_channel_id, division_role_id, eligibility_role_id,
          solo_emoji_id, jungle_emoji_id, mid_emoji_id, support_emoji_id, carry_emoji_id, fill_emoji_id,
          start_at, role_limit, note
        ) VALUES (
          @guildId, @divisionId, @divisionKey, @divisionDisplayName, @createdBy,
-         @signupChannelId, @resultsChannelId, @divisionRoleId,
+         @signupChannelId, @resultsChannelId, @divisionRoleId, @eligibilityRoleId,
          @soloEmojiId, @jungleEmojiId, @midEmojiId, @supportEmojiId, @carryEmojiId, @fillEmojiId,
          @startAt, @roleLimit, @note
        ) RETURNING *`,
@@ -100,6 +103,7 @@ export function createScoutSetup(db: Database.Database, input: CreateScoutSetupI
       supportEmojiId: input.emojiByRole.support,
       carryEmojiId: input.emojiByRole.carry,
       fillEmojiId: input.emojiByRole.fill ?? null,
+      eligibilityRoleId: input.eligibilityRoleId ?? null,
       note: input.note ?? null,
     }) as ScoutSetupRow;
   return toScoutSetup(row);

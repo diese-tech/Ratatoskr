@@ -30,6 +30,7 @@ import { hasScoutManagementAccess } from './scoutAuthorization.js';
 import { scoutReviewButtonRow } from './scoutReview.js';
 import { renderScoutResult } from './scoutResults.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
+import { isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
 
 function replacementRow(setupId: number, version: number) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -107,6 +108,21 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
   }
 
   await interaction.deferUpdate();
+  const preflightSlots = listScoutRosterSlots(db, setupId);
+  const eligibleUserIds = await resolveEligibleScoutUserIds(
+    interaction.guild!,
+    preflightSlots.map((slot) => slot.userId),
+    setup.eligibilityRoleId,
+  );
+  const ineligible = preflightSlots.filter((slot) => !eligibleUserIds.has(slot.userId));
+  if (ineligible.length) {
+    await interaction.editReply({
+      content: `Publishing is blocked because these players no longer satisfy the eligibility role: ${ineligible.map((slot) => `<@${slot.userId}>`).join(', ')}`,
+      components: [],
+      allowedMentions: { parse: [] },
+    });
+    return true;
+  }
   const claim = claimScoutPublish(db, setupId, expectedVersion);
   if (claim !== 'claimed') {
     await interaction.editReply({
@@ -206,6 +222,10 @@ export async function handleScoutPublishedUserSelect(
   }
   if (replacementMember.user.bot) {
     await interaction.reply({ content: 'A bot cannot be used as a scout replacement.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (!isScoutUserEligible(replacementMember.roles.cache.keys(), setup.eligibilityRoleId)) {
+    await interaction.reply({ content: 'The replacement does not hold this setup\'s eligibility role.', flags: MessageFlags.Ephemeral });
     return true;
   }
   const oldSlot = listScoutRosterSlots(db, setupId).find((slot) => slot.id === slotId);

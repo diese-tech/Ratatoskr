@@ -10,12 +10,13 @@ const setup = {
 };
 
 test('scout signup preview and public post share content but only the public post pings', () => {
-  const preview = renderScoutSignupPost(setup);
-  const posted = renderScoutSignupPost({ ...setup, divisionRoleId: 'division-role' });
+  const preview = renderScoutSignupPost({ ...setup, eligibilityRoleId: 'silver-role' });
+  const posted = renderScoutSignupPost({ ...setup, eligibilityRoleId: 'silver-role', divisionRoleId: 'division-role' });
 
   assert.equal(preview.includes('<@&division-role>'), false);
   assert.equal(posted.startsWith('<@&division-role>\n'), true);
   assert.equal(posted.slice(posted.indexOf('\n') + 1), preview);
   assert.match(preview, /Vanaheim Scout Games/);
   assert.match(preview, /2 roles/);
+  assert.match(preview, /Eligibility: <@&silver-role>/);
 });

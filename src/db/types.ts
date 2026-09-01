@@ -88,6 +88,7 @@ export type ScoutSetup = {
   signupChannelId: string;
   resultsChannelId: string;
   divisionRoleId: string;
+  eligibilityRoleId: string | null;
   emojiByRole: Record<ScoutRole, string> & { fill: string | null };
   signupMessageId: string | null;
   resultMessageId: string | null;

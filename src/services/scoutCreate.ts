@@ -6,6 +6,7 @@ import {
   ChannelType,
   MessageFlags,
   ModalBuilder,
+  RoleSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
   type ButtonInteraction,
@@ -13,6 +14,7 @@ import {
   type Guild,
   type GuildMember,
   type ModalSubmitInteraction,
+  type RoleSelectMenuInteraction,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
@@ -46,6 +48,7 @@ type ScoutCreateDraft = {
   signupChannelId: string;
   resultsChannelId: string;
   divisionRoleId: string;
+  eligibilityRoleId: string | null;
   emojiByRole: Record<ScoutRole, string> & { fill: string | null };
   timezone: string;
   startInput: string;
@@ -177,12 +180,19 @@ function previewView(draft: ScoutCreateDraft, error?: string) {
           startAt: draft.startAt!,
           roleLimit: draft.roleLimit,
           note: draft.note,
+          eligibilityRoleId: draft.eligibilityRoleId,
         })
       : 'Fix the setup details before posting.',
   ]
     .filter(Boolean)
     .join('\n\n');
 
+  const roleMenu = new RoleSelectMenuBuilder()
+    .setCustomId(`${CUSTOM_ID_PREFIX}eligibility:${draft.id}`)
+    .setPlaceholder('Eligible role (optional)')
+    .setMinValues(0)
+    .setMaxValues(1);
+  if (draft.eligibilityRoleId) roleMenu.setDefaultRoles(draft.eligibilityRoleId);
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${CUSTOM_ID_PREFIX}post:${draft.id}`)
@@ -198,7 +208,10 @@ function previewView(draft: ScoutCreateDraft, error?: string) {
       .setLabel('Cancel')
       .setStyle(ButtonStyle.Danger),
   );
-  return { content, components: [row] };
+  return {
+    content,
+    components: [new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(roleMenu), row],
+  };
 }
 
 function getLiveDraft(draftId: string): ScoutCreateDraft | undefined {
@@ -261,6 +274,7 @@ export async function handleScoutCreateCommand(
     signupChannelId: scope.group.signupChannelId,
     resultsChannelId: scope.group.resultsChannelId,
     divisionRoleId: scope.division.roleId,
+    eligibilityRoleId: null,
     emojiByRole,
     timezone: config.timezone,
     startInput: '',
@@ -278,8 +292,26 @@ export async function handleScoutCreateCommand(
   await interaction.showModal(detailsModal(draft));
 }
 
+export async function handleScoutCreateRoleSelect(
+  interaction: RoleSelectMenuInteraction,
+  db: Database.Database,
+): Promise<boolean> {
+  if (!interaction.customId.startsWith(`${CUSTOM_ID_PREFIX}eligibility:`)) return false;
+  const draft = getLiveDraft(interaction.customId.slice(`${CUSTOM_ID_PREFIX}eligibility:`.length));
+  if (!draft || !(await recheckDraftAccess(interaction, draft, db))) {
+    await interaction.reply({
+      content: 'This private scout setup expired, restarted, or you no longer have access. Run `/scout create` again.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+  draft.eligibilityRoleId = interaction.values[0] ?? null;
+  await interaction.update(previewView(draft));
+  return true;
+}
+
 async function recheckDraftAccess(
-  interaction: ButtonInteraction | ModalSubmitInteraction,
+  interaction: ButtonInteraction | ModalSubmitInteraction | RoleSelectMenuInteraction,
   draft: ScoutCreateDraft,
   db: Database.Database,
 ): Promise<boolean> {
@@ -381,6 +413,7 @@ export async function handleScoutCreateButton(
       signupChannelId: draft.signupChannelId,
       resultsChannelId: draft.resultsChannelId,
       divisionRoleId: draft.divisionRoleId,
+      eligibilityRoleId: draft.eligibilityRoleId,
       emojiByRole: draft.emojiByRole,
       startAt: draft.startAt,
       roleLimit: draft.roleLimit,
@@ -406,6 +439,7 @@ export async function handleScoutCreateButton(
         startAt: draft.startAt,
         roleLimit: draft.roleLimit,
         note: draft.note,
+        eligibilityRoleId: draft.eligibilityRoleId,
       }),
       components: [scoutCancelButtonRow(setup.id, setup.version)],
       allowedMentions: { parse: [], roles: [draft.divisionRoleId], users: [] },

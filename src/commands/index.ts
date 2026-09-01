@@ -31,6 +31,8 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   }
 
   if (interaction.isRoleSelectMenu()) {
+    const { handleScoutCreateRoleSelect } = await import('../services/scoutCreate.js');
+    if (await handleScoutCreateRoleSelect(interaction, db)) return;
     if (await handleScoutConfigRoleSelect(interaction, db)) return;
   }
 

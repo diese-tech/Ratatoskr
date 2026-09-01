@@ -16,7 +16,7 @@ The bot needs View Channel, Send Messages, Read Message History, Add Reactions, 
 ## Run a scout setup
 
 1. From `<division>-scout-signups`, run `/scout create`.
-2. Enter the start time, number of roles each player may select, and an optional note.
+2. Enter the start time, number of roles each player may select, and an optional note. Optionally select one Discord eligibility role; all reactions remain recorded, but only current members of that role may be rostered.
 3. Review the private preview and post it. The division role is pinged only when the public post is created.
 4. Players react for roles. Ratatoskr enforces the per-player limit separately for each setup.
 5. When ten compatible players can fill Solo, Jungle, Mid, Support, and Carry on both teams, the original post gains Review roster and Cancel setup controls. A Fill signup counts against the player's selection limit and may satisfy any missing standard role; explicit role selections are preferred.

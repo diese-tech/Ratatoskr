@@ -338,4 +338,11 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_scout_signups_setup ON scout_signups(setup_id);
     `,
   },
+  {
+    id: 10,
+    name: 'scout_setup_eligibility_role',
+    sql: `
+      ALTER TABLE scout_setups ADD COLUMN eligibility_role_id TEXT;
+    `,
+  },
 ];

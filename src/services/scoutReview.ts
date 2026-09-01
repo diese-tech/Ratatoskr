@@ -32,6 +32,7 @@ import {
   SCOUT_TEAMS,
 } from '../domain/index.js';
 import { hasScoutManagementAccess } from './scoutAuthorization.js';
+import { eligibleScoutSignups, isScoutUserEligible } from './scoutEligibility.js';
 import { scoutCancelButton } from './scoutCancel.js';
 
 export function scoutReviewButtonRow(setupId: number) {
@@ -157,7 +158,7 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
   const expectedVersion = Number(parts[3]);
   if (!Number.isInteger(expectedVersion)) return false;
   const current = listScoutRosterSlots(db, setup.id);
-  const signups = listScoutSignups(db, setup.id);
+  const signups = await eligibleScoutSignups(interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
   const generated = generateDifferentScoutRoster(signups, scoutRosterFingerprint(current));
   if (!generated.result.feasible || !generated.isDifferent) {
     await interaction.update(buildScoutRosterReviewView(db, setup.id, setup.version, current, 'No different valid roster is available.'));
@@ -202,9 +203,12 @@ export async function handleScoutReviewStringSelect(
   if (action === 'eligible') {
     const slotId = Number(parts[5]);
     const slot = slots.find((candidate) => candidate.id === slotId);
-    const stillEligible = slot && listScoutSignups(db, setupId).some(
-      (signup) => signup.userId === selected && signup.role === slot.role,
-    );
+    const selectedMember = selected ? await interaction.guild?.members.fetch(selected).catch(() => undefined) : undefined;
+    const stillEligible = slot && selectedMember &&
+      isScoutUserEligible(selectedMember.roles.cache.keys(), setup.eligibilityRoleId) &&
+      listScoutSignups(db, setupId).some(
+        (signup) => signup.userId === selected && (signup.role === slot.role || signup.role === 'fill'),
+      );
     if (!stillEligible) {
       await interaction.update(buildScoutRosterReviewView(db, setupId, setup.version, slots, 'That player is no longer an eligible signup for this slot.'));
       return true;
@@ -237,8 +241,9 @@ export async function handleScoutReviewStringSelect(
   }
   if (action === 'replacefirst') {
     const rostered = new Set(slots.map((slot) => slot.userId));
-    const eligible = listScoutSignups(db, setupId)
-      .filter((signup) => signup.role === source.role && !rostered.has(signup.userId))
+    const eligibleSignups = await eligibleScoutSignups(interaction.guild!, listScoutSignups(db, setupId), setup.eligibilityRoleId);
+    const eligible = eligibleSignups
+      .filter((signup) => (signup.role === source.role || signup.role === 'fill') && !rostered.has(signup.userId))
       .map((signup) => signup.userId)
       .filter((userId, index, all) => all.indexOf(userId) === index)
       .slice(0, 25);
@@ -274,8 +279,13 @@ export async function handleScoutReviewUserSelect(
     return true;
   }
   const selectedUserId = interaction.values[0]!;
-  if (interaction.users.get(selectedUserId)?.bot) {
+  const selectedMember = await interaction.guild?.members.fetch(selectedUserId).catch(() => undefined);
+  if (!selectedMember || interaction.users.get(selectedUserId)?.bot) {
     await interaction.reply({ content: 'A bot cannot be used as a scout substitute.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (!isScoutUserEligible(selectedMember.roles.cache.keys(), setup.eligibilityRoleId)) {
+    await interaction.reply({ content: 'That player does not hold this setup\'s eligibility role.', flags: MessageFlags.Ephemeral });
     return true;
   }
   const outcome = replaceScoutRosterSlotIfVersion(db, setupId, expectedVersion, slotId, selectedUserId, true);

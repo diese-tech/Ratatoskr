@@ -60,6 +60,7 @@ test('scout setup snapshots division routing and resolves durably by signup mess
       signupChannelId: 'signups-1',
       resultsChannelId: 'results-1',
       divisionRoleId: 'division-role',
+      eligibilityRoleId: 'silver-role',
       emojiByRole,
       startAt: 2_000_000_000,
       roleLimit: 2,
@@ -88,6 +89,7 @@ test('scout setup snapshots division routing and resolves durably by signup mess
     assert.equal(restored?.signupChannelId, 'signups-1');
     assert.equal(restored?.resultsChannelId, 'results-1');
     assert.equal(restored?.divisionRoleId, 'division-role');
+    assert.equal(restored?.eligibilityRoleId, 'silver-role');
     assert.deepEqual(restored?.emojiByRole, emojiByRole);
     assert.equal(getScoutSetupBySignupMessageId(db, 'message-2')?.id, second.id);
   } finally {

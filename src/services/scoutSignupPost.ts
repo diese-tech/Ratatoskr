@@ -4,6 +4,7 @@ export type ScoutSignupPostInput = {
   roleLimit: number;
   note?: string | null;
   divisionRoleId?: string | null;
+  eligibilityRoleId?: string | null;
 };
 
 function roleLimitPhrase(limit: number): string {
@@ -17,6 +18,7 @@ export function renderScoutSignupPost(input: ScoutSignupPostInput): string {
   lines.push('');
   lines.push('React with the role(s) you want to play.');
   lines.push(`You may select **${roleLimitPhrase(input.roleLimit)}**.`);
+  if (input.eligibilityRoleId) lines.push(`Eligibility: <@&${input.eligibilityRoleId}>`);
   if (input.note?.trim()) {
     lines.push('');
     lines.push(input.note.trim());

@@ -10,6 +10,7 @@ import {
 } from '../db/index.js';
 import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS, type ScoutSignupRole } from '../domain/index.js';
 import { generateScoutRoster } from '../domain/scoutRoster.js';
+import { eligibleScoutSignups } from './scoutEligibility.js';
 import { scoutReviewButtonRow } from './scoutReview.js';
 
 export function scoutRoleForEmoji(
@@ -57,7 +58,14 @@ export async function handleScoutSignupReactionAdd(
 
   const outcome = addScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
   if (outcome.status === 'added') {
-    const roster = generateScoutRoster(listScoutSignups(db, resolved.setup.id));
+    const guild = hydrated.reaction.message.guild;
+    if (!guild) return;
+    const signups = await eligibleScoutSignups(
+      guild,
+      listScoutSignups(db, resolved.setup.id),
+      resolved.setup.eligibilityRoleId,
+    );
+    const roster = generateScoutRoster(signups);
     if (roster.feasible && tryCreateInitialScoutRoster(db, resolved.setup.id, roster.slots)) {
       await hydrated.reaction.message.edit({ components: [scoutReviewButtonRow(resolved.setup.id)] });
     }
