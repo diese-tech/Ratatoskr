@@ -211,6 +211,39 @@ test('migration 9 preserves existing scout data while adding optional Fill signu
   }
 });
 
+test('migration 11 preserves existing one-game roster slots', () => {
+  const db = new Database(':memory:');
+  try {
+    db.pragma('foreign_keys = ON');
+    for (const migration of migrations.slice(0, 10)) db.exec(migration.sql);
+    db.prepare(`INSERT INTO divisions (guild_id, division_key, display_name)
+      VALUES ('guild-1', 'vanaheim', 'Vanaheim')`).run();
+    const division = db.prepare("SELECT id FROM divisions WHERE guild_id = 'guild-1'").get() as { id: number };
+    const setup = db.prepare(`INSERT INTO scout_setups (
+      guild_id, division_id, division_key, division_display_name, created_by,
+      signup_channel_id, results_channel_id, division_role_id,
+      solo_emoji_id, jungle_emoji_id, mid_emoji_id, support_emoji_id, carry_emoji_id,
+      start_at, role_limit, status
+    ) VALUES ('guild-1', ?, 'vanaheim', 'Vanaheim', 'captain-1', 'signups', 'results', 'division-role',
+      'solo', 'jungle', 'mid', 'support', 'carry', 2000000000, 2, 'roster_ready') RETURNING id`).get(division.id) as { id: number };
+    db.prepare(`INSERT INTO scout_roster_slots (setup_id, team, role, user_id, staff_assigned)
+      VALUES (?, 'team_one', 'solo', 'existing-player', 1)`).run(setup.id);
+
+    db.exec(migrations[10]!.sql);
+
+    assert.deepEqual(
+      db.prepare('SELECT game_number, user_id, staff_assigned FROM scout_roster_slots WHERE setup_id = ?').get(setup.id),
+      { game_number: 1, user_id: 'existing-player', staff_assigned: 1 },
+    );
+    assert.equal(
+      (db.prepare('SELECT game_count FROM scout_setups WHERE id = ?').get(setup.id) as { game_count: number }).game_count,
+      1,
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test('managed resources can be inserted and read back by Discord ID and logical key', () => {
   const db = openDatabase(join(tempDir, 'managed-resources.db'));
   try {

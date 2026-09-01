@@ -84,3 +84,15 @@ test('scout roster fills each role once on both teams with ten unique players', 
     assert.equal(result.slots.filter((slot) => slot.role === role).length, 2);
   }
 });
+
+test('two-game generation globally fills twenty unique standard-role slots', () => {
+  const signups = SCOUT_ROLES.flatMap((role, roleIndex) =>
+    Array.from({ length: 4 }, (_, index) => signup(`${role}-${index}`, role, roleIndex * 4 + index)),
+  );
+  const result = generateScoutRoster(signups, { gameCount: 2 });
+  assert.equal(result.feasible, true);
+  assert.equal(result.slots.length, 20);
+  assert.equal(new Set(result.slots.map((slot) => slot.userId)).size, 20);
+  assert.equal(result.slots.filter((slot) => slot.gameNumber === 1).length, 10);
+  assert.equal(result.slots.filter((slot) => slot.gameNumber === 2).length, 10);
+});

@@ -7,6 +7,7 @@ import {
   cancelScoutSetupIfVersion,
   claimScoutPublish,
   createScoutSetup,
+  expandScoutRosterToTwoGamesIfVersion,
   getScoutSetupBySignupMessageId,
   listScoutSignups,
   listScoutRosterSlots,
@@ -17,11 +18,13 @@ import {
   replaceScoutRosterSlotIfVersion,
   replacePublishedScoutRosterSlotIfVersion,
   rollbackPublishedScoutRosterReplacement,
+  rollbackPublishedScoutRosterSwap,
   releaseScoutPublishClaim,
   removeScoutSignup,
   setScoutSetupSignupMessage,
   setScoutResultMessage,
   swapScoutRosterSlotsIfVersion,
+  swapPublishedScoutRosterSlotsIfVersion,
   tryCreateInitialScoutRoster,
   withdrawnScoutRosterUserIds,
 } from './scoutSetups.js';
@@ -170,6 +173,37 @@ test('initial roster transition is atomic and versioned replacement rejects stal
   }
 });
 
+test('a roster-ready setup expands atomically to two games and rejects stale expansion', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const setup = createScoutSetup(db, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'captain-1', signupChannelId: 'signups-1',
+      resultsChannelId: 'results-1', divisionRoleId: 'division-role', emojiByRole,
+      startAt: 2_000_000_000, roleLimit: 2,
+    });
+    setScoutSetupSignupMessage(db, setup.id, 'message-expand');
+    const oneGame: ScoutRosterSlot[] = SCOUT_ROLES.flatMap((role) =>
+      SCOUT_TEAMS.map((team, index) => ({ gameNumber: 1, team, role, userId: `g1-${role}-${index}` })),
+    );
+    const twoGames: ScoutRosterSlot[] = [1, 2].flatMap((gameNumber) =>
+      SCOUT_ROLES.flatMap((role) => SCOUT_TEAMS.map((team, index) => ({
+        gameNumber, team, role, userId: `g${gameNumber}-${role}-${index}`,
+      }))),
+    );
+    tryCreateInitialScoutRoster(db, setup.id, oneGame);
+
+    assert.equal(expandScoutRosterToTwoGamesIfVersion(db, setup.id, 0, twoGames), true);
+    assert.equal(expandScoutRosterToTwoGamesIfVersion(db, setup.id, 0, twoGames), false);
+    assert.equal(getScoutSetupBySignupMessageId(db, 'message-expand')?.gameCount, 2);
+    assert.equal(getScoutSetupBySignupMessageId(db, 'message-expand')?.version, 1);
+    assert.equal(listScoutRosterSlots(db, setup.id).length, 20);
+    assert.deepEqual(new Set(listScoutRosterSlots(db, setup.id).map((slot) => slot.gameNumber)), new Set([1, 2]));
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test('roster edits preserve uniqueness, mark overrides, flag withdrawals, and reject stale versions', () => {
   const { db, division } = setupDatabase();
   try {
@@ -247,6 +281,13 @@ test('publishing is an exclusive retryable claim and published replacement is ve
     assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'stale-replacement'), 'stale');
     assert.equal(rollbackPublishedScoutRosterReplacement(db, setup.id, 1, firstSlot.id, 'replacement', firstSlot.userId, firstSlot.staffAssigned), true);
     assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'replacement-final'), 'updated');
+    const publishedSlots = listScoutRosterSlots(db, setup.id);
+    const secondSlot = publishedSlots.find((slot) => slot.id !== firstSlot.id)!;
+    const firstBeforeSwap = publishedSlots.find((slot) => slot.id === firstSlot.id)!;
+    assert.equal(swapPublishedScoutRosterSlotsIfVersion(db, setup.id, 1, firstSlot.id, secondSlot.id), true);
+    assert.equal(swapPublishedScoutRosterSlotsIfVersion(db, setup.id, 1, firstSlot.id, secondSlot.id), false);
+    assert.equal(rollbackPublishedScoutRosterSwap(db, setup.id, 2, firstSlot.id, secondSlot.id), true);
+    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, firstBeforeSwap.userId);
     assert.equal(getScoutSetupBySignupMessageId(db, 'message-publish')?.resultMessageId, 'result-1');
     assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, 'replacement-final');
   } finally {

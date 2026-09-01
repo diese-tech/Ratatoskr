@@ -89,6 +89,7 @@ export type ScoutSetup = {
   resultsChannelId: string;
   divisionRoleId: string;
   eligibilityRoleId: string | null;
+  gameCount: 1 | 2;
   emojiByRole: Record<ScoutRole, string> & { fill: string | null };
   signupMessageId: string | null;
   resultMessageId: string | null;
@@ -112,6 +113,7 @@ export type ScoutSignup = {
 export type ScoutRosterSlotRecord = {
   id: number;
   setupId: number;
+  gameNumber: number;
   team: ScoutTeam;
   role: ScoutRole;
   userId: string;

@@ -17,6 +17,7 @@ import {
   getDivisionByKey,
   getScoutConfig,
   getScoutSetupById,
+  expandScoutRosterToTwoGamesIfVersion,
   listScoutRosterSlots,
   listScoutSignups,
   replaceScoutRosterSlotIfVersion,
@@ -26,6 +27,7 @@ import {
 } from '../db/index.js';
 import {
   generateDifferentScoutRoster,
+  generateScoutRoster,
   scoutRosterFingerprint,
   SCOUT_ROLES,
   SCOUT_ROLE_LABELS,
@@ -45,38 +47,82 @@ export function scoutReviewButtonRow(setupId: number) {
   );
 }
 
-export function buildScoutRosterReviewView(db: Database.Database, setupId: number, version: number, slots: ReturnType<typeof listScoutRosterSlots>, notice?: string) {
+export function buildScoutRosterReviewView(
+  db: Database.Database,
+  setupId: number,
+  version: number,
+  slots: ReturnType<typeof listScoutRosterSlots>,
+  notice?: string,
+  canBuildTwoGames = false,
+) {
+  const setup = getScoutSetupById(db, setupId);
+  const gameCount = setup?.gameCount ?? 1;
   const withdrawn = new Set(withdrawnScoutRosterUserIds(db, setupId));
   const lines = [notice, '**Private scout roster review**'];
-  for (const [index, team] of SCOUT_TEAMS.entries()) {
-    lines.push('', `**Team ${index + 1}**`);
-    for (const role of SCOUT_ROLES) {
-      const slot = slots.find((candidate) => candidate.team === team && candidate.role === role);
-      const flags = slot ? `${slot.staffAssigned ? ' 🛠️' : ''}${withdrawn.has(slot.userId) ? ' ⚠️ signup withdrawn' : ''}` : '';
-      lines.push(`${SCOUT_ROLE_LABELS[role]}: ${slot ? `<@${slot.userId}>${flags}` : '_empty_'}`);
+  for (let gameNumber = 1; gameNumber <= gameCount; gameNumber++) {
+    if (gameCount === 2) lines.push('', `__**Game ${gameNumber}**__`);
+    for (const [index, team] of SCOUT_TEAMS.entries()) {
+      lines.push('', `**Team ${index + 1}**`);
+      for (const role of SCOUT_ROLES) {
+        const slot = slots.find((candidate) =>
+          candidate.gameNumber === gameNumber && candidate.team === team && candidate.role === role,
+        );
+        const flags = slot ? `${slot.staffAssigned ? ' 🛠️' : ''}${withdrawn.has(slot.userId) ? ' ⚠️ signup withdrawn' : ''}` : '';
+        lines.push(`${SCOUT_ROLE_LABELS[role]}: ${slot ? `<@${slot.userId}>${flags}` : '_empty_'}`);
+      }
     }
   }
   if (withdrawn.size) lines.push('', '⚠️ Publishing is blocked until every withdrawn signup is resolved.');
+  const managementButtons = [
+    new ButtonBuilder()
+      .setCustomId(`scout:shuffle:${setupId}:${version}`)
+      .setLabel('Shuffle')
+      .setStyle(ButtonStyle.Secondary),
+    ...(gameCount === 1 ? [new ButtonBuilder()
+      .setCustomId(`scout:edit:swap:${setupId}:${version}`)
+      .setLabel('Swap teams')
+      .setStyle(ButtonStyle.Secondary)] : []),
+    new ButtonBuilder().setCustomId(`scout:edit:role:${setupId}:${version}`).setLabel('Swap any two players').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`scout:edit:replace:${setupId}:${version}`).setLabel('Replace slot').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`scout:publish:${setupId}:${version}`)
+      .setLabel('Publish')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(withdrawn.size > 0),
+  ];
+  const components: ActionRowBuilder<ButtonBuilder>[] = [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(managementButtons),
+  ];
+  if (gameCount === 1 && canBuildTwoGames) {
+    components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`scout:buildtwo:${setupId}:${version}`)
+        .setLabel('Build 2 games')
+        .setStyle(ButtonStyle.Primary),
+    ));
+  }
   return {
     content: lines.filter((line): line is string => Boolean(line)).join('\n'),
     allowedMentions: { parse: [] as never[] },
-    components: [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`scout:shuffle:${setupId}:${version}`)
-          .setLabel('Shuffle')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`scout:edit:swap:${setupId}:${version}`).setLabel('Swap teams').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`scout:edit:role:${setupId}:${version}`).setLabel('Change roles').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`scout:edit:replace:${setupId}:${version}`).setLabel('Replace slot').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`scout:publish:${setupId}:${version}`)
-          .setLabel('Publish')
-          .setStyle(ButtonStyle.Success)
-          .setDisabled(withdrawn.size > 0),
-      ),
-    ],
+    components,
   };
+}
+
+async function reviewViewWithExpansion(
+  interaction: MessageComponentInteraction,
+  db: Database.Database,
+  setupId: number,
+  notice?: string,
+) {
+  const setup = getScoutSetupById(db, setupId)!;
+  let canBuildTwoGames = false;
+  if (setup.gameCount === 1 && interaction.guild) {
+    const signups = await eligibleScoutSignups(interaction.guild, listScoutSignups(db, setupId), setup.eligibilityRoleId);
+    canBuildTwoGames = generateScoutRoster(signups, { gameCount: 2 }).feasible;
+  }
+  return buildScoutRosterReviewView(
+    db, setupId, setup.version, listScoutRosterSlots(db, setupId), notice, canBuildTwoGames,
+  );
 }
 
 async function authorized(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
@@ -97,7 +143,7 @@ async function authorized(interaction: MessageComponentInteraction, db: Database
 }
 
 function slotLabel(slot: ReturnType<typeof listScoutRosterSlots>[number]) {
-  return `${slot.team === 'team_one' ? 'Team 1' : 'Team 2'} ${SCOUT_ROLE_LABELS[slot.role]} — ${slot.userId}`;
+  return `Game ${slot.gameNumber} ${slot.team === 'team_one' ? 'Team 1' : 'Team 2'} ${SCOUT_ROLE_LABELS[slot.role]} — ${slot.userId}`;
 }
 
 function selectRow(menu: StringSelectMenuBuilder | UserSelectMenuBuilder) {
@@ -132,7 +178,7 @@ async function showEditPicker(
 
 export async function handleScoutReviewButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
   const parts = interaction.customId.split(':');
-  if (parts[0] !== 'scout' || !['review', 'shuffle', 'edit'].includes(parts[1] ?? '')) return false;
+  if (parts[0] !== 'scout' || !['review', 'shuffle', 'edit', 'buildtwo', 'buildtwoconfirm', 'buildtwoback'].includes(parts[1] ?? '')) return false;
   const editing = parts[1] === 'edit';
   const setupId = Number(parts[editing ? 3 : 2]);
   if (!Number.isInteger(setupId)) return false;
@@ -143,7 +189,43 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
   }
 
   if (parts[1] === 'review') {
-    await interaction.reply({ ...buildScoutRosterReviewView(db, setup.id, setup.version, listScoutRosterSlots(db, setup.id)), flags: MessageFlags.Ephemeral });
+    await interaction.reply({ ...await reviewViewWithExpansion(interaction, db, setup.id), flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  if (parts[1] === 'buildtwoback') {
+    await interaction.update(await reviewViewWithExpansion(interaction, db, setup.id));
+    return true;
+  }
+
+  if (parts[1] === 'buildtwo') {
+    const expectedVersion = Number(parts[3]);
+    if (!Number.isInteger(expectedVersion)) return false;
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`scout:buildtwoconfirm:${setupId}:${expectedVersion}`).setLabel('Confirm 2 games').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`scout:buildtwoback:${setupId}:${expectedVersion}`).setLabel('Back').setStyle(ButtonStyle.Secondary),
+    );
+    await interaction.update({
+      content: 'Build two games from all currently eligible signups? This recalculates both games and replaces any manual edits in the current one-game roster. You can then shuffle or swap players across either game before publishing.',
+      components: [row],
+    });
+    return true;
+  }
+
+  if (parts[1] === 'buildtwoconfirm') {
+    const expectedVersion = Number(parts[3]);
+    if (!Number.isInteger(expectedVersion)) return false;
+    const signups = await eligibleScoutSignups(interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
+    const generated = generateScoutRoster(signups, { gameCount: 2 });
+    if (!generated.feasible) {
+      await interaction.update(await reviewViewWithExpansion(interaction, db, setup.id, 'There are no longer enough compatible eligible signups to build two games.'));
+      return true;
+    }
+    if (!expandScoutRosterToTwoGamesIfVersion(db, setup.id, expectedVersion, generated.slots)) {
+      await interaction.update(await reviewViewWithExpansion(interaction, db, setup.id, 'That confirmation was stale; no change was made.'));
+      return true;
+    }
+    await interaction.update(await reviewViewWithExpansion(interaction, db, setup.id, 'Two-game roster built.'));
     return true;
   }
 
@@ -159,7 +241,7 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
   if (!Number.isInteger(expectedVersion)) return false;
   const current = listScoutRosterSlots(db, setup.id);
   const signups = await eligibleScoutSignups(interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
-  const generated = generateDifferentScoutRoster(signups, scoutRosterFingerprint(current));
+  const generated = generateDifferentScoutRoster(signups, scoutRosterFingerprint(current), Math.random, setup.gameCount);
   if (!generated.result.feasible || !generated.isDifferent) {
     await interaction.update(buildScoutRosterReviewView(db, setup.id, setup.version, current, 'No different valid roster is available.'));
     return true;

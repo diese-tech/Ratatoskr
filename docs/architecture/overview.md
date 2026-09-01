@@ -41,12 +41,12 @@ A trade should be treated as one atomic league operation: validate all participa
 
 Scout games are preseason evaluation sessions, not regular-season matches. They have no score and do not belong to the season lifecycle.
 
-Each setup snapshots its division, signup channel, results channel, division role, optional eligibility role, five required role emoji, optional Fill emoji, start time, and per-player role limit in SQLite. Fill is a signup preference that can satisfy any standard roster role; it never becomes a roster slot. Eligibility is re-read from current Discord membership before generation, shuffle, manual seating, replacement, and publication. Discord component IDs contain the setup ID and expected roster version; handlers re-read authorization and current state before mutating. This makes simultaneous setups independent and lets durable controls survive a process restart.
+Each setup snapshots its division, signup channel, results channel, division role, optional eligibility role, five required role emoji, optional Fill emoji, start time, and per-player role limit in SQLite. Fill is a signup preference that can satisfy any standard roster role; it never becomes a roster slot. Eligibility is re-read from current Discord membership before generation, shuffle, manual seating, replacement, expansion, and publication. A roster-ready setup may atomically expand from one game to two when twenty unique eligible signups can satisfy all twenty role slots; the setup remains the ownership boundary for both games. Discord component IDs contain the setup ID and expected roster version; handlers re-read authorization and current state before mutating. This makes simultaneous setups independent and lets durable controls survive a process restart.
 
 SQLite transactions claim roster generation, edits, publication, replacement, and cancellation. Discord cannot join that transaction, so external writes use explicit compensation:
 
 - failed publication deletes any partial result and restores `roster_ready`;
-- a failed published-result edit rolls its versioned database replacement back when still safe;
+- a failed published-result edit rolls its versioned database replacement or swap back when still safe;
 - a cancelled setup remains canonically cancelled if its post edit fails, and its old Cancel control can retry post reconciliation;
 - an ambiguous rollback tells staff to stop and reconcile instead of reporting success.
 

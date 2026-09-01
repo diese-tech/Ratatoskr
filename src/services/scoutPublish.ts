@@ -21,8 +21,10 @@ import {
   listScoutRosterSlots,
   releaseScoutPublishClaim,
   rollbackPublishedScoutRosterReplacement,
+  rollbackPublishedScoutRosterSwap,
   replacePublishedScoutRosterSlotIfVersion,
   setScoutResultMessage,
+  swapPublishedScoutRosterSlotsIfVersion,
   type ScoutSetup,
 } from '../db/index.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
@@ -32,13 +34,21 @@ import { renderScoutResult } from './scoutResults.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
 
-function replacementRow(setupId: number, version: number) {
+function managementRow(setupId: number, version: number) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`scout:publishedswap:${setupId}:${version}`)
+      .setLabel('Swap players')
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`scout:publishedreplace:${setupId}:${version}`)
       .setLabel('Replace player')
       .setStyle(ButtonStyle.Secondary),
   );
+}
+
+function publishedSlotLabel(slot: ReturnType<typeof listScoutRosterSlots>[number]) {
+  return `Game ${slot.gameNumber} ${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]} — ${slot.userId}`;
 }
 
 async function authorized(
@@ -64,11 +74,11 @@ async function authorized(
 
 export async function handleScoutPublishButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
   const parts = interaction.customId.split(':');
-  if (parts[0] !== 'scout' || !['publish', 'publishconfirm', 'publishback', 'publishedreplace'].includes(parts[1] ?? '')) return false;
+  if (parts[0] !== 'scout' || !['publish', 'publishconfirm', 'publishback', 'publishedreplace', 'publishedswap'].includes(parts[1] ?? '')) return false;
   const setupId = Number(parts[2]);
   const expectedVersion = Number(parts[3]);
   if (!Number.isInteger(setupId) || !Number.isInteger(expectedVersion)) return false;
-  const publishedAction = parts[1] === 'publishedreplace';
+  const publishedAction = ['publishedreplace', 'publishedswap'].includes(parts[1] ?? '');
   const setup = await authorized(interaction, db, setupId, publishedAction ? 'published' : 'roster_ready');
   if (!setup) {
     await interaction.reply({ content: 'You do not have permission to manage this scout result.', flags: MessageFlags.Ephemeral });
@@ -97,7 +107,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       .setCustomId(`scout:publishedpick:${setupId}:${expectedVersion}`)
       .setPlaceholder('Published slot to replace')
       .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder()
-        .setLabel(`${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]} — ${slot.userId}`.slice(0, 100))
+        .setLabel(publishedSlotLabel(slot).slice(0, 100))
         .setValue(String(slot.id))));
     await interaction.reply({
       content: 'Choose the published roster slot to replace.',
@@ -123,6 +133,21 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     });
     return true;
   }
+  if (parts[1] === 'publishedswap') {
+    const slots = listScoutRosterSlots(db, setupId);
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`scout:publishedswapfirst:${setupId}:${expectedVersion}`)
+      .setPlaceholder('First published player')
+      .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder()
+        .setLabel(publishedSlotLabel(slot).slice(0, 100))
+        .setValue(String(slot.id))));
+    await interaction.reply({
+      content: 'Choose the first published player to swap.',
+      components: [new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(menu)],
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
   const claim = claimScoutPublish(db, setupId, expectedVersion);
   if (claim !== 'claimed') {
     await interaction.editReply({
@@ -141,7 +166,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     if (!channel?.isSendable()) throw new Error('The snapshotted results channel is not sendable.');
     resultMessage = await channel.send({
       content: renderScoutResult(setup, slots),
-      components: [replacementRow(setupId, setup.version)],
+      components: [managementRow(setupId, setup.version)],
       allowedMentions: { parse: [], users: slots.map((slot) => slot.userId), roles: [] },
     });
 
@@ -180,13 +205,79 @@ export async function handleScoutPublishedSlotSelect(
   db: Database.Database,
 ): Promise<boolean> {
   const parts = interaction.customId.split(':');
-  if (parts[0] !== 'scout' || parts[1] !== 'publishedpick') return false;
+  if (parts[0] !== 'scout' || !['publishedpick', 'publishedswapfirst', 'publishedswapsecond'].includes(parts[1] ?? '')) return false;
   const setupId = Number(parts[2]);
   const version = Number(parts[3]);
   const slotId = Number(interaction.values[0]);
   if (![setupId, version, slotId].every(Number.isInteger)) return false;
-  if (!(await authorized(interaction, db, setupId, 'published'))) {
-    await interaction.reply({ content: 'You do not have permission to replace this player.', flags: MessageFlags.Ephemeral });
+  const setup = await authorized(interaction, db, setupId, 'published');
+  if (!setup) {
+    await interaction.reply({ content: 'You do not have permission to manage this result.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (parts[1] === 'publishedswapfirst') {
+    const slots = listScoutRosterSlots(db, setupId);
+    if (!slots.some((slot) => slot.id === slotId)) return false;
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`scout:publishedswapsecond:${setupId}:${version}:${slotId}`)
+      .setPlaceholder('Second published player')
+      .addOptions(slots.filter((slot) => slot.id !== slotId).map((slot) => new StringSelectMenuOptionBuilder()
+        .setLabel(publishedSlotLabel(slot).slice(0, 100))
+        .setValue(String(slot.id))));
+    await interaction.update({
+      content: 'Choose the second player. Players may be swapped across teams, roles, or games.',
+      components: [new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(menu)],
+    });
+    return true;
+  }
+  if (parts[1] === 'publishedswapsecond') {
+    const firstSlotId = Number(parts[4]);
+    if (!Number.isInteger(firstSlotId)) return false;
+    const before = listScoutRosterSlots(db, setupId);
+    const first = before.find((slot) => slot.id === firstSlotId);
+    const second = before.find((slot) => slot.id === slotId);
+    if (!first || !second || !setup.resultMessageId) {
+      await interaction.update({ content: 'That swap is no longer available.', components: [] });
+      return true;
+    }
+    const channel = await interaction.client.channels.fetch(setup.resultsChannelId).catch(() => undefined);
+    const message = channel?.isTextBased()
+      ? await channel.messages.fetch(setup.resultMessageId).catch(() => undefined)
+      : undefined;
+    if (!message) {
+      await interaction.update({ content: 'The published result message is unavailable; no swap was made.', components: [] });
+      return true;
+    }
+    if (!swapPublishedScoutRosterSlotsIfVersion(db, setupId, version, firstSlotId, slotId)) {
+      await interaction.update({ content: 'That result view was stale; no swap was made.', components: [] });
+      return true;
+    }
+    const updated = getScoutSetupById(db, setupId)!;
+    const slots = listScoutRosterSlots(db, setupId);
+    try {
+      await message.edit({
+        content: renderScoutResult(updated, slots),
+        components: [managementRow(setupId, updated.version)],
+        allowedMentions: { parse: [], users: slots.map((slot) => slot.userId), roles: [] },
+      });
+    } catch (error) {
+      const rolledBack = rollbackPublishedScoutRosterSwap(db, setupId, updated.version, firstSlotId, slotId);
+      await interaction.update({
+        content: rolledBack
+          ? `The result message could not be edited, so no swap was saved. Fix the channel permissions and retry: ${(error as Error).message}`
+          : `The result message could not be edited and the swap could not be rolled back safely. Stop and reconcile setup #${setupId}: ${(error as Error).message}`,
+        components: [],
+      });
+      return true;
+    }
+    const notice = `Roster update: <@${first.userId}> and <@${second.userId}> swapped between ${publishedSlotLabel(first).split(' — ')[0]} and ${publishedSlotLabel(second).split(' — ')[0]}.`;
+    const noticeSent = channel?.isSendable()
+      ? await channel.send({ content: notice, allowedMentions: { parse: [] } }).then(() => true, () => false)
+      : false;
+    await interaction.update({
+      content: noticeSent ? 'Published roster updated.' : 'Published roster updated, but Ratatoskr could not send the swap notice. Post it manually.',
+      components: [],
+    });
     return true;
   }
   const menu = new UserSelectMenuBuilder()
@@ -249,7 +340,7 @@ export async function handleScoutPublishedUserSelect(
   try {
     await message.edit({
       content: renderScoutResult(updated, slots),
-      components: [replacementRow(setupId, updated.version)],
+      components: [managementRow(setupId, updated.version)],
       allowedMentions: { parse: [], users: slots.map((slot) => slot.userId), roles: [] },
     });
   } catch (error) {
@@ -272,7 +363,7 @@ export async function handleScoutPublishedUserSelect(
   }
   if (channel.isSendable()) {
     const noticeSent = await channel.send({
-      content: `Roster update: <@${oldSlot.userId}> was replaced by <@${userId}> at ${SCOUT_ROLE_LABELS[oldSlot.role]}.`,
+      content: `Roster update: <@${oldSlot.userId}> was replaced by <@${userId}> at ${publishedSlotLabel(oldSlot).split(' — ')[0]}.`,
       allowedMentions: { parse: [] },
     }).then(() => true, () => false);
     await interaction.update({
