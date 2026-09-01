@@ -7,7 +7,7 @@ Scout games let preseason players show captains what they can play before a draf
 1. Provision each active division with `/division add`.
 2. An admin runs `/scout config timezone:<IANA zone>`.
 3. The admin selects any additional staff roles in the private config response.
-4. The admin runs `/scout config bind_emoji:true` and reacts with five distinct custom guild emoji in Solo, Jungle, Mid, Support, Carry order.
+4. The admin runs `/scout config bind_emoji:true` and reacts with five distinct custom guild emoji in Solo, Jungle, Mid, Support, Carry order. The admin may then bind a sixth **Fill** emoji or press **Skip Fill**.
 
 Admins and configured additional staff may manage every division. Captains may manage only the division whose Captain Access role they hold.
 
@@ -16,12 +16,13 @@ The bot needs View Channel, Send Messages, Read Message History, Add Reactions, 
 ## Run a scout setup
 
 1. From `<division>-scout-signups`, run `/scout create`.
-2. Enter the start time, number of roles each player may select, and an optional note.
+2. Enter the start time, number of roles each player may select, and an optional note. Optionally select one Discord eligibility role; all reactions remain recorded, but only current members of that role may be rostered.
 3. Review the private preview and post it. The division role is pinged only when the public post is created.
 4. Players react for roles. Ratatoskr enforces the per-player limit separately for each setup.
-5. When ten compatible players can fill Solo, Jungle, Mid, Support, and Carry on both teams, the original post gains Review roster and Cancel setup controls.
-6. An authorized manager reviews privately, shuffles, swaps same-role players between teams, exchanges occupied role assignments, or seats a replacement. A withdrawn signup blocks publication until resolved.
-7. Publish only after the confirmation names the correct division results channel. Ratatoskr posts Order and Chaos to the setup's snapshotted `<division>-scout-results` channel and links that result from the signup post.
+5. When ten compatible players can fill Solo, Jungle, Mid, Support, and Carry on both teams, the original post gains Review roster and Cancel setup controls. A Fill signup counts against the player's selection limit and may satisfy any missing standard role; explicit role selections are preferred.
+6. Authorized staff or that division's captains review, shuffle, swap, change roles, replace slots, and publish. If twenty compatible eligible players are currently available, Review roster also offers **Build 2 games**. Its confirmation explains that both games are recalculated, including prior one-game manual edits. Signups remain open while the roster is reviewed.
+7. A two-game roster is still one setup. Shuffle balances all twenty unique players, **Swap any two players** can exchange assignments across games, teams, or roles, and replacement excludes everyone already seated in either game. A withdrawn signup blocks publication until resolved; staff-selected substitutes remain explicit overrides.
+8. Publish only after the confirmation names the correct division results channel. Ratatoskr posts one combined result containing Game 1 and Game 2 (or the original single game) to the setup's snapshotted `<division>-scout-results` channel and links that result from the signup post.
 
 Multiple setups may be open in the same or different divisions. Every signup, roster version, result, and cancellation is isolated by setup ID.
 
@@ -29,14 +30,14 @@ Multiple setups may be open in the same or different divisions. Every signup, ro
 
 - Use `/scout cancel` in the division signup channel to select among that division's open or roster-ready setups. A setup's public Cancel setup button reaches the same confirmation directly.
 - Cancellation is final. The post is marked cancelled, reactions become inert, and controls are removed.
-- Published setups cannot be cancelled. Use Replace player on the published result; select the occupied slot and then a current, non-bot, non-rostered server member. Ratatoskr preserves that slot's team and role, edits the existing result, and sends a non-pinging notice.
+- Published setups cannot be cancelled. Use **Swap players** to exchange any two published assignments, including across games. Use **Replace player** to select an occupied slot and then a current, non-bot, non-rostered server member. Ratatoskr edits the one combined result and sends a non-pinging notice naming the exact game, team, and role locations.
 
 ## Failure and recovery
 
 - If publication cannot write both the result and original signup post, no result is claimed. Fix the reported channel, message, or permission problem and retry from Review roster.
-- If a published replacement cannot edit the result, Ratatoskr rolls the database change back when safe and tells the manager to retry. If it reports an unsafe rollback, stop editing that setup and reconcile the stored roster with the result message.
+- If a published replacement or swap cannot edit the result, Ratatoskr rolls the database change back when safe and tells the manager to retry. If it reports an unsafe rollback, stop editing that setup and reconcile the stored roster with the result message.
 - Cancellation remains effective if Discord refuses the post edit. Reactions are inert. Click the still-visible Cancel setup control again after fixing access to retry post reconciliation.
 - Public controls survive a bot restart because they resolve current state from SQLite. A private creation preview does not; run `/scout create` again.
-- A deleted result message prevents replacement and leaves the database unchanged. A deleted signup post prevents publication and returns the setup to retryable roster-ready state.
+- A deleted result message prevents replacement or swap and leaves the database unchanged. A deleted signup post prevents publication and returns the setup to retryable roster-ready state.
 
 Production must use a persistent `DATABASE_PATH`. Back up that SQLite file according to the hosting platform's volume procedure before infrastructure changes.

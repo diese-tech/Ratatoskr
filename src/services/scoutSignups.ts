@@ -8,16 +8,17 @@ import {
   tryCreateInitialScoutRoster,
   type ScoutSetup,
 } from '../db/index.js';
-import { SCOUT_ROLES, SCOUT_ROLE_LABELS, type ScoutRole } from '../domain/index.js';
+import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS, type ScoutSignupRole } from '../domain/index.js';
 import { generateScoutRoster } from '../domain/scoutRoster.js';
+import { eligibleScoutSignups } from './scoutEligibility.js';
 import { scoutReviewButtonRow } from './scoutReview.js';
 
 export function scoutRoleForEmoji(
-  emojiByRole: Readonly<Record<ScoutRole, string>>,
+  emojiByRole: Readonly<Record<ScoutSignupRole, string | null>>,
   emojiId: string | null,
-): ScoutRole | undefined {
+): ScoutSignupRole | undefined {
   if (!emojiId) return undefined;
-  return SCOUT_ROLES.find((role) => emojiByRole[role] === emojiId);
+  return SCOUT_SIGNUP_ROLES.find((role) => emojiByRole[role] === emojiId);
 }
 
 async function hydrateReaction(
@@ -36,7 +37,7 @@ async function hydrateReaction(
 function resolveSignupReaction(
   db: Database.Database,
   reaction: MessageReaction,
-): { setup: ScoutSetup; role: ScoutRole } | undefined {
+): { setup: ScoutSetup; role: ScoutSignupRole } | undefined {
   const setup = getScoutSetupBySignupMessageId(db, reaction.message.id);
   if (!setup || !['open', 'roster_ready'].includes(setup.status)) return undefined;
   if (reaction.message.guildId !== setup.guildId || reaction.message.channelId !== setup.signupChannelId) return undefined;
@@ -57,7 +58,14 @@ export async function handleScoutSignupReactionAdd(
 
   const outcome = addScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
   if (outcome.status === 'added') {
-    const roster = generateScoutRoster(listScoutSignups(db, resolved.setup.id));
+    const guild = hydrated.reaction.message.guild;
+    if (!guild) return;
+    const signups = await eligibleScoutSignups(
+      guild,
+      listScoutSignups(db, resolved.setup.id),
+      resolved.setup.eligibilityRoleId,
+    );
+    const roster = generateScoutRoster(signups);
     if (roster.feasible && tryCreateInitialScoutRoster(db, resolved.setup.id, roster.slots)) {
       await hydrated.reaction.message.edit({ components: [scoutReviewButtonRow(resolved.setup.id)] });
     }
@@ -71,7 +79,7 @@ export async function handleScoutSignupReactionAdd(
   await hydrated.user
     .send(
       `You can select at most **${outcome.limit === 1 ? '1 role' : `${outcome.limit} roles`}** on that scout setup. ` +
-        `Remove one of your current reactions before choosing ${SCOUT_ROLE_LABELS[resolved.role]}.`,
+        `Remove one of your current reactions before choosing ${SCOUT_SIGNUP_ROLE_LABELS[resolved.role]}.`,
     )
     .catch(() => undefined);
 }

@@ -6,6 +6,7 @@ import {
   ChannelType,
   MessageFlags,
   ModalBuilder,
+  RoleSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
   type ButtonInteraction,
@@ -13,6 +14,7 @@ import {
   type Guild,
   type GuildMember,
   type ModalSubmitInteraction,
+  type RoleSelectMenuInteraction,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
@@ -21,13 +23,14 @@ import {
   getScoutConfig,
   listDivisions,
   listManagedResourcesByDomain,
+  listOverlappingScoutSetups,
   markScoutSetupPostingFailed,
   missingScoutConfigFields,
   setScoutSetupSignupMessage,
   type DivisionRecord,
 } from '../db/index.js';
 import { parseScoutStartTime } from '../domain/scoutTime.js';
-import { SCOUT_ROLES, type ScoutRole } from '../domain/index.js';
+import { SCOUT_ROLES, SCOUT_SIGNUP_ROLES, type ScoutRole } from '../domain/index.js';
 import { hasScoutManagementAccess } from './scoutAuthorization.js';
 import { resolveScoutChannelGroup, type ScoutChannelGroup } from './scoutChannels.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
@@ -46,7 +49,8 @@ type ScoutCreateDraft = {
   signupChannelId: string;
   resultsChannelId: string;
   divisionRoleId: string;
-  emojiByRole: Record<ScoutRole, string>;
+  eligibilityRoleId: string | null;
+  emojiByRole: Record<ScoutRole, string> & { fill: string | null };
   timezone: string;
   startInput: string;
   startAt: number | null;
@@ -112,9 +116,23 @@ async function canManageScope(scope: ResolvedScope, guildId: string, db: Databas
   });
 }
 
-function completeEmojiMap(config: NonNullable<ReturnType<typeof getScoutConfig>>): Record<ScoutRole, string> | undefined {
+function completeEmojiMap(
+  config: NonNullable<ReturnType<typeof getScoutConfig>>,
+): (Record<ScoutRole, string> & { fill: string | null }) | undefined {
   if (SCOUT_ROLES.some((role) => !config.emojiByRole[role])) return undefined;
-  return Object.fromEntries(SCOUT_ROLES.map((role) => [role, config.emojiByRole[role]!])) as Record<ScoutRole, string>;
+  return {
+    ...(Object.fromEntries(SCOUT_ROLES.map((role) => [role, config.emojiByRole[role]!])) as Record<ScoutRole, string>),
+    fill: config.emojiByRole.fill,
+  };
+}
+
+export function scoutSignupEmojiIds(
+  emojiByRole: Readonly<Record<ScoutRole, string> & { fill: string | null }>,
+): string[] {
+  return SCOUT_SIGNUP_ROLES.flatMap((role) => {
+    const emojiId = emojiByRole[role];
+    return emojiId ? [emojiId] : [];
+  });
 }
 
 function detailsModal(draft: ScoutCreateDraft): ModalBuilder {
@@ -163,12 +181,19 @@ function previewView(draft: ScoutCreateDraft, error?: string) {
           startAt: draft.startAt!,
           roleLimit: draft.roleLimit,
           note: draft.note,
+          eligibilityRoleId: draft.eligibilityRoleId,
         })
       : 'Fix the setup details before posting.',
   ]
     .filter(Boolean)
     .join('\n\n');
 
+  const roleMenu = new RoleSelectMenuBuilder()
+    .setCustomId(`${CUSTOM_ID_PREFIX}eligibility:${draft.id}`)
+    .setPlaceholder('Eligible role (optional)')
+    .setMinValues(0)
+    .setMaxValues(1);
+  if (draft.eligibilityRoleId) roleMenu.setDefaultRoles(draft.eligibilityRoleId);
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${CUSTOM_ID_PREFIX}post:${draft.id}`)
@@ -184,7 +209,10 @@ function previewView(draft: ScoutCreateDraft, error?: string) {
       .setLabel('Cancel')
       .setStyle(ButtonStyle.Danger),
   );
-  return { content, components: [row] };
+  return {
+    content,
+    components: [new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(roleMenu), row],
+  };
 }
 
 function getLiveDraft(draftId: string): ScoutCreateDraft | undefined {
@@ -247,6 +275,7 @@ export async function handleScoutCreateCommand(
     signupChannelId: scope.group.signupChannelId,
     resultsChannelId: scope.group.resultsChannelId,
     divisionRoleId: scope.division.roleId,
+    eligibilityRoleId: null,
     emojiByRole,
     timezone: config.timezone,
     startInput: '',
@@ -264,8 +293,54 @@ export async function handleScoutCreateCommand(
   await interaction.showModal(detailsModal(draft));
 }
 
+function overlapConfirmationView(draft: ScoutCreateDraft, overlaps: ReturnType<typeof listOverlappingScoutSetups>) {
+  const existing = overlaps.map((setup) => {
+    const link = setup.signupMessageId
+      ? `https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}`
+      : '_signup post is still being created_';
+    return `- ${setup.divisionDisplayName} — ${setup.status} — ${link}`;
+  });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${CUSTOM_ID_PREFIX}postanyway:${draft.id}`)
+      .setLabel('Create another setup')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`${CUSTOM_ID_PREFIX}edit:${draft.id}`)
+      .setLabel('Go back')
+      .setStyle(ButtonStyle.Secondary),
+  );
+  return {
+    content: [
+      '**Another setup from you is scheduled for this same time.**',
+      ...existing,
+      '',
+      'This creates a separate signup pool. It is not the two-game shared-roster option.',
+    ].join('\n'),
+    components: [row],
+  };
+}
+
+export async function handleScoutCreateRoleSelect(
+  interaction: RoleSelectMenuInteraction,
+  db: Database.Database,
+): Promise<boolean> {
+  if (!interaction.customId.startsWith(`${CUSTOM_ID_PREFIX}eligibility:`)) return false;
+  const draft = getLiveDraft(interaction.customId.slice(`${CUSTOM_ID_PREFIX}eligibility:`.length));
+  if (!draft || !(await recheckDraftAccess(interaction, draft, db))) {
+    await interaction.reply({
+      content: 'This private scout setup expired, restarted, or you no longer have access. Run `/scout create` again.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+  draft.eligibilityRoleId = interaction.values[0] ?? null;
+  await interaction.update(previewView(draft));
+  return true;
+}
+
 async function recheckDraftAccess(
-  interaction: ButtonInteraction | ModalSubmitInteraction,
+  interaction: ButtonInteraction | ModalSubmitInteraction | RoleSelectMenuInteraction,
   draft: ScoutCreateDraft,
   db: Database.Database,
 ): Promise<boolean> {
@@ -325,7 +400,7 @@ export async function handleScoutCreateButton(
 ): Promise<boolean> {
   if (!interaction.customId.startsWith(CUSTOM_ID_PREFIX)) return false;
   const [, , action, draftId] = interaction.customId.split(':');
-  if (!draftId || !['post', 'edit', 'cancel'].includes(action ?? '')) return false;
+  if (!draftId || !['post', 'postanyway', 'edit', 'cancel'].includes(action ?? '')) return false;
 
   const draft = getLiveDraft(draftId);
   if (!draft || !(await recheckDraftAccess(interaction, draft, db))) {
@@ -354,6 +429,14 @@ export async function handleScoutCreateButton(
     return true;
   }
 
+  if (action === 'post') {
+    const overlaps = listOverlappingScoutSetups(db, draft.guildId, draft.userId, draft.startAt);
+    if (overlaps.length) {
+      await interaction.update(overlapConfirmationView(draft, overlaps));
+      return true;
+    }
+  }
+
   draft.posting = true;
   await interaction.deferUpdate();
   let setup;
@@ -367,6 +450,7 @@ export async function handleScoutCreateButton(
       signupChannelId: draft.signupChannelId,
       resultsChannelId: draft.resultsChannelId,
       divisionRoleId: draft.divisionRoleId,
+      eligibilityRoleId: draft.eligibilityRoleId,
       emojiByRole: draft.emojiByRole,
       startAt: draft.startAt,
       roleLimit: draft.roleLimit,
@@ -392,6 +476,7 @@ export async function handleScoutCreateButton(
         startAt: draft.startAt,
         roleLimit: draft.roleLimit,
         note: draft.note,
+        eligibilityRoleId: draft.eligibilityRoleId,
       }),
       components: [scoutCancelButtonRow(setup.id, setup.version)],
       allowedMentions: { parse: [], roles: [draft.divisionRoleId], users: [] },
@@ -399,7 +484,7 @@ export async function handleScoutCreateButton(
     if (!setScoutSetupSignupMessage(db, setup.id, signupMessage.id)) {
       throw new Error('Scout setup could not be activated after posting.');
     }
-    for (const role of SCOUT_ROLES) await signupMessage.react(draft.emojiByRole[role]);
+    for (const emojiId of scoutSignupEmojiIds(draft.emojiByRole)) await signupMessage.react(emojiId);
   } catch (error) {
     if (signupMessage) await signupMessage.delete().catch(() => undefined);
     markScoutSetupPostingFailed(db, setup.id);

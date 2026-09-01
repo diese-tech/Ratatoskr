@@ -1,4 +1,4 @@
-import type { ScoutRole } from '../domain/scoutRoles.js';
+import type { ScoutRole, ScoutSignupRole } from '../domain/scoutRoles.js';
 import type { ScoutTeam } from '../domain/scoutRoster.js';
 
 // 'emoji' is widened in now (#31 Defect/§7) because this migration already
@@ -70,7 +70,7 @@ export type DivisionRecord = {
 export type ScoutConfig = {
   guildId: string;
   authorizedRoleIds: string[];
-  emojiByRole: Record<ScoutRole, string | null>;
+  emojiByRole: Record<ScoutSignupRole, string | null>;
   timezone: string;
   createdAt: string;
   updatedAt: string;
@@ -88,7 +88,9 @@ export type ScoutSetup = {
   signupChannelId: string;
   resultsChannelId: string;
   divisionRoleId: string;
-  emojiByRole: Record<ScoutRole, string>;
+  eligibilityRoleId: string | null;
+  gameCount: 1 | 2;
+  emojiByRole: Record<ScoutRole, string> & { fill: string | null };
   signupMessageId: string | null;
   resultMessageId: string | null;
   startAt: number;
@@ -104,13 +106,14 @@ export type ScoutSignup = {
   id: number;
   setupId: number;
   userId: string;
-  role: ScoutRole;
+  role: ScoutSignupRole;
   createdAt: string;
 };
 
 export type ScoutRosterSlotRecord = {
   id: number;
   setupId: number;
+  gameNumber: number;
   team: ScoutTeam;
   role: ScoutRole;
   userId: string;

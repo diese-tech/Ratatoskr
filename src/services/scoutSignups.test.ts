@@ -9,9 +9,11 @@ test('signup reaction role resolution uses the setup emoji snapshot', () => {
     mid: 'old-mid',
     support: 'old-support',
     carry: 'old-carry',
+    fill: 'old-fill',
   } as const;
 
   assert.equal(scoutRoleForEmoji(snapshot, 'old-mid'), 'mid');
+  assert.equal(scoutRoleForEmoji(snapshot, 'old-fill'), 'fill');
   assert.equal(scoutRoleForEmoji(snapshot, 'new-mid'), undefined);
   assert.equal(scoutRoleForEmoji(snapshot, null), undefined);
 });

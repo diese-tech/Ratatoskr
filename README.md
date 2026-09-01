@@ -18,7 +18,7 @@ The bot handles deterministic league administration first. Its currently shipped
 - Division lifecycle status, archive, and guarded deletion
 - Season workspace creation and lifecycle
 - `/scout config`, `/scout create`, and `/scout cancel`
-- Reaction-based role signups, two-team roster review, and exactly-once result publication
+- Reaction-based role signups, one- or two-game roster review, and exactly-once result publication
 
 See [`docs/operations/scout-workflow.md`](docs/operations/scout-workflow.md) for the operator flow and permissions.
 

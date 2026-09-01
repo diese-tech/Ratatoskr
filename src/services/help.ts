@@ -58,7 +58,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       },
       {
         usage: '/scout config [timezone:<IANA zone>] [bind_emoji:true]',
-        description: 'Admins configure all-division scout staff, the scout timezone, and the five role signup emoji.',
+        description: 'Admins configure all-division scout staff, the scout timezone, five required role emoji, and optional Fill.',
       },
       {
         usage: '/server bootstrap plan',

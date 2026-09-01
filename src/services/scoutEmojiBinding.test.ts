@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { advanceScoutEmojiBinding, createScoutEmojiBindingState } from './scoutEmojiBinding.js';
+import {
+  advanceScoutEmojiBinding,
+  createScoutEmojiBindingState,
+  skipScoutFillEmojiBinding,
+} from './scoutEmojiBinding.js';
 
 test('emoji binding accepts five distinct guild emoji in scout role order', () => {
   let state = createScoutEmojiBindingState('guild-1', 'admin-1');
@@ -9,20 +13,35 @@ test('emoji binding accepts five distinct guild emoji in scout role order', () =
 
   for (const emojiId of guildEmojiIds) {
     const result = advanceScoutEmojiBinding(state, { userId: 'admin-1', emojiId, guildEmojiIds });
-    assert.ok(result.outcome === 'progress' || result.outcome === 'complete');
+    assert.ok(['progress', 'awaiting-fill', 'complete'].includes(result.outcome));
     state = result.state;
     final = result;
   }
 
   assert.ok(final);
-  assert.equal(final.outcome, 'complete');
-  assert.deepEqual(final.emojiByRole, {
+  assert.equal(final.outcome, 'awaiting-fill');
+  const skipped = skipScoutFillEmojiBinding(final.state, 'admin-1');
+  assert.equal(skipped.outcome, 'complete');
+  assert.deepEqual(skipped.emojiByRole, {
     solo: 'e1',
     jungle: 'e2',
     mid: 'e3',
     support: 'e4',
     carry: 'e5',
+    fill: null,
   });
+});
+
+test('emoji binding optionally accepts Fill as the sixth distinct guild emoji', () => {
+  let state = createScoutEmojiBindingState('guild-1', 'admin-1');
+  const guildEmojiIds = new Set(['e1', 'e2', 'e3', 'e4', 'e5', 'e6']);
+  let final: ReturnType<typeof advanceScoutEmojiBinding> | undefined;
+  for (const emojiId of guildEmojiIds) {
+    final = advanceScoutEmojiBinding(state, { userId: 'admin-1', emojiId, guildEmojiIds });
+    state = final.state;
+  }
+  assert.equal(final?.outcome, 'complete');
+  assert.equal(final?.emojiByRole?.fill, 'e6');
 });
 
 test('emoji binding rejects other users, standard emoji, foreign emoji, and duplicates without advancing', () => {

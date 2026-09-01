@@ -315,4 +315,62 @@ export const migrations: Migration[] = [
       CREATE UNIQUE INDEX idx_scout_setups_result_message ON scout_setups(result_message_id);
     `,
   },
+  {
+    id: 9,
+    name: 'optional_scout_fill_signup',
+    sql: `
+      ALTER TABLE scout_config ADD COLUMN fill_emoji_id TEXT;
+      ALTER TABLE scout_setups ADD COLUMN fill_emoji_id TEXT;
+
+      CREATE TABLE scout_signups_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id INTEGER NOT NULL REFERENCES scout_setups(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('solo', 'jungle', 'mid', 'support', 'carry', 'fill')),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        UNIQUE (setup_id, user_id, role)
+      );
+
+      INSERT INTO scout_signups_new (id, setup_id, user_id, role, created_at)
+        SELECT id, setup_id, user_id, role, created_at FROM scout_signups;
+      DROP TABLE scout_signups;
+      ALTER TABLE scout_signups_new RENAME TO scout_signups;
+      CREATE INDEX idx_scout_signups_setup ON scout_signups(setup_id);
+    `,
+  },
+  {
+    id: 10,
+    name: 'scout_setup_eligibility_role',
+    sql: `
+      ALTER TABLE scout_setups ADD COLUMN eligibility_role_id TEXT;
+    `,
+  },
+  {
+    id: 11,
+    name: 'two_game_scout_rosters',
+    sql: `
+      ALTER TABLE scout_setups ADD COLUMN game_count INTEGER NOT NULL DEFAULT 1
+        CHECK (game_count IN (1, 2));
+
+      CREATE TABLE scout_roster_slots_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id INTEGER NOT NULL REFERENCES scout_setups(id) ON DELETE CASCADE,
+        game_number INTEGER NOT NULL DEFAULT 1 CHECK (game_number IN (1, 2)),
+        team TEXT NOT NULL CHECK (team IN ('team_one', 'team_two')),
+        role TEXT NOT NULL CHECK (role IN ('solo', 'jungle', 'mid', 'support', 'carry')),
+        user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        staff_assigned INTEGER NOT NULL DEFAULT 0 CHECK (staff_assigned IN (0, 1)),
+        UNIQUE (setup_id, game_number, team, role)
+      );
+      INSERT INTO scout_roster_slots_new (
+        id, setup_id, game_number, team, role, user_id, created_at, updated_at, staff_assigned
+      ) SELECT id, setup_id, 1, team, role, user_id, created_at, updated_at, staff_assigned
+        FROM scout_roster_slots;
+      DROP TABLE scout_roster_slots;
+      ALTER TABLE scout_roster_slots_new RENAME TO scout_roster_slots;
+      CREATE INDEX idx_scout_roster_slots_setup ON scout_roster_slots(setup_id);
+    `,
+  },
 ];
