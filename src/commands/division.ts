@@ -33,41 +33,41 @@ const choices = divisions.map((division) => ({ name: division.name, value: divis
 
 export const divisionCommand = new SlashCommandBuilder()
   .setName('division')
-  .setDescription('Manage YSL division scaffolds.')
+  .setDescription('Create, check, archive, or delete division channels and roles.')
   .setDMPermission(false)
   .addSubcommand((subcommand) =>
     subcommand
       .setName('add')
-      .setDescription('Create or repair the boilerplate for a division.')
+      .setDescription('Create missing division channels and roles, or repair existing ones.')
       .addStringOption((option) =>
-        option.setName('name').setDescription('Division to provision.').setRequired(true).addChoices(...choices),
+        option.setName('name').setDescription('Division to create or repair.').setRequired(true).addChoices(...choices),
       ),
   )
   .addSubcommand((subcommand) =>
     subcommand
       .setName('status')
-      .setDescription('Show whether a division scaffold currently exists.')
+      .setDescription('Check which division channels and roles exist or are missing.')
       .addStringOption((option) =>
-        option.setName('name').setDescription('Division to inspect.').setRequired(true).addChoices(...choices),
+        option.setName('name').setDescription('Division to check.').setRequired(true).addChoices(...choices),
       ),
   )
   .addSubcommand((subcommand) =>
     subcommand
       .setName('archive')
-      .setDescription('Hide a division category without deleting history.')
+      .setDescription("Hide a division's channels without deleting its history.")
       .addStringOption((option) =>
-        option.setName('name').setDescription('Division to archive.').setRequired(true).addChoices(...choices),
+        option.setName('name').setDescription('Division to hide.').setRequired(true).addChoices(...choices),
       ),
   )
   .addSubcommand((subcommand) =>
     subcommand
       .setName('delete')
-      .setDescription("Permanently delete an archived division's category, channels, and roles.")
+      .setDescription("Permanently delete an archived division's channels and roles.")
       .addStringOption((option) =>
-        option.setName('name').setDescription('Archived division to delete.').setRequired(true).addChoices(...choices),
+        option.setName('name').setDescription('Archived division to permanently delete.').setRequired(true).addChoices(...choices),
       )
       .addBooleanOption((option) =>
-        option.setName('confirm').setDescription('Must be true to permanently delete.').setRequired(true),
+        option.setName('confirm').setDescription('Choose true to confirm permanent deletion.').setRequired(true),
       ),
   );
 

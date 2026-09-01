@@ -20,29 +20,29 @@ export const SCOUT_CONFIG_ROLES_CUSTOM_ID = 'scout:config:authorized_roles';
 
 export const scoutCommand = new SlashCommandBuilder()
   .setName('scout')
-  .setDescription('Manage preseason scout setups.')
+  .setDescription('Create and manage preseason scouting games.')
   .setDMPermission(false)
   .addSubcommand((subcommand) =>
-    subcommand.setName('create').setDescription('Create a scout setup in this division signup channel.'),
+    subcommand.setName('create').setDescription('Set up and post a scouting game for this division.'),
   )
   .addSubcommand((subcommand) =>
-    subcommand.setName('cancel').setDescription('Cancel an open scout setup in this division signup channel.'),
+    subcommand.setName('cancel').setDescription('Cancel an open scouting game for this division.'),
   )
   .addSubcommand((subcommand) =>
     subcommand
       .setName('config')
-      .setDescription('Configure scout staff, role emoji, and timezone.')
+      .setDescription('Set scout staff roles, timezone, and signup emojis.')
       .addStringOption((option) =>
         option
           .setName('timezone')
-          .setDescription('IANA timezone, such as America/New_York.')
+          .setDescription('Timezone used to read game times, such as America/New_York.')
           .setAutocomplete(true)
           .setRequired(false),
       )
       .addBooleanOption((option) =>
         option
           .setName('bind_emoji')
-          .setDescription('Bind five required role emoji and optional Fill.')
+          .setDescription('Bind five role emojis and optional Fill.')
           .setRequired(false),
       ),
   );

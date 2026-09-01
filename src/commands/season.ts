@@ -26,19 +26,19 @@ import { evaluateSeasonCreateEligibility, seasonChannelLogicalKey, SEASON_CHANNE
 
 export const seasonCommand = new SlashCommandBuilder()
   .setName('season')
-  .setDescription('Manage the canonical YSL season workspace.')
+  .setDescription('Create and manage season channels.')
   .setDMPermission(false)
   .addSubcommand((subcommand) =>
     subcommand
       .setName('create')
-      .setDescription('Create and activate the next season workspace.')
+      .setDescription('Create the channels for a new season and make it active.')
       .addIntegerOption((option) =>
-        option.setName('number').setDescription('Season number (e.g. 2).').setRequired(true).setMinValue(1),
+        option.setName('number').setDescription('Season number, such as 2.').setRequired(true).setMinValue(1),
       )
       .addStringOption((option) =>
         option
           .setName('name')
-          .setDescription('Custom display name -- entirely replaces the default "YSL Season N".')
+          .setDescription('Optional category name; replaces the default YSL Season N.')
           .setRequired(false)
           // Discord category names are capped at 100 characters. Rejecting
           // this at the option level (enforced client-side by Discord)

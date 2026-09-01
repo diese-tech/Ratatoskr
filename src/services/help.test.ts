@@ -28,3 +28,29 @@ test('formatHelpSections renders each entry as a usage line followed by its desc
   const formatted = formatHelpSections(sections);
   assert.equal(formatted[0].value, '`/x arg:<y>`\nDoes the thing.');
 });
+
+test('every help section fits within Discord embed field limits', () => {
+  for (const field of formatHelpSections(HELP_SECTIONS)) {
+    assert.ok(field.value.length <= 1_024, `${field.name} is ${field.value.length} characters`);
+  }
+});
+
+test('scout help explains the complete current workflow in plain language', () => {
+  const scout = HELP_SECTIONS.find((section) => section.title.includes('Scout'));
+  assert.ok(scout);
+  const rendered = scout.entries.map((entry) => `${entry.usage}\n${entry.description}`).join('\n');
+
+  for (const expected of [
+    '/scout create',
+    '/scout cancel',
+    'eligibility role',
+    'Fill',
+    'same time',
+    'two games',
+    'Shuffle',
+    'Publish',
+    'Replace player',
+  ]) {
+    assert.ok(rendered.includes(expected), `scout help should explain ${expected}`);
+  }
+});

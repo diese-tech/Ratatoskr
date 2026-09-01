@@ -23,7 +23,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       {
         usage: '/scout create',
         description:
-          'Authorized staff or that division\'s captains start a private preview from its scout-signups channel. The public post collects role reactions, then provides private roster review, shuffle/edit, and publish controls.',
+          'Staff or that division\'s captains run this in its scout-signups channel. Choose the time, signup limit, note, and optional eligibility role, then review and post the game. Fill can cover any missing role. A second game at the same time requires confirmation, and twenty eligible players can build two games. Use the private review controls to Shuffle, edit across games, and Publish; published rosters provide Swap and Replace player controls.',
       },
       {
         usage: '/scout cancel',
@@ -32,43 +32,46 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     ],
   },
   {
-    title: '🛡️ Admin Commands',
+    title: '🏟️ Division Commands',
     entries: [
       {
         usage: '/division add name:<division>',
-        description: 'Creates (or repairs) all the roles and channels for a division.',
+        description: 'Creates missing roles and channels for a division, or repairs the ones Ratatoskr already manages.',
       },
       {
         usage: '/division status name:<division>',
-        description: "Shows what's already set up for a division and what's still missing.",
+        description: 'Shows which division roles and channels exist and which ones are missing.',
       },
       {
         usage: '/division archive name:<division>',
-        description: "Hides a division's channels from members without deleting anything -- safe and reversible.",
+        description: "Hides a division's channels from members without deleting its history. This can be reversed.",
       },
       {
         usage: '/division delete name:<division> confirm:true',
-        description: "Permanently deletes an archived division's channels and roles. Cannot be undone.",
+        description: "Permanently deletes an archived division's channels and roles. This cannot be undone.",
       },
+    ],
+  },
+  {
+    title: '🛡️ Admin Setup Commands',
+    entries: [
       {
         usage: '/season create number:<n> [name:<custom name>]',
         description:
-          'Creates and activates the season workspace (schedule, standings, rosters, and more) for a new season. ' +
-          'Refuses to run if a season is already active.',
+          'Creates the channels for a new season and makes it active. It stops safely if another season is already active.',
       },
       {
         usage: '/scout config [timezone:<IANA zone>] [bind_emoji:true]',
-        description: 'Admins configure all-division scout staff, the scout timezone, five required role emoji, and optional Fill.',
+        description: 'Sets all-division scout staff, the game-time timezone, five required role emojis, and optional Fill.',
       },
       {
         usage: '/server bootstrap plan',
-        description: 'Previews the base server scaffold (roles, categories, channels) without changing anything.',
+        description: 'Shows which standard server roles and channels would be created, repaired, or removed without changing anything.',
       },
       {
         usage: '/server bootstrap apply [delete_obsolete:true]',
         description:
-          'Creates or repairs the base server scaffold for real -- useful if the bot is set up on a fresh server ' +
-          "or something was deleted, and you don't have local/repo access to run the setup script yourself.",
+          'Creates or repairs the standard server roles and channels. Use delete_obsolete only after reviewing the plan.',
       },
     ],
   },
