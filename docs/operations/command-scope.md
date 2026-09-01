@@ -2,6 +2,8 @@
 
 This document summarizes Ratatoskr's operational surface. The runtime command registry remains authoritative.
 
+Run `/help` in Discord for a private, plain-English quickstart covering every shipped command.
+
 ## Scout games
 
 - `/scout config` — admins configure additional scout staff roles, timezone, five required role emoji, and optional Fill.

@@ -1,7 +1,9 @@
 import { EmbedBuilder, MessageFlags, SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { formatHelpSections, HELP_SECTIONS } from '../services/help.js';
 
-export const helpCommand = new SlashCommandBuilder().setName('help').setDescription('Show what Ratatoskr can do.');
+export const helpCommand = new SlashCommandBuilder()
+  .setName('help')
+  .setDescription("Show a quick guide to Ratatoskr's commands.");
 
 export async function handleHelpCommand(interaction: ChatInputCommandInteraction) {
   const embed = new EmbedBuilder()

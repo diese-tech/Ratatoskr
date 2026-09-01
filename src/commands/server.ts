@@ -18,23 +18,23 @@ const guildsRunningApply = new Set<string>();
 
 export const serverCommand = new SlashCommandBuilder()
   .setName('server')
-  .setDescription('Manage the canonical YSL server scaffold.')
+  .setDescription("Set up or repair Ratatoskr's server roles and channels.")
   .setDMPermission(false)
   .addSubcommandGroup((group) =>
     group
       .setName('bootstrap')
-      .setDescription('Create or reconcile the server scaffold (roles, categories, channels).')
+      .setDescription('Preview or apply the standard server setup.')
       .addSubcommand((subcommand) =>
-        subcommand.setName('plan').setDescription('Preview scaffold changes without applying them.'),
+        subcommand.setName('plan').setDescription('Show what would change without changing anything.'),
       )
       .addSubcommand((subcommand) =>
         subcommand
           .setName('apply')
-          .setDescription('Create/reconcile the scaffold for real.')
+          .setDescription('Create or repair the standard server roles and channels.')
           .addBooleanOption((option) =>
             option
               .setName('delete_obsolete')
-              .setDescription('Also delete managed resources no longer in the template (previewed first).')
+              .setDescription('Also delete old bot-managed items after they appear in the preview.')
               .setRequired(false),
           ),
       ),
