@@ -6,21 +6,26 @@ stale-post management follow-up; see `docs/plans/backlog-execution-plan.md` v1.8
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — recovered-post management ready for PR checks
+## Current checkpoint — recovered-post management merged and startup verified
 
 Done: checkpoint 8777d03 adds direct cancellation to recovered cards and repairs
-cancellation display/cleanup. The next chunk adds durable published completion,
+cancellation display/cleanup. Checkpoint 3ba4306 adds durable published completion,
 Swap/Replace in Scout Ops, stale-form/database write fences, and restart cleanup.
 The user's screenshot verifies B2 recovery/display, not full interaction acceptance.
 
-Validation: local tests, both typechecks, build and dependency audit pass. Fixtures
+Merged: PR #79 at cd1be71284fafc7c69d0058807d046889101238d, preserving both commits.
+Validation: 196 local tests, both typechecks, build and dependency audit pass. Fixtures
 exercise missing/forbidden messages, private confirmation authorization, pending
 delivery fences, disk restart/upgrades and legacy two-game routing. See the
 follow-up plan for the contract and rollback implications of completion records.
+PR CI 33758762949 and main CI 33758944912 passed on Windows and Ubuntu. Railway
+deployment ba9e274e-fe5c-49ea-bd29-c632709f1463 succeeded; database/login/registration,
+finished-post recovery and control-card recovery completed without startup errors
+at 13:07:07 UTC on September 3. The persistent volume was mounted.
 
-Next: push the focused PR, await green Ubuntu/Windows checks, review and merge.
-Keep Railway auto-deploy ON; inspect deployment/startup logs. Then perform the
-separate user-selected live cancel/finish checks; no production setups are being
+Next: preserve this evidence checkpoint and verify its automatic rollout, then
+perform the separate user-selected live cancel/finish checks. Keep Railway
+auto-deploy ON and inspect logs between merges. No production setups are being
 automatically closed and no date/time editing or reminder scheduler is included.
 
 ## Previous checkpoint — B1/B2 merged and deployment startup verified

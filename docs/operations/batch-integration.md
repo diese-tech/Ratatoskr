@@ -69,3 +69,27 @@ rehearsal remains unverified; synthetic v14/v15 checks are not equivalent.
 The one-hour roster reminder remains a separate follow-up. B3's full #45/#62
 acceptance session and B4-B7 remain outside this completed implementation/merge
 scope. Continue preserving Done/Validation/Next commits for later authorized work.
+
+## Recovered-post management follow-up — PR #79
+
+The user's first B2 screenshot verified successful recovery of older listings,
+but revealed missing management controls. PR #79 adds direct cancellation,
+published roster edits in Scout Ops and durable explicit completion. It is a
+bounded B2 follow-up; B3–B7 and reminder scope remain unchanged.
+
+- Merge: `cd1be71284fafc7c69d0058807d046889101238d`, September 3 at 13:04:27 UTC.
+- Preserved checkpoints: `8777d03` (recovered-card cancellation) and `3ba4306`
+  (completion, editing and recovery).
+- 196 local tests, application/script typechecks, build and production audit pass.
+- PR CI `33758762949`; main CI `33758944912`: Windows and Ubuntu pass.
+- Railway deployment `ba9e274e-fe5c-49ea-bd29-c632709f1463`; GitHub deployment
+  `6244551865`, successful at 13:06:58 UTC.
+- Inspected runtime: volume mounted at 13:06:51; database ready and bot online at
+  13:06:53; finished posts reconciled at 13:07:00; cards reconciled at 13:07:07.
+  No startup failures observed. Automatic deployments remained enabled.
+
+Migration 17 adds completion records; synthetic v14/v15/v16 upgrade fixtures
+preserve prior data. Follow the completion rollback constraints in
+`../plans/scout-stale-post-management.md`. A coordinator must still verify live
+cancel/finish behavior on chosen setups. No production setup was closed by the
+agent, and successful startup does not substitute for that acceptance.
