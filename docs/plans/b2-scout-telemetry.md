@@ -34,16 +34,19 @@ ineligible reactions; Ratatoskr retains reactions and filters eligibility.
 4. Reactions, membership/eligibility changes and draft mutations refresh the view.
    Show eligible unseated participants as overflow after a draft exists, without
    treating role overage as unique spare players. No new overflow picker in B2.
-5. Publication/cancellation leaves a terminal card with its last recorded signup
-   snapshot and time, plus the published roster link when available. Counts are
-   explicitly historical after closure, not confirmed substitute availability.
+5. Publication/cancellation captures current signup counts under the signup-state
+   lock and saves the snapshot atomically with closure, independently of card
+   delivery. If eligibility fails, retain the timestamped last known snapshot.
+   The terminal card includes the roster link when available. Counts are explicitly
+   historical after closure, not confirmed substitute availability.
 
 ## Reliability and acceptance
 
 Append migration 16 for telemetry identity, attempted sends and the last snapshot.
 Serialize per-setup card writes; use exact durable markers and paginated recovery.
 Retain state on ambiguous sends/deletes and 403s; only confirmed absence permits
-replacement. Telemetry errors report to staff-ops without undoing signup/roster
+replacement. Confirmed message-creation rejections release only the failed send
+attempt for retry, retaining prior notification history. Telemetry errors report to staff-ops without undoing signup/roster
 work. Recover open, ready and terminal cards on startup without duplicate pings.
 
 Test zero signups, overlapping reactions, overflow, Fill, one/two-game targets,
@@ -51,10 +54,9 @@ missing roles, flex overlap, eligibility loss/gain/departure, live reaction and
 draft refreshes, fresh ready notification, terminal snapshots, restart/ambiguous
 delivery, denied cleanup and simultaneous setups. Run the full inherited gates.
 
-Next: implement the shared snapshot/rendering layer and durable card lifecycle,
-wire existing events, test recovery, update #68's adoption contract in repository
-documentation, and open a separate reviewable B2 PR. Keep Done/Validation/Next
-commit bodies after each meaningful chunk. B1 deployment/live gates remain open.
+The implementation and review repairs are complete in PR #77. The checkpoints
+below retain the original sequence and validation history. Keep Done/Validation/Next
+commit bodies after each meaningful chunk. B1/B2 deployment/live gates remain open.
 
 ## Checkpoint 1 — snapshot and persistence foundation
 
@@ -102,7 +104,7 @@ Validation: the real delayed-edit regression failed before repair (one signup
 persisted instead of two); all ten lifecycle integration tests and typecheck pass.
 Next: final cumulative gates, documentation and PR/CI. No production changes.
 
-## Final implementation checkpoint
+## Initial implementation checkpoint — before review repairs
 
 PR: https://github.com/diese-tech/Ratatoskr/pull/77
 Branch: codex/b2-scout-telemetry; base: codex/b1-player-names (PR #76).
@@ -145,3 +147,21 @@ Validation: both delayed-edit closure regressions failed before repair; all 15
 card lifecycle tests pass, including eligibility-failure fallback and frozen
 recovery. Application typecheck and focused cancellation/publication tests pass.
 Next: cumulative tests, typechecks, build/audit, updated handoff and final PR CI.
+
+## Current implementation checkpoint — review repairs complete
+
+Done: fixes 13dc695 and b54f0f0 address both PR #77 findings. Plan v1.6 and the
+operator guide record retry behavior, atomic closure snapshots and historical
+fallbacks. B1/B2 retain separate integration boundaries. The one-hour reminder
+is the preferred follow-up; a second 15-minute reminder remains undecided.
+
+Validation: all 187 tests, application/script typechecks, build and dependency
+audit pass (zero production dependency vulnerabilities). The 15 lifecycle tests
+include four regressions reproduced before repair and eligibility-failure
+fallback. Require green Ubuntu/Windows checks on the final PR head.
+Functional commit b54f0f0 passed both platforms in CI run 33729021787; check the
+subsequent documentation commit separately before integration.
+
+Next: after final CI, integrate B1's stacked PRs in order and B2 separately under
+the documented authorization gate. Production backup/migration rehearsal and
+live Discord acceptance remain pending. No merge, deployment or issue closure.

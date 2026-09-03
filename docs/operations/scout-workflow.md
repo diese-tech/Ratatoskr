@@ -92,7 +92,11 @@ views are not edited repeatedly. Unknown role/member access marks the last
 snapshot historical and reports an actionable error; the bot never silently
 turns a restricted setup into an unrestricted one.
 
-Published/cancelled cards retain their last recorded snapshot and timestamp.
+Publication/cancellation captures current counts while coordinating with signup
+writes, then saves that snapshot atomically with closure. Card delivery can retry
+independently. If eligibility cannot be verified, retain the last known snapshot
+and report the failure to staff. Published/cancelled cards show the last recorded
+snapshot and timestamp; restart does not recalculate historical eligibility.
 Those historical signups are not confirmation that unseated players remain
 available as substitutes. Published cards link the original roster destination.
 
@@ -101,7 +105,9 @@ verify existing pending roster updates from migration 15 remain unchanged. On
 restart the bot recovers cards by exact markers and stored IDs. A denied deletion
 keeps temporary-card ownership and delays the fresh ready notification. An
 uncertain send stays pending until its message can be recovered; do not clear
-attempt flags and resend without verifying the original delivery. Restore access
+attempt flags and resend without verifying the original delivery. Known Discord
+message-creation rejections automatically release the failed attempt for retry;
+replacing a deleted card retains the previous creator notification. Restore access
 and retry via a normal refresh or restart. Review pending cards before rolling
 back to older code, which does not manage their lifecycle.
 
