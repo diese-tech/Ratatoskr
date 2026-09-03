@@ -1,3 +1,4 @@
+import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -138,10 +139,6 @@ async function authorized(interaction: MessageComponentInteraction, db: Database
   return allowed ? setup : undefined;
 }
 
-function slotLabel(slot: ReturnType<typeof listScoutRosterSlots>[number]) {
-  return `Game ${slot.gameNumber} ${slot.team === 'team_one' ? 'Team 1' : 'Team 2'} ${SCOUT_ROLE_LABELS[slot.role]} — ${slot.userId}`;
-}
-
 function selectRow(menu: StringSelectMenuBuilder | UserSelectMenuBuilder) {
   return new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(menu);
 }
@@ -154,19 +151,20 @@ async function showEditPicker(
   action: 'swap' | 'role' | 'replace',
 ) {
   const slots = listScoutRosterSlots(db, setupId);
+  const names = await resolveScoutPlayerNames(interaction.guild!, slots.map((slot) => slot.userId));
   if (action === 'swap') {
     const menu = new StringSelectMenuBuilder()
       .setCustomId(`scout:editpick:swap:${setupId}:${version}`)
       .setPlaceholder('Role to swap between teams')
       .addOptions(SCOUT_ROLES.map((role) => new StringSelectMenuOptionBuilder().setLabel(SCOUT_ROLE_LABELS[role]).setValue(role)));
-    await interaction.update({ content: 'Choose the role whose two players should swap teams.', components: [selectRow(menu)] });
+    await interaction.editReply({ content: 'Choose the role whose two players should swap teams.', components: [selectRow(menu)] });
     return;
   }
   const menu = new StringSelectMenuBuilder()
     .setCustomId(`scout:editpick:${action}first:${setupId}:${version}`)
     .setPlaceholder(action === 'role' ? 'First player to exchange' : 'Slot to replace')
-    .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder().setLabel(slotLabel(slot).slice(0, 100)).setValue(String(slot.id))));
-  await interaction.update({
+    .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder().setLabel(formatScoutSlotLabel(slot, names.get(slot.userId))).setValue(String(slot.id))));
+  await interaction.editReply({
     content: action === 'role' ? 'Choose the first occupied slot in the role exchange.' : 'Choose the roster slot to replace.',
     components: [selectRow(menu)],
   });
@@ -178,19 +176,21 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
   const editing = parts[1] === 'edit';
   const setupId = Number(parts[editing ? 3 : 2]);
   if (!Number.isInteger(setupId)) return false;
+  if (parts[1] === 'review') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  else await interaction.deferUpdate();
   const setup = await authorized(interaction, db, setupId);
   if (!setup) {
-    await interaction.reply({ content: 'You do not have permission to review this division roster.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'You do not have permission to review this division roster.' });
     return true;
   }
 
   if (parts[1] === 'review') {
-    await interaction.reply({ ...await reviewViewWithExpansion(interaction, db, setup.id), flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ ...await reviewViewWithExpansion(interaction, db, setup.id) });
     return true;
   }
 
   if (parts[1] === 'buildtwoback') {
-    await interaction.update(await reviewViewWithExpansion(interaction, db, setup.id));
+    await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id));
     return true;
   }
 
@@ -201,7 +201,7 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
       new ButtonBuilder().setCustomId(`scout:buildtwoconfirm:${setupId}:${expectedVersion}`).setLabel('Confirm 2 games').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`scout:buildtwoback:${setupId}:${expectedVersion}`).setLabel('Back').setStyle(ButtonStyle.Secondary),
     );
-    await interaction.update({
+    await interaction.editReply({
       content: 'Build two games from all currently eligible signups? This recalculates both games and replaces any manual edits in the current one-game roster. You can then shuffle or swap players across either game before publishing.',
       components: [row],
     });
@@ -214,14 +214,14 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
     const signups = await eligibleScoutSignups(interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
     const generated = generateScoutRoster(signups, { gameCount: 2 });
     if (!generated.feasible) {
-      await interaction.update(await reviewViewWithExpansion(interaction, db, setup.id, 'There are no longer enough compatible eligible signups to build two games.'));
+      await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'There are no longer enough compatible eligible signups to build two games.'));
       return true;
     }
     if (!expandScoutRosterToTwoGamesIfVersion(db, setup.id, expectedVersion, generated.slots)) {
-      await interaction.update(await reviewViewWithExpansion(interaction, db, setup.id, 'That confirmation was stale; no change was made.'));
+      await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'That confirmation was stale; no change was made.'));
       return true;
     }
-    await interaction.update(await reviewViewWithExpansion(interaction, db, setup.id, 'Two-game roster built.'));
+    await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'Two-game roster built.'));
     return true;
   }
 
@@ -239,16 +239,16 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
   const signups = await eligibleScoutSignups(interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
   const generated = generateDifferentScoutRoster(signups, scoutRosterFingerprint(current), Math.random, setup.gameCount);
   if (!generated.result.feasible || !generated.isDifferent) {
-    await interaction.update(buildScoutRosterReviewView(db, setup.id, setup.version, current, 'No different valid roster is available.'));
+    await interaction.editReply(buildScoutRosterReviewView(db, setup.id, setup.version, current, 'No different valid roster is available.'));
     return true;
   }
   if (!replaceScoutRosterIfVersion(db, setup.id, expectedVersion, generated.result.slots)) {
     const latest = getScoutSetupById(db, setup.id)!;
-    await interaction.update(buildScoutRosterReviewView(db, setup.id, latest.version, listScoutRosterSlots(db, setup.id), 'That view was stale; showing the current roster.'));
+    await interaction.editReply(buildScoutRosterReviewView(db, setup.id, latest.version, listScoutRosterSlots(db, setup.id), 'That view was stale; showing the current roster.'));
     return true;
   }
   const updated = getScoutSetupById(db, setup.id)!;
-  await interaction.update(buildScoutRosterReviewView(db, setup.id, updated.version, listScoutRosterSlots(db, setup.id), 'Roster shuffled.'));
+  await interaction.editReply(buildScoutRosterReviewView(db, setup.id, updated.version, listScoutRosterSlots(db, setup.id), 'Roster shuffled.'));
   return true;
 }
 
@@ -262,19 +262,21 @@ export async function handleScoutReviewStringSelect(
   const setupId = Number(parts[3]);
   const expectedVersion = Number(parts[4]);
   if (!Number.isInteger(setupId) || !Number.isInteger(expectedVersion)) return false;
+  await interaction.deferUpdate();
   const setup = await authorized(interaction, db, setupId);
   if (!setup) {
-    await interaction.reply({ content: 'You do not have permission to edit this division roster.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'You do not have permission to edit this division roster.' });
     return true;
   }
   const selected = interaction.values[0];
   const slots = listScoutRosterSlots(db, setupId);
+  const names = await resolveScoutPlayerNames(interaction.guild!, slots.map((slot) => slot.userId));
 
   if (action === 'swap') {
     const pair = slots.filter((slot) => slot.role === selected);
     const changed = pair.length === 2 && swapScoutRosterSlotsIfVersion(db, setupId, expectedVersion, pair[0]!.id, pair[1]!.id, false);
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.update(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Players swapped between teams.' : 'That view was stale; no change was made.'));
+    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Players swapped between teams.' : 'That view was stale; no change was made.'));
     return true;
   }
 
@@ -288,12 +290,12 @@ export async function handleScoutReviewStringSelect(
         (signup) => signup.userId === selected && (signup.role === slot.role || signup.role === 'fill'),
       );
     if (!stillEligible) {
-      await interaction.update(buildScoutRosterReviewView(db, setupId, setup.version, slots, 'That player is no longer an eligible signup for this slot.'));
+      await interaction.editReply(buildScoutRosterReviewView(db, setupId, setup.version, slots, 'That player is no longer an eligible signup for this slot.'));
       return true;
     }
     const outcome = replaceScoutRosterSlotIfVersion(db, setupId, expectedVersion, slotId, selected!, false);
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.update(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Eligible signup seated.' : `No change was made (${outcome}).`));
+    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Eligible signup seated.' : `No change was made (${outcome}).`));
     return true;
   }
 
@@ -305,16 +307,16 @@ export async function handleScoutReviewStringSelect(
       .setCustomId(`scout:editpick:roletarget:${setupId}:${expectedVersion}:${sourceId}`)
       .setPlaceholder('Second player to exchange')
       .addOptions(slots.filter((slot) => slot.id !== sourceId).map((slot) =>
-        new StringSelectMenuOptionBuilder().setLabel(slotLabel(slot).slice(0, 100)).setValue(String(slot.id)),
+        new StringSelectMenuOptionBuilder().setLabel(formatScoutSlotLabel(slot, names.get(slot.userId))).setValue(String(slot.id)),
       ));
-    await interaction.update({ content: `Exchange ${slotLabel(source)} with which occupied slot?`, components: [selectRow(menu)] });
+    await interaction.editReply({ content: `Exchange ${formatScoutSlotLabel(source, names.get(source.userId))} with which occupied slot?`, components: [selectRow(menu)] });
     return true;
   }
   if (action === 'roletarget') {
     const originalSourceId = Number(parts[5]);
     const changed = swapScoutRosterSlotsIfVersion(db, setupId, expectedVersion, originalSourceId, sourceId, true);
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.update(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Role assignments exchanged and marked as staff overrides.' : 'That view was stale; no change was made.'));
+    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Role assignments exchanged and marked as staff overrides.' : 'That view was stale; no change was made.'));
     return true;
   }
   if (action === 'replacefirst') {
@@ -327,15 +329,16 @@ export async function handleScoutReviewStringSelect(
       .slice(0, 25);
     const components: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
     if (eligible.length) {
+      const candidateNames = await resolveScoutPlayerNames(interaction.guild!, eligible);
       components.push(selectRow(new StringSelectMenuBuilder()
         .setCustomId(`scout:editpick:eligible:${setupId}:${expectedVersion}:${sourceId}`)
         .setPlaceholder('Eligible signup replacement')
-        .addOptions(eligible.map((userId) => new StringSelectMenuOptionBuilder().setLabel(userId).setValue(userId)))));
+        .addOptions(eligible.map((userId) => new StringSelectMenuOptionBuilder().setLabel(candidateNames.get(userId)!).setValue(userId)))));
     }
     components.push(selectRow(new UserSelectMenuBuilder()
       .setCustomId(`scout:edituser:explicit:${setupId}:${expectedVersion}:${sourceId}`)
       .setPlaceholder('Or choose an explicit staff substitute')));
-    await interaction.update({ content: `Choose who should take ${slotLabel(source)}.`, components });
+    await interaction.editReply({ content: `Choose who should take ${formatScoutSlotLabel(source, names.get(source.userId))}.`, components });
     return true;
   }
   return false;
@@ -351,23 +354,24 @@ export async function handleScoutReviewUserSelect(
   const expectedVersion = Number(parts[4]);
   const slotId = Number(parts[5]);
   if (![setupId, expectedVersion, slotId].every(Number.isInteger)) return false;
+  await interaction.deferUpdate();
   const setup = await authorized(interaction, db, setupId);
   if (!setup) {
-    await interaction.reply({ content: 'You do not have permission to edit this division roster.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'You do not have permission to edit this division roster.' });
     return true;
   }
   const selectedUserId = interaction.values[0]!;
   const selectedMember = await interaction.guild?.members.fetch(selectedUserId).catch(() => undefined);
   if (!selectedMember || interaction.users.get(selectedUserId)?.bot) {
-    await interaction.reply({ content: 'A bot cannot be used as a scout substitute.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'A bot cannot be used as a scout substitute.' });
     return true;
   }
   if (!isScoutUserEligible(selectedMember.roles.cache.keys(), setup.eligibilityRoleId)) {
-    await interaction.reply({ content: 'That player does not hold this setup\'s eligibility role.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'That player does not hold this setup\'s eligibility role.' });
     return true;
   }
   const outcome = replaceScoutRosterSlotIfVersion(db, setupId, expectedVersion, slotId, selectedUserId, true);
   const latest = getScoutSetupById(db, setupId)!;
-  await interaction.update(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Staff substitute seated and marked as an override.' : `No change was made (${outcome}).`));
+  await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Staff substitute seated and marked as an override.' : `No change was made (${outcome}).`));
   return true;
 }

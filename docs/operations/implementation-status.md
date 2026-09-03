@@ -81,3 +81,16 @@ Validation: 156 tests and application typecheck pass; zero/one/many postings, ac
 Next: B1.7 / #69: readable player names in all draft/published swap and replacement selectors; verify exact Game 2 selection and name fallback.
 
 Deployment/live verification: pending; no production changes.
+
+## B1.7 checkpoint A — readable names
+
+Done: shared per-view player-name resolution for draft/published swap/replacement
+menus and eligible replacement candidates; compact labels retain game/team/role
+and stable internal slot IDs. Draft interactions defer before member lookups.
+
+Validation: 158 tests and app typecheck pass, including cached/fetched guild names,
+global/user fallback, unresolved users, duplicate names and bounded labels.
+
+Next: finish real one/two-game draft and published selector-to-mutation tests,
+verify Game 2 notices, then open the #69 implementation PR and run final B1 gates.
+Live mobile acceptance remains pending. No production changes.
