@@ -141,7 +141,7 @@ export function resolveDivisionPermissionOverwrites(
   }
 
   if (profile === 'scout_results') {
-    const restricted = [PermissionFlagsBits.ViewChannel, ...DIVISION_POST_PERMISSIONS, PermissionFlagsBits.AddReactions];
+    const restricted = [PermissionFlagsBits.ViewChannel, ...DIVISION_POST_PERMISSIONS, PermissionFlagsBits.AddReactions, PermissionFlagsBits.AttachFiles];
     return [
       { id: roleIds.everyone, allow: [], deny: restricted },
       ...[roleIds.manager, roleIds.captain, roleIds.franchiseRepresentative, ...roleIds.admins].map((id) => ({
@@ -149,7 +149,7 @@ export function resolveDivisionPermissionOverwrites(
         allow: [...restricted],
         deny: [],
       })),
-      { id: roleIds.division, allow: [PermissionFlagsBits.ViewChannel], deny: [] },
+      { id: roleIds.division, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles], deny: [] },
     ];
   }
 

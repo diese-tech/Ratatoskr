@@ -148,13 +148,14 @@ export function resolveScoutChannelGroupForDivision(
   };
 
   const signups = resolvePurpose('signups');
-  const results = resolvePurpose('results');
-  if (!signups || !results) return undefined;
+  if (!signups) return undefined;
 
   return {
     divisionId: division.id,
     divisionKey: division.divisionKey,
     signupChannelId: signups.discordResourceId,
-    resultsChannelId: results.discordResourceId,
+    // Legacy field name: this snapshots the bot roster destination, not the
+    // manually maintained match-screenshot channel. Old setups retain their IDs.
+    resultsChannelId: signups.discordResourceId,
   };
 }

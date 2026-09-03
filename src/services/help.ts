@@ -23,7 +23,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       {
         usage: '/scout create',
         description:
-          'From scout-ops, authorized staff choose a division, time, signup limit, note, and optional eligibility role, then post the game to that division\'s signup channel. Fill can cover any missing role. A second setup at the same time requires confirmation, and twenty eligible players can build two games. When a roster is ready, its Scout Ops panel pings the creator once; Review roster opens private controls to Shuffle, edit across games, and Publish. Published rosters provide Swap and Replace player controls in the results channel.',
+          'From scout-ops, authorized staff choose a division, time, signup limit, note, and optional eligibility role, then post the game to that division\'s signup channel. Fill can cover any missing role. A second setup at the same time requires confirmation, and twenty eligible players can build two games. When a roster is ready, its Scout Ops panel pings the creator once; Review roster opens private controls to Shuffle, edit across games, and Publish. Published rosters provide Swap and Replace player controls in the signup channel. Players manually post match screenshots in the results channel.',
       },
       {
         usage: '/scout cancel',
