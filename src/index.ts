@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, MessageFlags, Partials } from 'discord.js';
+import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import { handleInteraction, registerGuildCommands } from './commands/index.js';
 import { env } from './config/env.js';
 import { closeDatabase, openDatabase } from './db/index.js';
@@ -11,7 +11,8 @@ import { reconcileScoutControlPanels } from './services/scoutControlPanel.js';
 import { reconcileCancelledScoutSignupPosts } from './services/scoutCancel.js';
 import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
 import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } from './services/scoutPublish.js';
-import { reportOperationalError, operationalErrorGuidance } from './services/operationalErrors.js';
+import { reportOperationalError } from './services/operationalErrors.js';
+import { handleInteractionError } from './services/interactionErrors.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -83,23 +84,7 @@ client.on('interactionCreate', async (interaction) => {
   try {
     await handleInteraction(interaction, db);
   } catch (error) {
-    const setupId = 'customId' in interaction ? Number(interaction.customId.split(':')[2]) : undefined;
-    const report = await reportOperationalError(client, db, {
-      guildId: interaction.guildId ?? env.DISCORD_GUILD_ID,
-      action: interaction.isChatInputCommand() ? `/${interaction.commandName}` : 'Scout interaction',
-      ...(Number.isSafeInteger(setupId) && setupId! > 0 ? { setupId } : {}),
-    }, error);
-    if (interaction.isRepliable()) {
-      const payload = { content: `Ratatoskr could not complete that action. ${operationalErrorGuidance(report)}`, flags: MessageFlags.Ephemeral } as const;
-      // Best-effort: the interaction token can already be dead here (the
-      // 3-second window elapsed, or a partial reply already happened),
-      // which makes this apology reply itself throw. Since captureRejections
-      // turns that into a Client 'error' event, an uncaught one here takes
-      // the whole process down over a single failed command -- swallow it
-      // rather than let the cure be worse than the disease (#34).
-      if (interaction.replied || interaction.deferred) await interaction.followUp(payload).catch(() => undefined);
-      else await interaction.reply(payload).catch(() => undefined);
-    }
+    await handleInteractionError(interaction, db, error, env.DISCORD_GUILD_ID);
   }
 });
 
