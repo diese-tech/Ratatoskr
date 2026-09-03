@@ -79,3 +79,15 @@ Validation: application typecheck and six focused domain/control-panel tests pas
 Next: real creation/reaction/member/draft flow fixtures, duplicate/ambiguous send
 and deletion tests, disk restart/upgrade checks, then cumulative gates and review.
 Implementation is in progress; no production changes.
+
+## Checkpoint 3 — interaction and recovery verification
+
+Done: nine integration scenarios exercise real creation, signup add/remove,
+eligibility gain/loss/departure, two-game build and publication, cancellation,
+concurrent setups, disk restart, lost initial/replacement responses, denied
+cleanup/access and paginated exact-marker recovery. Terminal cards retain a
+frozen snapshot. Missing eligibility roles visibly mark live data unavailable.
+
+Validation: 180 tests pass before the final upgrade addition. Next: finish v14/v15
+upgrade preservation checks (including B1's pending roster outbox), run typechecks,
+build/audit, update plan/operator docs, and verify the B2 PR on both CI platforms.
