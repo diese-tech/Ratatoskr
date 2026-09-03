@@ -29,16 +29,26 @@ B2 follow-up before B3 acceptance, not authorization for the remaining backlog.
   Pending publication or roster updates must finish before a scout can finish.
 - Never auto-close by date, delete records, move historical rosters, or post
   reminders. Existing signup/results channel ownership remains unchanged.
-- The user's meaning of editing is being clarified (players, date/time, or both).
-  Existing roster edits can be made accessible now; rescheduling is not yet part
-  of this implementation checkpoint.
+- Roster player edits are available from Scout Ops. Clarification is still
+  needed on whether editing should also include date/time rescheduling.
 
-## Checkpoints
+## Current next steps
+
+Complete the user-selected live cancel/finish acceptance described below and the
+outstanding production-copy restore rehearsal. Clarify whether date/time
+rescheduling is needed. CI, merge and deployment/startup checks for the recorded
+implementation are complete; they are not pending prerequisites for this work.
+
+## Historical implementation checkpoints
+
+These snapshots preserve the work and validation recorded at each implementation
+commit. Their Next entries describe the next step at that time, not current work.
+Use Current next steps above when resuming.
 
 1. Done: reproduced missing recovered-card controls and stale cancellation display;
    added Cancel setup and confirmed-deletion cleanup handling.
    Validation: 24 focused lifecycle/cancellation tests and application typecheck pass.
-   Next: published finish lifecycle, recovery and authorization tests; full gates.
+   Next at that time: published finish lifecycle, recovery and authorization tests; full gates.
 2. Done: add migration 17 completion records, versioned finish confirmation,
    startup/manual cleanup recovery, and published Swap/Replace controls in Scout
    Ops. Finished records fence both database mutations and stale private controls.
@@ -46,7 +56,7 @@ B2 follow-up before B3 acceptance, not authorization for the remaining backlog.
    preserved, including cross-game swaps and replacements from Scout Ops.
    Validation: full local suite, both typechecks, build and production dependency
    audit pass; disk upgrade fixtures cover v14, v15 and v16; live acceptance pending.
-   Next: green Ubuntu/Windows PR CI, merge preserving commits, leave Railway
+   Next at that time: green Ubuntu/Windows PR CI, merge preserving commits, leave Railway
    auto-deploy enabled, and verify deployment/startup logs before further merges.
 
 ## Persistence and recovery
