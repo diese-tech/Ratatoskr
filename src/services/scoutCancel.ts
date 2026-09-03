@@ -50,7 +50,7 @@ async function canManageSetup(
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const config = getScoutConfig(db, setup.guildId);
   const { hasAccess } = await import('./authorization.js');
-  return hasScoutDivisionManagementAccess(member, config, division, hasAccess(member, 'ADMIN')) ? setup : undefined;
+  return hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'ADMIN')) ? setup : undefined;
 }
 
 function confirmation(setup: ScoutSetup) {
@@ -137,7 +137,7 @@ export async function handleScoutCancelCommand(
   }
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const { hasAccess } = await import('./authorization.js');
-  const allowed = hasScoutDivisionManagementAccess(member, config, division, hasAccess(member, 'ADMIN'));
+  const allowed = hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'ADMIN'));
   if (!allowed) {
     await interaction.reply({ content: 'You do not have permission to cancel this division\'s scout setups.', flags: MessageFlags.Ephemeral });
     return;

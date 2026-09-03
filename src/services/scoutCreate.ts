@@ -201,7 +201,7 @@ async function resolveScope(
 async function canManageScope(scope: ResolvedScope, guildId: string, db: Database.Database): Promise<boolean> {
   const config = getScoutConfig(db, guildId);
   const { hasAccess } = await import('./authorization.js');
-  return hasScoutDivisionManagementAccess(scope.member, config, scope.division, hasAccess(scope.member, 'ADMIN'));
+  return hasScoutDivisionManagementAccess(db, scope.member, config, scope.division, hasAccess(scope.member, 'ADMIN'));
 }
 
 function completeEmojiMap(
@@ -495,7 +495,22 @@ export async function handleScoutCreateModal(
   return true;
 }
 
-export async function handleScoutCreateButton(
+import { tryAcquireDivisionOperation } from './divisionOperation.js';
+
+export async function handleScoutCreateButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
+  if (!interaction.customId.startsWith(CUSTOM_ID_PREFIX)) return false;
+  const draftId = interaction.customId.split(':')[3];
+  const draft = draftId ? getLiveDraft(draftId) : undefined;
+  if (!draft) return handleScoutCreateButtonLocked(interaction, db);
+  const release = tryAcquireDivisionOperation(db, draft.guildId, draft.divisionKey);
+  if (!release) {
+    await interaction.reply({ content: 'This division has an operation in progress. Retry when it finishes.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  try { return await handleScoutCreateButtonLocked(interaction, db); } finally { release(); }
+}
+
+async function handleScoutCreateButtonLocked(
   interaction: ButtonInteraction,
   db: Database.Database,
 ): Promise<boolean> {
