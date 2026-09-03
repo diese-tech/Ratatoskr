@@ -16,6 +16,34 @@ import {
   resolveDivisionPermissionOverwrites,
 } from './divisions.js';
 
+test('concurrent division provisioning creates and tracks the shared franchise role once', async () => {
+  const db = openDatabase(':memory:');
+  const roles = new Collection<string, any>();
+  let sharedCreates = 0;
+  const guild = { id: 'concurrent-guild', roles: { cache: roles, fetch: async () => roles,
+    create: async ({ name }: { name: string }) => {
+      if (name !== 'Franchise Representative') throw new Error('Reached division-specific work');
+      const id = `shared-${++sharedCreates}`;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const role = { id, name };
+      roles.set(id, role);
+      return role;
+    },
+  }, channels: { fetch: async () => undefined } } as unknown as Guild;
+  try {
+    const results = await Promise.allSettled([
+      provisionDivision(db, guild, 'vanaheim'), provisionDivision(db, guild, 'alfheim'),
+    ]);
+    assert.equal(sharedCreates, 1);
+    assert.equal(roles.size, 1);
+    for (const result of results) {
+      assert.equal(result.status, 'rejected');
+      if (result.status === 'rejected') assert.match(result.reason.message, /Reached division-specific work/);
+    }
+    assert.equal(listManagedResourcesByDomain(db, guild.id, 'server').filter((row) => row.logicalKey === 'server:role:franchise_representative').length, 1);
+  } finally { db.close(); }
+});
+
 test('isDivisionKey recognizes every configured division key and rejects unknown ones', () => {
   assert.equal(isDivisionKey('vanaheim'), true);
   assert.equal(isDivisionKey('svartalfheim'), true);
