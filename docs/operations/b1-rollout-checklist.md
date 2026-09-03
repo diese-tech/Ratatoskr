@@ -1,7 +1,11 @@
 # B1 rollout handoff
 
-Status: code complete; deployment and live verification pending. The authorized
-scope is plan v1.4 (scope unchanged from v1.3). No production action was performed.
+Current status: B1 is merged through c594500 and Railway startup verified.
+The user authorized automatic deployment and inspection between merges; it
+remains enabled. See `batch-integration.md` and plan v1.7 for current evidence.
+Live interaction acceptance and a production-copy restore rehearsal remain open.
+The original pre-rollout checklist below is retained for those checks and future
+releases; its earlier approval assumptions do not override the user's direction.
 
 ## Reviewed stack and automated evidence
 
@@ -70,6 +74,7 @@ Do not drop migration 15 or clear pending rows to make old code run. If a rollba
 is needed, stop writers and evaluate pending updates before selecting compatible
 code or the rehearsed backup restore; account for any changes since the backup.
 
-Next batch remains B2 (#68 readiness telemetry), only when authorized. B3 remains
+The subsequently authorized B2 (#68 readiness telemetry) is also merged and
+startup verified; see the integration record. B3 remains
 the full #45/#62 acceptance pass; this focused B1 smoke does not close it. #69 and
 the Scout umbrella stay open until their own acceptance requirements are verified.
