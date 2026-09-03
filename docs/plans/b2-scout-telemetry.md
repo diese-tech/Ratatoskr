@@ -91,3 +91,13 @@ frozen snapshot. Missing eligibility roles visibly mark live data unavailable.
 Validation: 180 tests pass before the final upgrade addition. Next: finish v14/v15
 upgrade preservation checks (including B1's pending roster outbox), run typechecks,
 build/audit, update plan/operator docs, and verify the B2 PR on both CI platforms.
+
+## Checkpoint 4 — keep signup processing responsive
+
+Done: move live staff-card refresh outside the signup/membership persistence lock
+and skip unchanged Discord card edits. Card writes still serialize separately and
+re-read canonical state. A delayed edit can no longer delay another signup write.
+
+Validation: the real delayed-edit regression failed before repair (one signup
+persisted instead of two); all ten lifecycle integration tests and typecheck pass.
+Next: final cumulative gates, documentation and PR/CI. No production changes.

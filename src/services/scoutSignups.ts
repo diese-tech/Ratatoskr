@@ -190,9 +190,11 @@ export async function handleScoutSignupReactionAdd(
   const resolved = resolveSignupReaction(db, hydrated.reaction);
   if (!resolved) return;
 
+  let changed = false;
   await withScoutSetupLock(db, resolved.setup.id, async () => {
     const outcome = addScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
     if (outcome.status === 'added') {
+      changed = true;
       const guild = hydrated.reaction.message.guild;
       if (!guild) return;
       const current = getScoutSetupById(db, resolved.setup.id);
@@ -214,7 +216,6 @@ export async function handleScoutSignupReactionAdd(
           await reportOperationalError(hydrated.reaction.client, db, { guildId: latest.guildId, setupId: latest.id, division: latest.divisionDisplayName, action: 'Scout signup control cleanup' }, error);
         });
       }
-      await refreshScoutStatusCardSafely(hydrated.reaction.client, db, current.id);
       return;
     }
     if (outcome.status !== 'over_limit') return;
@@ -228,6 +229,9 @@ export async function handleScoutSignupReactionAdd(
           `Remove one of your current reactions before choosing ${SCOUT_SIGNUP_ROLE_LABELS[resolved.role]}.`,
       )
       .catch(() => undefined);
+  }).finally(async () => {
+    // Staff-message rate limits must not hold the signup persistence lock.
+    if (changed) await refreshScoutStatusCardSafely(hydrated.reaction.client, db, resolved.setup.id);
   });
 }
 
@@ -243,8 +247,8 @@ export async function handleScoutSignupReactionRemove(
   if (!resolved) return;
   await withScoutSetupLock(db, resolved.setup.id, async () => {
     removeScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
-    await refreshScoutStatusCardSafely(hydrated.reaction.client, db, resolved.setup.id);
   });
+  await refreshScoutStatusCardSafely(hydrated.reaction.client, db, resolved.setup.id);
 }
 
 /** Membership events change eligibility even when nobody adds a reaction. */
@@ -267,7 +271,7 @@ export async function refreshScoutMemberReadiness(client: Client, db: Database.D
       } catch (error) {
         await reportOperationalError(client, db, { guildId, setupId: candidate.id, action: 'Scout membership readiness' }, error);
       }
-      await refreshScoutStatusCardSafely(client, db, candidate.id);
     });
+    await refreshScoutStatusCardSafely(client, db, candidate.id);
   }
 }

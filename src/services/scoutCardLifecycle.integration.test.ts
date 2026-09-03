@@ -244,3 +244,23 @@ test('marker recovery paginates and ignores a different setup sharing its prefix
     assert.equal(f.ops.all.size, 106);
   } finally { f.db.close(); }
 });
+
+test('a delayed staff-card edit does not block subsequent signup persistence', async () => {
+  const f = fixture();
+  let release!: () => void;
+  let editing!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { editing = resolve; });
+  let first: Promise<void> | undefined;
+  let second: Promise<void> | undefined;
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    const edit = card.edit;
+    card.edit = async (payload: any) => { editing(); await gate; return edit(payload); };
+    first = f.react('first', 'solo'); await started;
+    second = f.react('second', 'mid');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(listScoutSignups(f.db, f.setup.id).length, 2);
+  } finally { release(); await Promise.all([first, second]); f.db.close(); }
+});

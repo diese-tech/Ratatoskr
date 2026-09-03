@@ -60,13 +60,15 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
   const terminal = ['published', 'cancelled'].includes(setup.status);
   const status = setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
     : setup.status === 'published' ? 'published' : 'cancelled';
+  let readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
+  if (unavailable) readiness = readiness.replace('Final recorded', 'Last recorded');
   return { content: [
     kind === 'control' ? `<@${setup.createdBy}>` : '',
     `**${setup.divisionDisplayName} ${status} — setup #${setup.id}**`,
     `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
     setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
     unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
-    saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)).replace(unavailable ? 'Final recorded' : '\0', 'Last recorded') : 'No readiness snapshot was recorded.',
+    readiness,
     setup.status === 'roster_ready' ? 'Review and balance the roster here, then publish it to the signup channel.' : '',
     setup.status === 'published' && setup.resultMessageId
       ? `Roster: https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`
@@ -75,6 +77,11 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
   ].filter(Boolean).join('\n'),
   components: setup.status === 'roster_ready' && kind === 'control' ? [scoutReviewButtonRow(setup.id, setup.version)] : [],
   allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] } };
+}
+
+async function editCard(message: Message, view: ReturnType<typeof cardView>): Promise<void> {
+  if (message.content === view.content && JSON.stringify(message.components) === JSON.stringify(view.components)) return;
+  await message.edit(view);
 }
 
 /** One serialized writer for temporary status, ready controls and terminal cards. */
@@ -96,6 +103,10 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
       if (['open', 'roster_ready'].includes(setup.status)) {
         try {
           const currentSnapshot = await snapshot(client, db, setup);
+          const previousSnapshot = readScoutReadinessSnapshot(state);
+          if (previousSnapshot && JSON.stringify({ ...currentSnapshot, recordedAt: 0 }) === JSON.stringify({ ...previousSnapshot, recordedAt: 0 })) {
+            currentSnapshot.recordedAt = previousSnapshot.recordedAt;
+          }
           if (getScoutSetupById(db, setupId)?.status === setup.status) {
             patchScoutReadinessCard(db, setupId, { snapshot_json: JSON.stringify(currentSnapshot) });
           }
@@ -118,7 +129,7 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         if (!telemetry && state.telemetry_attempted && !state.telemetry_message_id) throw new Error('Scout telemetry send is uncertain; retain its marker before creating a ready panel.');
         if (telemetry) {
           if (setup.status === 'cancelled' && !setup.controlMessageId) {
-            await telemetry.edit(cardView(db, setup, 'telemetry', false));
+            await editCard(telemetry, cardView(db, setup, 'telemetry', false));
             return outcome;
           }
           try { await telemetry.delete(); } catch (error) { if (!missingMessage(error)) throw error; }
@@ -131,7 +142,7 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
           telemetry = await channel.send(cardView(db, setup, 'telemetry', false, unavailable));
           patchScoutReadinessCard(db, setupId, { telemetry_message_id: telemetry.id });
           outcome = 'created';
-        } else await telemetry.edit(cardView(db, setup, 'telemetry', false, unavailable));
+        } else await editCard(telemetry, cardView(db, setup, 'telemetry', false, unavailable));
         if (getScoutSetupById(db, setupId)?.status !== setup.status) continue;
         return outcome;
       }
@@ -152,7 +163,7 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         outcome = 'created';
       } else {
         outcome = setup.controlMessageId === control.id ? outcome : 'recovered';
-        await control.edit(cardView(db, setup, 'control', false, unavailable));
+        await editCard(control, cardView(db, setup, 'control', false, unavailable));
       }
       db.prepare('UPDATE scout_setups SET control_message_id = ? WHERE id = ?').run(control.id, setupId);
       patchScoutReadinessCard(db, setupId, { control_attempted: 1 });
