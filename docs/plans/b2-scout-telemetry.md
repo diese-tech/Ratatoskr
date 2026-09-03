@@ -121,3 +121,13 @@ documented production-change gate. Rehearse migration 16 against a consistent
 production copy, verify one writer/runtime/volume, and run the focused live card,
 eligibility, creator notification and restart checks. No merge, deployment or
 live acceptance is claimed. #68 remains open for its acceptance evidence.
+
+## Review checkpoint 5 — retry confirmed send rejections
+
+Done: known Discord message-creation rejections clear the failed attempt so the
+next refresh can retry. Replacement cards retain any prior creator notification;
+lost responses and ambiguous delivery still require marker recovery.
+
+Validation: both new integration regressions failed before repair; all 12 card
+lifecycle tests and application typecheck pass. Next: capture closure snapshots
+without waiting for queued card edits, then rerun cumulative gates and final CI.

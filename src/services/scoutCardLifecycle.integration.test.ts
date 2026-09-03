@@ -35,6 +35,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
   let loseSend = false;
   let loseDelete = false;
   let denyRead = false;
+  let rejectSend: number | undefined;
   const sent: any[] = [];
   const channels = new Collection<string, any>();
   const client: any = { user: { id: 'bot' }, guilds: { fetch: async () => guild }, channels: { fetch: async (id: string) => channels.get(id) } };
@@ -52,6 +53,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
         return new Collection(entries.slice(0, query.limit));
       } },
       send: async (payload: any) => {
+        if (id === 'ops' && rejectSend) { const code = rejectSend; rejectSend = undefined; throw { code }; }
         const message: any = { id: String(++nextId), author: client.user, content: payload.content, channelId: id, guildId: 'guild', guild,
           url: `https://discord.com/channels/guild/${id}/${nextId}`, components: payload.components,
           reactions: { cache: new Collection(), removeAll: async () => undefined },
@@ -87,6 +89,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
   const interaction = (customId: string): any => ({ customId, guild, guildId: 'guild', channelId: 'ops', client, user: { id: 'staff' },
     deferUpdate: async () => undefined, deferReply: async () => undefined, editReply: async () => undefined });
   return { db, setup, client: client as Client, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction,
+    rejectSend: (code = 50013) => { rejectSend = code; },
     loseSend: () => { loseSend = true; }, denyDelete: (value: boolean) => { loseDelete = value; }, denyRead: (value: boolean) => { denyRead = value; } };
 }
 
@@ -214,6 +217,34 @@ test('eligibility gain can trigger readiness and a missing role shows an actiona
     assert.match(f.ops.all.first()!.content, /Last recorded signup snapshot/);
     assert.ok(!f.ops.all.first()!.content.includes('A complete roster can be formed'));
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 10);
+  } finally { f.db.close(); }
+});
+
+test('confirmed send rejections allow temporary and first ready cards to retry with one creator ping', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture();
+  try {
+    f.rejectSend(); await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    assert.equal(f.ops.all.size, 0);
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    assert.equal(f.ops.all.size, 1);
+    f.rejectSend(); await f.fill();
+    assert.equal(f.ops.all.size, 0);
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    assert.match(f.ops.all.first()!.content, /roster ready/);
+    assert.equal(f.sent.filter((entry) => entry.channel === 'ops' && entry.payload.allowedMentions.users.length).length, 1);
+  } finally { f.db.close(); }
+});
+
+test('a rejected replacement ready card retries without forgetting the prior creator notification', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill();
+    f.ops.all.clear(); f.rejectSend();
+    await assert.rejects(refreshScoutStatusCard(f.client, f.db, f.setup.id));
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(f.sent.filter((entry) => entry.channel === 'ops' && entry.payload.allowedMentions.users.length).length, 1);
   } finally { f.db.close(); }
 });
 

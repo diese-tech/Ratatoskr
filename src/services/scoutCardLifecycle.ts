@@ -1,4 +1,4 @@
-import type { Client, Message, TextBasedChannel } from 'discord.js';
+import { RESTJSONErrorCodes, type Client, type Message, type TextBasedChannel } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard,
   readScoutReadinessSnapshot, listScoutReadinessSetupIds, listScoutSignups,
@@ -26,6 +26,12 @@ export function scoutCardMarker(setupId: number, kind: 'telemetry' | 'control'):
   return kind === 'telemetry' ? `SCOUT-TELEMETRY-${setupId}` : `SCOUT-CONTROL-${setupId}`;
 }
 const missingMessage = (error: unknown) => Number((error as { code?: number })?.code) === 10008;
+// These API responses reject message creation. Transport errors and unknown
+// responses retain the attempt marker because delivery may still have occurred.
+const rejectedSend = (error: unknown) => new Set<number>([
+  RESTJSONErrorCodes.UnknownChannel, RESTJSONErrorCodes.MissingAccess,
+  RESTJSONErrorCodes.MissingPermissions, RESTJSONErrorCodes.InvalidFormBodyOrContentType,
+]).has(Number((error as { code?: number })?.code));
 const exactMarker = (content: string, marker: string) => content.split('\n').some((line) => line.trim() === `\`${marker}\`` || line.trim() === marker);
 
 async function getMessage(channel: TextBasedChannel, messageId: string): Promise<Message | undefined> {
@@ -139,7 +145,11 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         if (!telemetry) {
           if (state.telemetry_attempted && !state.telemetry_message_id) throw new Error('Scout telemetry send is uncertain; waiting for marker recovery.');
           patchScoutReadinessCard(db, setupId, { telemetry_attempted: 1, telemetry_message_id: null });
-          telemetry = await channel.send(cardView(db, setup, 'telemetry', false, unavailable));
+          try { telemetry = await channel.send(cardView(db, setup, 'telemetry', false, unavailable)); }
+          catch (error) {
+            if (rejectedSend(error)) patchScoutReadinessCard(db, setupId, { telemetry_attempted: 0 });
+            throw error;
+          }
           patchScoutReadinessCard(db, setupId, { telemetry_message_id: telemetry.id });
           outcome = 'created';
         } else await editCard(telemetry, cardView(db, setup, 'telemetry', false, unavailable));
@@ -159,7 +169,13 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         if (setup.controlMessageId) db.prepare('UPDATE scout_setups SET control_message_id = NULL WHERE id = ?').run(setupId);
         patchScoutReadinessCard(db, setupId, { control_attempted: 1,
           creator_notification_attempted: notify ? 1 : state.creator_notification_attempted });
-        control = await channel.send(cardView(db, setup, 'control', notify, unavailable));
+        try { control = await channel.send(cardView(db, setup, 'control', notify, unavailable)); }
+        catch (error) {
+          if (rejectedSend(error)) patchScoutReadinessCard(db, setupId, {
+            control_attempted: 0, creator_notification_attempted: state.creator_notification_attempted,
+          });
+          throw error;
+        }
         outcome = 'created';
       } else {
         outcome = setup.controlMessageId === control.id ? outcome : 'recovered';
