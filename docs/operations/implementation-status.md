@@ -23,10 +23,16 @@ deployment ba9e274e-fe5c-49ea-bd29-c632709f1463 succeeded; database/login/regist
 finished-post recovery and control-card recovery completed without startup errors
 at 13:07:07 UTC on September 3. The persistent volume was mounted.
 
-Next: preserve this evidence checkpoint and verify its automatic rollout, then
-perform the separate user-selected live cancel/finish checks. Keep Railway
-auto-deploy ON and inspect logs between merges. No production setups are being
-automatically closed and no date/time editing or reminder scheduler is included.
+Next: complete the user-selected live cancel/finish checks and the outstanding
+production-copy restore rehearsal; clarify whether date/time rescheduling is
+needed. These remain separate from the completed CI, merge and startup checks.
+
+For future merges, keep Railway auto-deploy ON and inspect the new deployment's
+logs. No production setups are being automatically closed and no date/time
+editing or reminder scheduler is included.
+
+The previous checkpoints below are historical snapshots. Their Next entries
+record what was pending at that time; use the current checkpoint above to resume.
 
 ## Previous checkpoint — B1/B2 merged and deployment startup verified
 
