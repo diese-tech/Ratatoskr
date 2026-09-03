@@ -1,7 +1,8 @@
 import type { GuildMember } from 'discord.js';
 import type { DivisionRecord, ScoutConfig, ScoutSetup } from '../db/types.js';
 
-const FRANCHISE_REPRESENTATIVE_ROLE_NAME = 'Franchise Representative';
+import type Database from 'better-sqlite3';
+import { resolveFranchiseRepresentativeId } from './scoutRoleIdentity.js';
 
 export type ScoutManagementAccessInput = {
   isAdmin: boolean;
@@ -26,6 +27,7 @@ export function hasScoutManagementAccess(input: ScoutManagementAccessInput): boo
 }
 
 export function hasScoutDivisionManagementAccess(
+  db: Database.Database,
   member: GuildMember,
   config: ScoutConfig | undefined,
   division: Pick<DivisionRecord, 'managerRoleId' | 'captainRoleId'>,
@@ -38,7 +40,7 @@ export function hasScoutDivisionManagementAccess(
     divisionCaptainRoleId: division.captainRoleId,
     divisionManagerRoleId: division.managerRoleId,
     franchiseRepresentativeRoleId:
-      member.guild.roles.cache.find((role) => role.name === FRANCHISE_REPRESENTATIVE_ROLE_NAME)?.id ?? null,
+      resolveFranchiseRepresentativeId(db, member.guild),
   });
 }
 

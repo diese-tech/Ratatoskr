@@ -17,3 +17,13 @@ Next: open the B1.1 PR and verify both CI jobs. Continue B1.2 with regressions f
 managed franchise-role identity, interrupted channel-parent repair and pending-work
 teardown/concurrency guards. Then B1.3 routing, B1.4 durable writes, B1.5 reporting,
 B1.6 cancellation and B1.7 readable names. B2 remains out of current scope.
+
+## B1.2 checkpoint (codex/b1-division-safety)
+
+Done: Managed franchise-role identity, interrupted parent repair, pending-publication teardown blockers and per-division create/teardown exclusion.
+
+Validation: 136 tests and application typecheck pass; posting blocker regression reproduced before fix.
+
+Next: B1.3: route new roster posts into signup channels while preserving historical/pending destinations. PR70 is the base; verify stacked CI.
+
+Deployment/live verification: pending; no production changes.

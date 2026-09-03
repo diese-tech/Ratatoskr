@@ -33,7 +33,8 @@ import { classifyMatch, type CandidateResource } from './serverBootstrap.js';
 
 export const STAFF_ROLES = ['Valkyries', 'Aesir', 'Allfather'] as const;
 export const DIVISION_ADMIN_ROLES = ['Aesir', 'Allfather'] as const;
-export const FRANCHISE_REPRESENTATIVE_ROLE = 'Franchise Representative';
+import { FRANCHISE_REPRESENTATIVE_ROLE, FRANCHISE_REPRESENTATIVE_KEY, resolveFranchiseRepresentativeId } from './scoutRoleIdentity.js';
+export { FRANCHISE_REPRESENTATIVE_ROLE } from './scoutRoleIdentity.js';
 
 export type DivisionPermissionProfile =
   | 'category'
@@ -292,7 +293,7 @@ function roleByName(guild: Guild, name: string) {
   return guild.roles.cache.find((role) => role.name === name);
 }
 
-function permissionRoleIds(guild: Guild, divisionRole: Role, managerRole: Role, captainRole: Role): DivisionPermissionRoleIds {
+function permissionRoleIds(db: Database.Database, guild: Guild, divisionRole: Role, managerRole: Role, captainRole: Role): DivisionPermissionRoleIds {
   const required = (name: string): Role => {
     const role = roleByName(guild, name);
     if (!role) throw new Error(`Required role "${name}" is missing. Create it before provisioning divisions.`);
@@ -303,7 +304,7 @@ function permissionRoleIds(guild: Guild, divisionRole: Role, managerRole: Role, 
     division: divisionRole.id,
     manager: managerRole.id,
     captain: captainRole.id,
-    franchiseRepresentative: required(FRANCHISE_REPRESENTATIVE_ROLE).id,
+    franchiseRepresentative: resolveFranchiseRepresentativeId(db, guild) ?? required(FRANCHISE_REPRESENTATIVE_ROLE).id,
     admins: DIVISION_ADMIN_ROLES.map((name) => required(name).id),
   };
 }
@@ -330,7 +331,7 @@ async function ensureRole(
   guild: Guild,
   logicalKey: string,
   name: string,
-  options: { utility?: boolean; color?: number },
+  options: { utility?: boolean; color?: number; scaffoldDomain?: 'server' | 'division' },
   result: DivisionProvisionResult,
 ): Promise<Role> {
   const managedRole = await resolveManagedRole(db, guild, logicalKey);
@@ -364,7 +365,7 @@ async function ensureRole(
       guildId: guild.id,
       resourceType: 'role',
       logicalKey,
-      scaffoldDomain: 'division',
+      scaffoldDomain: options.scaffoldDomain ?? 'division',
     });
     result.reused.push(`role:${name}`);
     return role;
@@ -382,7 +383,7 @@ async function ensureRole(
     guildId: guild.id,
     resourceType: 'role',
     logicalKey,
-    scaffoldDomain: 'division',
+    scaffoldDomain: options.scaffoldDomain ?? 'division',
   });
   result.created.push(`role:${name}`);
   return role;
@@ -475,8 +476,8 @@ async function ensureChannel(
     if (resolved && resolved.type === expectedType) {
       if (resolved.parentId !== category.id) {
         await resolved.setParent(category.id, { reason: 'Ratatoskr move division channel to its configured category' });
-        setManagedResourceParent(db, managed.id, category.id);
       }
+      if (managed.parentResourceId !== category.id) setManagedResourceParent(db, managed.id, category.id);
       if (!resolved.isThread()) {
         if (permissionOverwrites) {
           await resolved.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile division channel permissions');
@@ -603,6 +604,8 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
   };
   const template = getDivisionTemplate(division);
 
+  await ensureRole(db, guild, FRANCHISE_REPRESENTATIVE_KEY, FRANCHISE_REPRESENTATIVE_ROLE,
+    { scaffoldDomain: 'server' }, result);
   const divisionRole = await ensureRole(
     db,
     guild,
@@ -627,7 +630,7 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
     { utility: true },
     result,
   );
-  const roleIds = permissionRoleIds(guild, divisionRole, managerRole, captainRole);
+  const roleIds = permissionRoleIds(db, guild, divisionRole, managerRole, captainRole);
   const category = await ensureCategory(
     db,
     guild,

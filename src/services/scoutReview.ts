@@ -134,7 +134,7 @@ async function authorized(interaction: MessageComponentInteraction, db: Database
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const config = getScoutConfig(db, setup.guildId);
   const { hasAccess } = await import('./authorization.js');
-  const allowed = hasScoutDivisionManagementAccess(member, config, division, hasAccess(member, 'ADMIN'));
+  const allowed = hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'ADMIN'));
   return allowed ? setup : undefined;
 }
 

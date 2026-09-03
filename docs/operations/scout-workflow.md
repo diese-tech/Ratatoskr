@@ -42,3 +42,15 @@ Multiple setups may be open in the same or different divisions. Every signup, ro
 - A deleted result message prevents replacement or swap and leaves the database unchanged. A deleted signup post prevents publication and returns the setup to retryable roster-ready state.
 
 Production must use a persistent `DATABASE_PATH`. Back up that SQLite file according to the hosting platform's volume procedure before infrastructure changes.
+
+## Provisioning and pending work
+
+The franchise representative role is created/adopted under a stable server-managed
+identity by bootstrap or division provisioning. Duplicate untracked names require
+operator resolution; managed role renames do not change Scout authorization.
+
+Division provisioning and Scout creation reject simultaneous work in the same
+division. Other divisions remain independent. Keep one bot process per database.
+Archive/delete blocks open and roster-ready setups, pending signup creation, and
+unfinished roster publication. Cancel open setups; allow pending recovery to finish
+before retrying teardown. Already settled published history remains preserved.

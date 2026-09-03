@@ -3,7 +3,7 @@ import { ChannelType, Collection, PermissionFlagsBits, type Guild } from 'discor
 import { test } from 'node:test';
 import type { DivisionSpec } from '../config/guild-structure.js';
 import { closeDatabase, openDatabase } from '../db/client.js';
-import { insertManagedResource, listManagedResourcesByDomain } from '../db/repositories/managedResources.js';
+import { insertManagedResource, listManagedResourcesByDomain, setManagedResourceParent } from '../db/repositories/managedResources.js';
 import { setScoutOperationsChannel } from '../db/repositories/scoutConfig.js';
 import { divisionChannelLogicalKey } from './divisionScaffold.js';
 import {
@@ -408,6 +408,14 @@ test('provisionDivision adopts and renames the observed legacy division channels
     assert.equal(channels.get('unmanaged-lobby-2')?.name, 'Vanaheim Lobby 2');
     assert.equal(listManagedResourcesByDomain(db, 'guild-1', 'division')
       .some((resource) => resource.discordResourceId === 'unmanaged-lobby-2'), false);
+    const signupRow = listManagedResourcesByDomain(db, 'guild-1', 'division')
+      .find((resource) => resource.discordResourceId === 'channel-scout_signups')!;
+    // Simulate a crash after Discord moved the channel but before the DB write.
+    setManagedResourceParent(db, signupRow.id, categoryId);
+    await provisionDivision(db, guild, 'vanaheim');
+    assert.equal(listManagedResourcesByDomain(db, 'guild-1', 'division')
+      .find((resource) => resource.id === signupRow.id)?.parentResourceId, 'scout-ops-category');
+    assert.equal(moved.length, 2, 'retry must not move or recreate already-correct channels');
   } finally {
     closeDatabase(db);
   }

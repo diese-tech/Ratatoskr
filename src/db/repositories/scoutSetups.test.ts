@@ -66,6 +66,26 @@ const emojiByRole = {
   fill: 'emoji-fill',
 } as const;
 
+test('posting and unresolved publication block teardown but settled history does not', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const setup = createScoutSetup(db, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'staff', signupChannelId: 'signups',
+      resultsChannelId: 'results', divisionRoleId: 'division-role', emojiByRole,
+      startAt: 2_000_000_000, roleLimit: 2,
+    });
+    assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 1);
+    assert.equal(listCancellableScoutSetups(db, 'guild-1', division.id).length, 0);
+    db.prepare("UPDATE scout_setups SET status = 'published' WHERE id = ?").run(setup.id);
+    assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 1);
+    db.prepare("UPDATE scout_setups SET result_message_id = 'roster' WHERE id = ?").run(setup.id);
+    assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 1);
+    db.prepare('UPDATE scout_setups SET signup_post_reconciled = 1 WHERE id = ?').run(setup.id);
+    assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 0);
+  } finally { closeDatabase(db); }
+});
+
 test('scout setup snapshots division routing and resolves durably by signup message ID', () => {
   const { db, division } = setupDatabase();
   try {

@@ -105,7 +105,19 @@ function archiveOverwrites(interaction: ChatInputCommandInteraction) {
   ];
 }
 
+import { tryAcquireDivisionOperation } from '../services/divisionOperation.js';
+
 export async function handleDivisionCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
+  if (!interaction.guildId) return handleDivisionCommandLocked(interaction, db);
+  const release = tryAcquireDivisionOperation(db, interaction.guildId, interaction.options.getString('name', true));
+  if (!release) {
+    await interaction.reply({ content: 'This division has an operation in progress. Retry when it finishes.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+  try { return await handleDivisionCommandLocked(interaction, db); } finally { release(); }
+}
+
+async function handleDivisionCommandLocked(interaction: ChatInputCommandInteraction, db: Database.Database) {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
     return;
@@ -206,9 +218,9 @@ export async function handleDivisionCommand(interaction: ChatInputCommandInterac
       await interaction.reply({
         content: [
           `Cannot ${subcommand} **${division.name}** while it has active scout setups:`,
-          ...blockers.map((setup) => `- Setup #${setup.id}: <t:${setup.startAt}:F> (${setup.status === 'roster_ready' ? 'roster ready' : 'open'})`),
+          ...blockers.map((setup) => `- Setup #${setup.id}: <t:${setup.startAt}:F> (${setup.status.replaceAll('_', ' ')})`),
           '',
-          `Cancel ${blockers.length === 1 ? 'it' : 'them'} from the configured scout-ops channel, then retry.`,
+          'Cancel open/roster-ready setups from scout-ops. Pending posting/publication must finish recovery before retrying.',
         ].join('\n'),
         flags: MessageFlags.Ephemeral,
       });

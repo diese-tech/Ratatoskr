@@ -80,6 +80,7 @@ export const yslGuildStructure = {
     { key: 'valkyries', name: 'Valkyries', hoist: true },
     { key: 'production', name: 'Production', hoist: true },
     { key: 'org_owner', name: 'Org Owner', hoist: true },
+    { key: 'franchise_representative', name: 'Franchise Representative', hoist: true },
     { key: 'captain', name: 'Captain', hoist: true },
     { key: 'player', name: 'Player', hoist: false },
     { key: 'free_agent', name: 'Free Agent', hoist: false },

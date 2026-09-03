@@ -260,7 +260,14 @@ export function listCancellableScoutSetups(
   return rows.map(toScoutSetup);
 }
 
-export const listDivisionScoutLifecycleBlockers = listCancellableScoutSetups;
+export function listDivisionScoutLifecycleBlockers(db: Database.Database, guildId: string, divisionId: number): ScoutSetup[] {
+  const rows = db.prepare(`SELECT * FROM scout_setups
+    WHERE guild_id = ? AND division_id = ? AND (
+      status IN ('posting', 'open', 'roster_ready') OR
+      (status = 'published' AND (result_message_id IS NULL OR signup_post_reconciled = 0))
+    ) ORDER BY start_at, id`).all(guildId, divisionId) as ScoutSetupRow[];
+  return rows.map(toScoutSetup);
+}
 
 export function listOverlappingScoutSetups(
   db: Database.Database,
