@@ -2,17 +2,18 @@ import type Database from 'better-sqlite3';
 import type { ScoutReadinessSnapshot } from '../../domain/scoutReadiness.js';
 
 export type ScoutReadinessCard = { setup_id: number; telemetry_message_id: string | null;
-  telemetry_attempted: number; control_attempted: number; snapshot_json: string | null };
+  telemetry_attempted: number; control_attempted: number; creator_notification_attempted: number; snapshot_json: string | null };
 
 export function ensureScoutReadinessCard(db: Database.Database, setupId: number): ScoutReadinessCard {
-  db.prepare(`INSERT OR IGNORE INTO scout_readiness_cards (setup_id, control_attempted)
-    SELECT id, CASE WHEN control_message_id IS NULL THEN 0 ELSE 1 END FROM scout_setups WHERE id = ?`).run(setupId);
+  db.prepare(`INSERT OR IGNORE INTO scout_readiness_cards (setup_id, control_attempted, creator_notification_attempted)
+    SELECT id, CASE WHEN control_message_id IS NULL THEN 0 ELSE 1 END,
+      CASE WHEN control_message_id IS NULL THEN 0 ELSE 1 END FROM scout_setups WHERE id = ?`).run(setupId);
   return db.prepare('SELECT * FROM scout_readiness_cards WHERE setup_id = ?').get(setupId) as ScoutReadinessCard;
 }
 
 export function patchScoutReadinessCard(db: Database.Database, setupId: number,
   changes: Partial<Omit<ScoutReadinessCard, 'setup_id'>>): void {
-  const keys = (['telemetry_message_id', 'telemetry_attempted', 'control_attempted', 'snapshot_json'] as const)
+  const keys = (['telemetry_message_id', 'telemetry_attempted', 'control_attempted', 'creator_notification_attempted', 'snapshot_json'] as const)
     .filter((key) => changes[key] !== undefined);
   if (keys.length) db.prepare(`UPDATE scout_readiness_cards SET ${keys.map((key) => `${key} = ?`).join(', ')} WHERE setup_id = ?`)
     .run(...keys.map((key) => changes[key]), setupId);

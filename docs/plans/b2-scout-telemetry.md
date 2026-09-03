@@ -65,3 +65,17 @@ send-attempt state and the last saved snapshot without modifying existing rows.
 
 Validation: three domain tests and application typecheck pass. Next: durable
 Discord card lifecycle, event wiring and recovery/upgrade integration tests.
+
+## Checkpoint 2 — card lifecycle and live events
+
+Done: one serialized card writer handles temporary telemetry, confirmed cleanup,
+fresh ready notification, live review updates and terminal snapshots. Creation,
+reactions, draft mutations, membership/role changes and startup call the writer.
+Canonical eligibility now excludes departed/bot members and fails visibly when
+role/member access cannot be verified. Attempt state distinguishes a lost response
+from a confirmed missing message, including replacement ready panels.
+
+Validation: application typecheck and six focused domain/control-panel tests pass.
+Next: real creation/reaction/member/draft flow fixtures, duplicate/ambiguous send
+and deletion tests, disk restart/upgrade checks, then cumulative gates and review.
+Implementation is in progress; no production changes.

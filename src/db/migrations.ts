@@ -428,6 +428,7 @@ export const migrations: Migration[] = [
         telemetry_message_id TEXT UNIQUE,
         telemetry_attempted INTEGER NOT NULL DEFAULT 0 CHECK (telemetry_attempted IN (0, 1)),
         control_attempted INTEGER NOT NULL DEFAULT 0 CHECK (control_attempted IN (0, 1)),
+        creator_notification_attempted INTEGER NOT NULL DEFAULT 0 CHECK (creator_notification_attempted IN (0, 1)),
         snapshot_json TEXT
       );
     `,

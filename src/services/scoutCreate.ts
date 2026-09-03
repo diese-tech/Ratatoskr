@@ -1,3 +1,4 @@
+import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import { randomUUID } from 'node:crypto';
 import {
@@ -111,6 +112,7 @@ export async function ensurePostedScoutSetup(
 
   for (const emojiId of scoutSignupEmojiIds(setup.emojiByRole)) await message.react(emojiId);
   if (!activatePostedScoutSetup(db, setup.id)) throw new Error('Scout setup could not be activated after posting.');
+  await refreshScoutStatusCardSafely(client, db, setup.id);
   return message;
 }
 

@@ -14,10 +14,15 @@ export async function resolveEligibleScoutUserIds(
   eligibilityRoleId: string | null,
 ): Promise<Set<string>> {
   const unique = [...new Set(userIds)];
-  if (!eligibilityRoleId) return new Set(unique);
+  if (eligibilityRoleId && !await guild.roles.fetch(eligibilityRoleId)) {
+    throw new Error('The configured Scout eligibility role is missing. Restore the role or review this setup.');
+  }
   const resolved = await Promise.all(unique.map(async (userId) => {
-    const member = await guild.members.fetch(userId).catch(() => undefined);
-    return member && isScoutUserEligible(member.roles.cache.keys(), eligibilityRoleId) ? userId : undefined;
+    const member = await guild.members.fetch(userId).catch((error: unknown) => {
+      if (Number((error as { code?: number })?.code) === 10007) return undefined;
+      throw error;
+    });
+    return member && !member.user.bot && isScoutUserEligible(member.roles.cache.keys(), eligibilityRoleId) ? userId : undefined;
   }));
   return new Set(resolved.filter((userId): userId is string => Boolean(userId)));
 }

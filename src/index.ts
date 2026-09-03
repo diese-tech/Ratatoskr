@@ -6,7 +6,7 @@ import { closeDatabase, openDatabase } from './db/index.js';
 import { syncCaptainAccess } from './services/divisions.js';
 import { tryHandleScoutEmojiBinding } from './services/scoutEmojiBinding.js';
 import { handleScoutSignupReactionAdd, handleScoutSignupReactionRemove } from './services/scoutSignups.js';
-import { reconcileActiveScoutSignups } from './services/scoutSignups.js';
+import { reconcileActiveScoutSignups, refreshScoutMemberReadiness } from './services/scoutSignups.js';
 import { reconcileScoutControlPanels } from './services/scoutControlPanel.js';
 import { reconcileCancelledScoutSignupPosts } from './services/scoutCancel.js';
 import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
@@ -94,6 +94,19 @@ client.on('guildMemberUpdate', async (_oldMember, newMember) => {
   } catch (error) {
     console.error(`Captain access reconciliation failed for ${newMember.id}`, error);
   }
+  await scoutMembershipChanged(newMember.guild.id, newMember.id);
+});
+
+async function scoutMembershipChanged(guildId: string, userId: string) {
+  try { await refreshScoutMemberReadiness(client, db, guildId, { userId }); }
+  catch (error) { await reportOperationalError(client, db, { guildId, action: 'Scout membership refresh' }, error); }
+}
+
+client.on('guildMemberAdd', (member) => scoutMembershipChanged(member.guild.id, member.id));
+client.on('guildMemberRemove', (member) => scoutMembershipChanged(member.guild.id, member.id));
+client.on('roleDelete', async (role) => {
+  try { await refreshScoutMemberReadiness(client, db, role.guild.id, { eligibilityRoleId: role.id }); }
+  catch (error) { await reportOperationalError(client, db, { guildId: role.guild.id, action: 'Scout eligibility role removal' }, error); }
 });
 
 client.on('messageReactionAdd', async (reaction, user) => {

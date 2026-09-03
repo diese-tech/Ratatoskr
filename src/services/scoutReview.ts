@@ -1,3 +1,4 @@
+import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
 import {
   ActionRowBuilder,
@@ -38,13 +39,13 @@ import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './sc
 import { eligibleScoutSignups, isScoutUserEligible } from './scoutEligibility.js';
 import { scoutCancelButton } from './scoutCancel.js';
 
-export function scoutReviewButtonRow(setupId: number) {
+export function scoutReviewButtonRow(setupId: number, version = 0) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`scout:review:${setupId}`)
       .setLabel('Review roster')
       .setStyle(ButtonStyle.Primary),
-    scoutCancelButton(setupId, 0),
+    scoutCancelButton(setupId, version),
   );
 }
 
@@ -170,7 +171,7 @@ async function showEditPicker(
   });
 }
 
-export async function handleScoutReviewButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
+async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
   const parts = interaction.customId.split(':');
   if (parts[0] !== 'scout' || !['review', 'shuffle', 'edit', 'buildtwo', 'buildtwoconfirm', 'buildtwoback'].includes(parts[1] ?? '')) return false;
   const editing = parts[1] === 'edit';
@@ -252,7 +253,7 @@ export async function handleScoutReviewButton(interaction: ButtonInteraction, db
   return true;
 }
 
-export async function handleScoutReviewStringSelect(
+async function handleScoutReviewStringSelectImpl(
   interaction: StringSelectMenuInteraction,
   db: Database.Database,
 ): Promise<boolean> {
@@ -344,7 +345,7 @@ export async function handleScoutReviewStringSelect(
   return false;
 }
 
-export async function handleScoutReviewUserSelect(
+async function handleScoutReviewUserSelectImpl(
   interaction: UserSelectMenuInteraction,
   db: Database.Database,
 ): Promise<boolean> {
@@ -374,4 +375,40 @@ export async function handleScoutReviewUserSelect(
   const latest = getScoutSetupById(db, setupId)!;
   await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Staff substitute seated and marked as an override.' : `No change was made (${outcome}).`));
   return true;
+}
+
+export async function handleScoutReviewButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
+  const parts = interaction.customId.split(':');
+  const setupId = Number(parts[['edit', 'editpick', 'edituser'].includes(parts[1] ?? '') ? 3 : 2]);
+  const before = getScoutSetupById(db, setupId)?.version;
+  try { return await handleScoutReviewButtonImpl(interaction, db); }
+  finally {
+    if (before !== undefined && getScoutSetupById(db, setupId)?.version !== before) {
+      await refreshScoutStatusCardSafely(interaction.client, db, setupId);
+    }
+  }
+}
+
+export async function handleScoutReviewStringSelect(interaction: StringSelectMenuInteraction, db: Database.Database): Promise<boolean> {
+  const parts = interaction.customId.split(':');
+  const setupId = Number(parts[['edit', 'editpick', 'edituser'].includes(parts[1] ?? '') ? 3 : 2]);
+  const before = getScoutSetupById(db, setupId)?.version;
+  try { return await handleScoutReviewStringSelectImpl(interaction, db); }
+  finally {
+    if (before !== undefined && getScoutSetupById(db, setupId)?.version !== before) {
+      await refreshScoutStatusCardSafely(interaction.client, db, setupId);
+    }
+  }
+}
+
+export async function handleScoutReviewUserSelect(interaction: UserSelectMenuInteraction, db: Database.Database): Promise<boolean> {
+  const parts = interaction.customId.split(':');
+  const setupId = Number(parts[['edit', 'editpick', 'edituser'].includes(parts[1] ?? '') ? 3 : 2]);
+  const before = getScoutSetupById(db, setupId)?.version;
+  try { return await handleScoutReviewUserSelectImpl(interaction, db); }
+  finally {
+    if (before !== undefined && getScoutSetupById(db, setupId)?.version !== before) {
+      await refreshScoutStatusCardSafely(interaction.client, db, setupId);
+    }
+  }
 }
