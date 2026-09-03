@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { ScoutRole, ScoutSignupRole } from '../../domain/index.js';
+import { SCOUT_ROLE_LABELS, type ScoutRole, type ScoutSignupRole } from '../../domain/index.js';
 import type { ScoutRosterSlot, ScoutTeam } from '../../domain/scoutRoster.js';
 import type { ScoutRosterSlotRecord, ScoutSetup, ScoutSetupStatus, ScoutSignup } from '../types.js';
 
@@ -264,7 +264,8 @@ export function listDivisionScoutLifecycleBlockers(db: Database.Database, guildI
   const rows = db.prepare(`SELECT * FROM scout_setups
     WHERE guild_id = ? AND division_id = ? AND (
       status IN ('posting', 'open', 'roster_ready') OR
-      (status = 'published' AND (result_message_id IS NULL OR signup_post_reconciled = 0))
+      (status = 'published' AND (result_message_id IS NULL OR signup_post_reconciled = 0
+        OR EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)))
     ) ORDER BY start_at, id`).all(guildId, divisionId) as ScoutSetupRow[];
   return rows.map(toScoutSetup);
 }
@@ -723,7 +724,7 @@ export function replacePublishedScoutRosterSlotIfVersion(
   userId: string,
 ): ReplaceScoutRosterSlotOutcome {
   return db.transaction(() => {
-    const slot = db.prepare('SELECT id FROM scout_roster_slots WHERE setup_id = ? AND id = ?').get(setupId, slotId);
+    const slot = db.prepare('SELECT * FROM scout_roster_slots WHERE setup_id = ? AND id = ?').get(setupId, slotId) as ScoutRosterSlotRow | undefined;
     if (!slot) return 'stale';
     if (db.prepare('SELECT 1 FROM scout_roster_slots WHERE setup_id = ? AND user_id = ?').get(setupId, userId)) {
       return 'duplicate';
@@ -731,7 +732,8 @@ export function replacePublishedScoutRosterSlotIfVersion(
     const claimed = db
       .prepare(
         `UPDATE scout_setups SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL`,
+         WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL AND signup_post_reconciled = 1
+         AND NOT EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)`,
       )
       .run(setupId, expectedVersion);
     if (claimed.changes !== 1) return 'stale';
@@ -739,36 +741,9 @@ export function replacePublishedScoutRosterSlotIfVersion(
       `UPDATE scout_roster_slots SET user_id = ?, staff_assigned = 1,
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
     ).run(userId, slotId);
+    db.prepare('INSERT INTO scout_roster_updates (setup_id, version, notice) VALUES (?, ?, ?)')
+      .run(setupId, expectedVersion + 1, `Roster update: <@${slot.user_id}> was replaced by <@${userId}> at ${rosterSlotLocation(slot)}.`);
     return 'updated';
-  })();
-}
-
-export function rollbackPublishedScoutRosterReplacement(
-  db: Database.Database,
-  setupId: number,
-  updatedVersion: number,
-  slotId: number,
-  replacementUserId: string,
-  originalUserId: string,
-  originalStaffAssigned: boolean,
-): boolean {
-  return db.transaction(() => {
-    const slot = db
-      .prepare('SELECT user_id FROM scout_roster_slots WHERE setup_id = ? AND id = ?')
-      .get(setupId, slotId) as { user_id: string } | undefined;
-    if (!slot || slot.user_id !== replacementUserId) return false;
-    const restored = db
-      .prepare(
-        `UPDATE scout_setups SET version = version - 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL`,
-      )
-      .run(setupId, updatedVersion);
-    if (restored.changes !== 1) return false;
-    db.prepare(
-      `UPDATE scout_roster_slots SET user_id = ?, staff_assigned = ?,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
-    ).run(originalUserId, originalStaffAssigned ? 1 : 0, slotId);
-    return true;
   })();
 }
 
@@ -787,7 +762,8 @@ export function swapPublishedScoutRosterSlotsIfVersion(
     const claimed = db.prepare(
       `UPDATE scout_setups SET version = version + 1,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL`,
+       WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL AND signup_post_reconciled = 1
+         AND NOT EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)`,
     ).run(setupId, expectedVersion);
     if (claimed.changes !== 1) return false;
     const first = rows.find((row) => row.id === firstSlotId)!;
@@ -798,36 +774,8 @@ export function swapPublishedScoutRosterSlotsIfVersion(
     );
     update.run(second.user_id, second.staff_assigned, first.id);
     update.run(first.user_id, first.staff_assigned, second.id);
-    return true;
-  })();
-}
-
-export function rollbackPublishedScoutRosterSwap(
-  db: Database.Database,
-  setupId: number,
-  updatedVersion: number,
-  firstSlotId: number,
-  secondSlotId: number,
-): boolean {
-  return db.transaction(() => {
-    const rows = db.prepare(
-      'SELECT * FROM scout_roster_slots WHERE setup_id = ? AND id IN (?, ?)',
-    ).all(setupId, firstSlotId, secondSlotId) as ScoutRosterSlotRow[];
-    if (rows.length !== 2 || firstSlotId === secondSlotId) return false;
-    const restored = db.prepare(
-      `UPDATE scout_setups SET version = version - 1,
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL`,
-    ).run(setupId, updatedVersion);
-    if (restored.changes !== 1) return false;
-    const first = rows.find((row) => row.id === firstSlotId)!;
-    const second = rows.find((row) => row.id === secondSlotId)!;
-    const update = db.prepare(
-      `UPDATE scout_roster_slots SET user_id = ?, staff_assigned = ?,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
-    );
-    update.run(second.user_id, second.staff_assigned, first.id);
-    update.run(first.user_id, first.staff_assigned, second.id);
+    db.prepare('INSERT INTO scout_roster_updates (setup_id, version, notice) VALUES (?, ?, ?)')
+      .run(setupId, expectedVersion + 1, `Roster update: <@${first.user_id}> and <@${second.user_id}> swapped between ${rosterSlotLocation(first)} and ${rosterSlotLocation(second)}.`);
     return true;
   })();
 }
@@ -853,4 +801,25 @@ export function replaceScoutRosterIfVersion(
     insertScoutRosterSlots(db, setupId, slots);
     return true;
   })();
+}
+
+function rosterSlotLocation(slot: ScoutRosterSlotRow): string {
+  return `Game ${slot.game_number} ${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]}`;
+}
+
+export type ScoutRosterUpdate = { setup_id: number; version: number; notice: string; message_reconciled: number; notice_attempted: number };
+export function getScoutRosterUpdate(db: Database.Database, setupId: number): ScoutRosterUpdate | undefined {
+  return db.prepare('SELECT * FROM scout_roster_updates WHERE setup_id = ?').get(setupId) as ScoutRosterUpdate | undefined;
+}
+export function listScoutRosterUpdates(db: Database.Database): ScoutRosterUpdate[] {
+  return db.prepare('SELECT * FROM scout_roster_updates ORDER BY setup_id').all() as ScoutRosterUpdate[];
+}
+export function markScoutRosterUpdateEdited(db: Database.Database, setupId: number, version: number): void {
+  db.prepare('UPDATE scout_roster_updates SET message_reconciled = 1 WHERE setup_id = ? AND version = ?').run(setupId, version);
+}
+export function markScoutRosterNoticeAttempted(db: Database.Database, setupId: number, version: number): void {
+  db.prepare('UPDATE scout_roster_updates SET notice_attempted = 1 WHERE setup_id = ? AND version = ?').run(setupId, version);
+}
+export function completeScoutRosterUpdate(db: Database.Database, setupId: number, version: number): boolean {
+  return db.prepare('DELETE FROM scout_roster_updates WHERE setup_id = ? AND version = ? AND message_reconciled = 1').run(setupId, version).changes === 1;
 }

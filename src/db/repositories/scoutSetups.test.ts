@@ -24,8 +24,9 @@ import {
   replaceScoutSignups,
   replaceScoutRosterSlotIfVersion,
   replacePublishedScoutRosterSlotIfVersion,
-  rollbackPublishedScoutRosterReplacement,
-  rollbackPublishedScoutRosterSwap,
+  getScoutRosterUpdate,
+  markScoutRosterUpdateEdited,
+  completeScoutRosterUpdate,
   releaseScoutPublishClaim,
   removeScoutSignup,
   setScoutSetupSignupMessage,
@@ -349,17 +350,21 @@ test('publishing is an exclusive retryable claim and published replacement is ve
 
     assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'replacement'), 'updated');
     assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'stale-replacement'), 'stale');
-    assert.equal(rollbackPublishedScoutRosterReplacement(db, setup.id, 1, firstSlot.id, 'replacement', firstSlot.userId, firstSlot.staffAssigned), true);
-    assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 0, firstSlot.id, 'replacement-final'), 'updated');
+    assert.equal(getScoutRosterUpdate(db, setup.id)?.version, 1);
+    assert.equal(replacePublishedScoutRosterSlotIfVersion(db, setup.id, 1, firstSlot.id, 'blocked-pending'), 'stale');
+    assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 1);
+    markScoutRosterUpdateEdited(db, setup.id, 1);
+    assert.equal(completeScoutRosterUpdate(db, setup.id, 0), false);
+    assert.equal(completeScoutRosterUpdate(db, setup.id, 1), true);
     const publishedSlots = listScoutRosterSlots(db, setup.id);
     const secondSlot = publishedSlots.find((slot) => slot.id !== firstSlot.id)!;
     const firstBeforeSwap = publishedSlots.find((slot) => slot.id === firstSlot.id)!;
     assert.equal(swapPublishedScoutRosterSlotsIfVersion(db, setup.id, 1, firstSlot.id, secondSlot.id), true);
     assert.equal(swapPublishedScoutRosterSlotsIfVersion(db, setup.id, 1, firstSlot.id, secondSlot.id), false);
-    assert.equal(rollbackPublishedScoutRosterSwap(db, setup.id, 2, firstSlot.id, secondSlot.id), true);
-    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, firstBeforeSwap.userId);
+    assert.equal(getScoutRosterUpdate(db, setup.id)?.version, 2);
+    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, secondSlot.userId);
     assert.equal(getScoutSetupBySignupMessageId(db, 'message-publish')?.resultMessageId, 'result-1');
-    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === firstSlot.id)?.userId, 'replacement-final');
+    assert.equal(listScoutRosterSlots(db, setup.id).find((slot) => slot.id === secondSlot.id)?.userId, firstBeforeSwap.userId);
   } finally {
     closeDatabase(db);
   }

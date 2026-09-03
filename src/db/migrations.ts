@@ -406,4 +406,17 @@ export const migrations: Migration[] = [
       CREATE UNIQUE INDEX idx_scout_setups_control_message ON scout_setups(control_message_id);
     `,
   },
+  {
+    id: 15,
+    name: 'durable_published_roster_updates',
+    sql: `
+      CREATE TABLE scout_roster_updates (
+        setup_id INTEGER PRIMARY KEY REFERENCES scout_setups(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        notice TEXT NOT NULL,
+        message_reconciled INTEGER NOT NULL DEFAULT 0 CHECK (message_reconciled IN (0, 1)),
+        notice_attempted INTEGER NOT NULL DEFAULT 0 CHECK (notice_attempted IN (0, 1))
+      );
+    `,
+  },
 ];
