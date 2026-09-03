@@ -1,6 +1,6 @@
 # Ratatoskr backlog execution plan
 
-Version: 1.7 — B1/B2 merged and startup verified; live Discord acceptance pending
+Version: 1.8 — B1/B2 deployed; recovered-post management follow-up in progress
 Recorded: September 2, 2026
 Updated: September 3, 2026
 Repository: [diese-tech/Ratatoskr](https://github.com/diese-tech/Ratatoskr)
@@ -15,6 +15,12 @@ The audit and versions 1.1–1.2 were documentation only. The user approved B1 i
 B2's Lucid-inspired telemetry adaptation is separately merged in [PR #77](https://github.com/diese-tech/Ratatoskr/pull/77), at 4ca02d0adb1c39e4d10327f10d1679ef59f6d0d0. All 187 tests and both platform checks passed before merge; Railway deployment and startup/card reconciliation passed afterward. The user explicitly directed auto-deploy to remain enabled and deployment logs to be checked between merges. Full live Discord acceptance and a production-copy migration/restore rehearsal remain unverified. See `docs/operations/batch-integration.md` for exact evidence. B3–B7 remain later planned batches; this record does not authorize implementing the rest of the roadmap.
 
 ## 2. Agreed changes since the original assessment
+
+September 3 follow-up: the user verified recovered B2 cards in Discord and found
+that stale postings have no on-card management. Add explicit cancellation and
+published completion controls before B3 acceptance; see
+[`scout-stale-post-management.md`](scout-stale-post-management.md). This supersedes
+B2's status-only open-card decision. B3–B7 ordering and reminder scope stay intact.
 
 | Topic | Original plan / observed implementation | Current plan |
 | --- | --- | --- |

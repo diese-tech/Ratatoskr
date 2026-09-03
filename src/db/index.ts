@@ -4,5 +4,6 @@ export * from './repositories/managedResources.js';
 export * from './repositories/scoutConfig.js';
 export * from './repositories/scoutSetups.js';
 export * from './repositories/scoutReadinessCards.js';
+export * from './repositories/scoutCompletions.js';
 export * from './repositories/seasons.js';
 export * from './types.js';

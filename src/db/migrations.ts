@@ -433,4 +433,16 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 17,
+    name: 'scout_completion_records',
+    sql: `
+      CREATE TABLE scout_completions (
+        setup_id INTEGER PRIMARY KEY REFERENCES scout_setups(id) ON DELETE CASCADE,
+        finished_by TEXT NOT NULL,
+        finished_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        posts_reconciled INTEGER NOT NULL DEFAULT 0 CHECK (posts_reconciled IN (0, 1))
+      );
+    `,
+  },
 ];

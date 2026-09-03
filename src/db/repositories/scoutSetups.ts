@@ -265,7 +265,8 @@ export function listDivisionScoutLifecycleBlockers(db: Database.Database, guildI
     WHERE guild_id = ? AND division_id = ? AND (
       status IN ('posting', 'open', 'roster_ready') OR
       (status = 'published' AND (result_message_id IS NULL OR signup_post_reconciled = 0
-        OR EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)))
+        OR EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)
+        OR EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id AND posts_reconciled = 0)))
     ) ORDER BY start_at, id`).all(guildId, divisionId) as ScoutSetupRow[];
   return rows.map(toScoutSetup);
 }
@@ -280,6 +281,7 @@ export function listOverlappingScoutSetups(
     `SELECT * FROM scout_setups
      WHERE guild_id = ? AND created_by = ? AND start_at = ?
        AND status IN ('posting', 'open', 'roster_ready', 'published')
+       AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)
      ORDER BY id`,
   ).all(guildId, createdBy, startAt) as ScoutSetupRow[];
   return rows.map(toScoutSetup);
@@ -733,6 +735,7 @@ export function replacePublishedScoutRosterSlotIfVersion(
       .prepare(
         `UPDATE scout_setups SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL AND signup_post_reconciled = 1
+         AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)
          AND NOT EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)`,
       )
       .run(setupId, expectedVersion);
@@ -763,6 +766,7 @@ export function swapPublishedScoutRosterSlotsIfVersion(
       `UPDATE scout_setups SET version = version + 1,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE id = ? AND status = 'published' AND version = ? AND result_message_id IS NOT NULL AND signup_post_reconciled = 1
+         AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)
          AND NOT EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)`,
     ).run(setupId, expectedVersion);
     if (claimed.changes !== 1) return false;

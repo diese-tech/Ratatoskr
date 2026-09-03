@@ -63,6 +63,8 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
     if (await handleScoutPublishButton(interaction, db)) return;
     const { handleScoutCancelButton } = await import('../services/scoutCancel.js');
     if (await handleScoutCancelButton(interaction, db)) return;
+    const { handleScoutFinishButton } = await import('../services/scoutFinish.js');
+    if (await handleScoutFinishButton(interaction, db)) return;
   }
 
   if (interaction.isModalSubmit()) {

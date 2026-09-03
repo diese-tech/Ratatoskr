@@ -1,10 +1,13 @@
 import { RESTJSONErrorCodes, type Client, type Message, type TextBasedChannel } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard,
-  readScoutReadinessSnapshot, listScoutReadinessSetupIds, type ScoutSetup } from '../db/index.js';
+  readScoutReadinessSnapshot, listScoutReadinessSetupIds, getScoutCompletion, type ScoutSetup } from '../db/index.js';
 import { renderScoutReadiness } from '../domain/scoutReadiness.js';
 import { captureScoutReadiness } from './scoutReadiness.js';
 import { scoutReviewButtonRow } from './scoutReview.js';
+import { scoutCancelButtonRow } from './scoutCancel.js';
+import { managementRow } from './scoutPublish.js';
+import { scoutFinishButtonRow } from './scoutFinish.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 
 const locks = new WeakMap<Database.Database, Map<number, Promise<void>>>();
@@ -51,8 +54,9 @@ async function findCard(channel: TextBasedChannel, botId: string, marker: string
 
 function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 'control', notify: boolean, unavailable?: string) {
   const saved = readScoutReadinessSnapshot(ensureScoutReadinessCard(db, setup.id));
+  const completion = getScoutCompletion(db, setup.id);
   const terminal = ['published', 'cancelled'].includes(setup.status);
-  const status = setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
+  const status = completion ? 'finished' : setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
     : setup.status === 'published' ? 'published' : 'cancelled';
   const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
   return { content: [
@@ -62,13 +66,20 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
     setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
     unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
     readiness,
+    completion ? `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>. Roster edits are closed.` : '',
+    completion && !completion.posts_reconciled ? 'Discord post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
+    setup.status === 'cancelled' && !setup.signupPostReconciled ? 'Cancelled in the records; public post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
     setup.status === 'roster_ready' ? 'Review and balance the roster here, then publish it to the signup channel.' : '',
     setup.status === 'published' && setup.resultMessageId
       ? `Roster: https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`
       : setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
     `\`${scoutCardMarker(setup.id, kind)}\``,
   ].filter(Boolean).join('\n'),
-  components: setup.status === 'roster_ready' && kind === 'control' ? [scoutReviewButtonRow(setup.id, setup.version)] : [],
+  components: completion ? (completion.posts_reconciled ? [] : [scoutFinishButtonRow(setup.id, setup.version, true)])
+    : setup.status === 'cancelled' && !setup.signupPostReconciled ? [scoutCancelButtonRow(setup.id, setup.version, true)]
+    : setup.status === 'published' ? [managementRow(setup.id, setup.version), scoutFinishButtonRow(setup.id, setup.version)]
+    : setup.status === 'open' ? [scoutCancelButtonRow(setup.id, setup.version)]
+    : setup.status === 'roster_ready' && kind === 'control' ? [scoutReviewButtonRow(setup.id, setup.version)] : [],
   allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] } };
 }
 

@@ -5,14 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Collection, type Client, type ButtonInteraction } from 'discord.js';
 import { openDatabase, upsertDivision, createScoutSetup, getScoutSetupById, listScoutSignups,
-  ensureScoutReadinessCard, readScoutReadinessSnapshot, cancelScoutSetupIfVersion } from '../db/index.js';
+  ensureScoutReadinessCard, readScoutReadinessSnapshot, cancelScoutSetupIfVersion,
+  listScoutRosterSlots, swapPublishedScoutRosterSlotsIfVersion, replacePublishedScoutRosterSlotIfVersion,
+  listDivisionScoutLifecycleBlockers, listOverlappingScoutSetups } from '../db/index.js';
+import { getScoutCompletion, finishScoutSetupIfVersion } from '../db/repositories/scoutCompletions.js';
 import { SCOUT_ROLES } from '../domain/index.js';
 import { ensurePostedScoutSetup } from './scoutCreate.js';
 import { handleScoutSignupReactionAdd, handleScoutSignupReactionRemove, refreshScoutMemberReadiness } from './scoutSignups.js';
 import { refreshScoutStatusCard, reconcileScoutStatusCards } from './scoutCardLifecycle.js';
 import { handleScoutReviewButton } from './scoutReview.js';
-import { handleScoutPublishButton } from './scoutPublish.js';
+import { handleScoutPublishButton, handleScoutPublishedSlotSelect, handleScoutPublishedUserSelect } from './scoutPublish.js';
 import { handleScoutCancelButton } from './scoutCancel.js';
+import { handleScoutFinishButton, reconcileFinishedScoutPosts } from './scoutFinish.js';
 
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
@@ -89,7 +93,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
   };
   const interaction = (customId: string): any => ({ customId, guild, guildId: 'guild', channelId: 'ops', client, user: { id: 'staff' },
     deferUpdate: async () => undefined, deferReply: async () => undefined, editReply: async () => undefined });
-  return { db, setup, client: client as Client, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction,
+  return { db, setup, client: client as Client, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction, channel,
     rejectSend: (code = 50013) => { rejectSend = code; },
     loseSend: () => { loseSend = true; }, denyDelete: (value: boolean) => { loseDelete = value; }, denyRead: (value: boolean) => { denyRead = value; } };
 }
@@ -100,7 +104,7 @@ test('creation shows zero counts; reactions keep one card and readiness replaces
     await ensurePostedScoutSetup(f.client, f.db, f.setup);
     const original = f.ops.all.first()!;
     assert.match(original.content, /0\/10 unique/);
-    assert.deepEqual(original.components, []);
+    assert.equal(original.components[0].toJSON().components[0].custom_id, `scout:cancel:${f.setup.id}:0`);
     await f.react('solo-0', 'solo'); await f.react('solo-0', 'mid');
     assert.equal(f.ops.all.size, 1); assert.match(original.content, /1\/10 unique/);
     await f.fill();
@@ -114,6 +118,49 @@ test('creation shows zero counts; reactions keep one card and readiness replaces
     assert.match(ready.content, /unseated players: \*\*1/);
     await f.react('support-0', 'support', true);
     assert.match(ready.content, /draft needs attention: 1/);
+  } finally { f.db.close(); }
+});
+
+test('a recovered past-dated signup card can officially cancel its setup and keep historical counts', async () => {
+  const f = fixture();
+  try {
+    f.db.prepare('UPDATE scout_setups SET start_at = 1 WHERE id = ?').run(f.setup.id);
+    await ensurePostedScoutSetup(f.client, f.db, getScoutSetupById(f.db, f.setup.id)!);
+    await f.react('old-player', 'solo');
+    const card = f.ops.all.first()!;
+    card.components = []; // The deployed B2 card before this repair.
+    await reconcileScoutStatusCards(f.client, f.db);
+    const cancel = card.components[0]?.toJSON().components[0].custom_id;
+    assert.equal(cancel, `scout:cancel:${f.setup.id}:0`);
+    const replies: any[] = [];
+    const interaction = f.interaction(cancel);
+    interaction.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutCancelButton(interaction, f.db);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'open', 'opening the private confirmation does not cancel');
+    const confirm = replies.at(-1).components[0].toJSON().components[0].custom_id;
+    await handleScoutCancelButton(f.interaction(confirm), f.db);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.signupPostReconciled, true);
+    assert.match(card.content, /cancelled/);
+    assert.match(card.content, /1\/10 unique/);
+    assert.deepEqual(card.components, []);
+    assert.match(f.signups.all.first()!.content, /cancelled/);
+    await reconcileScoutStatusCards(f.client, f.db);
+    assert.equal(f.ops.all.size, 1);
+    assert.deepEqual(card.components, []);
+  } finally { f.db.close(); }
+});
+
+for (const code of [10008, 50013]) test(`cancellation of an old missing or inaccessible signup post handles Discord ${code}`, async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    f.signups.messages.fetch = async () => { throw { code }; };
+    await handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${f.setup.id}:0`), f.db);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.signupPostReconciled, code === 10008);
+    assert.match(f.ops.all.first()!.content, /cancelled/, 'the staff card closes even while public cleanup must retry');
   } finally { f.db.close(); }
 });
 
@@ -144,8 +191,146 @@ test('two-game draft refresh uses 20/4 targets and publication retains a frozen 
     assert.match(card.content, /Last recorded signup snapshot/); assert.match(card.content, /Roster: https:/);
     const content = card.content;
     f.members.clear(); await reconcileScoutStatusCards(f.client, f.db);
-    assert.equal(card.content, content); assert.deepEqual(card.components, []);
+    assert.equal(card.content, content);
+    assert.equal(card.components[1].toJSON().components[0].label, 'Finish scout');
   } finally { f.db.close(); }
+});
+
+test('recovered published cards expose player edits and finishing durably closes both posts without deleting history', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill();
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:0`), f.db);
+    const card = f.ops.all.first()!;
+    const signup = f.signups.all.get(getScoutSetupById(f.db, f.setup.id)!.signupMessageId!)!;
+    const roster = f.signups.all.get(getScoutSetupById(f.db, f.setup.id)!.resultMessageId!)!;
+    card.components = [];
+    await reconcileScoutStatusCards(f.client, f.db);
+    const [manage, finish] = card.components.map((row: any) => row.toJSON().components);
+    assert.deepEqual(manage.map((button: any) => button.label), ['Swap players', 'Replace player']);
+    const replies: any[] = [];
+    const edit = f.interaction(manage[0].custom_id);
+    edit.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutPublishButton(edit, f.db);
+    assert.match(replies.at(-1).content, /first published player/i, 'existing private roster editor opens directly from Scout Ops');
+    const press = f.interaction(finish[0].custom_id);
+    press.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutFinishButton(press, f.db);
+    assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
+    const confirm = replies.at(-1).components[0].toJSON().components[0].custom_id;
+    await handleScoutFinishButton(f.interaction(confirm), f.db);
+    assert.equal(getScoutCompletion(f.db, f.setup.id)?.finished_by, 'staff');
+    assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, 1);
+    assert.match(card.content, /finished/);
+    assert.match(card.content, /Last recorded signup snapshot/);
+    assert.match(signup.content, /finished/i); assert.match(roster.content, /finished/i);
+    assert.deepEqual(card.components, []); assert.deepEqual(roster.components, []);
+    assert.equal(listScoutSignups(f.db, f.setup.id).length, 10);
+    const slots = listScoutRosterSlots(f.db, f.setup.id);
+    const currentVersion = getScoutSetupById(f.db, f.setup.id)!.version;
+    assert.equal(swapPublishedScoutRosterSlotsIfVersion(f.db, f.setup.id, currentVersion, slots[0]!.id, slots[1]!.id), false);
+    assert.equal(replacePublishedScoutRosterSlotIfVersion(f.db, f.setup.id, currentVersion, slots[0]!.id, 'new-player'), 'stale');
+    assert.deepEqual(listScoutRosterSlots(f.db, f.setup.id), slots, 'even current-version writes cannot change a finished roster');
+    assert.deepEqual(listOverlappingScoutSetups(f.db, 'guild', 'staff', f.setup.startAt), []);
+    assert.equal(f.signups.all.size, 2, 'no extra public post or deletion');
+    await handleScoutPublishButton(edit, f.db);
+    assert.match(replies.at(-1).content, /finished/i);
+    await reconcileFinishedScoutPosts(f.client, f.db); await reconcileScoutStatusCards(f.client, f.db);
+    assert.equal(f.ops.all.size, 1); assert.deepEqual(card.components, []);
+  } finally { f.db.close(); }
+});
+
+test('finish confirmation rechecks permission, channel, version and pending roster delivery', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill();
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:0`), f.db);
+    const press = f.interaction(`scout:finishconfirm:${f.setup.id}:0`);
+    f.addMember('staff', []);
+    await handleScoutFinishButton(press, f.db);
+    assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
+    f.addMember('staff', ['manager']); press.channelId = 'wrong-ops';
+    await handleScoutFinishButton(press, f.db);
+    assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
+    press.channelId = 'ops';
+    f.db.prepare('UPDATE scout_setups SET version = 1 WHERE id = ?').run(f.setup.id);
+    await handleScoutFinishButton(press, f.db);
+    assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
+    f.db.prepare("INSERT INTO scout_roster_updates (setup_id, version, notice) VALUES (?, 1, 'Pending notice')").run(f.setup.id);
+    assert.equal(finishScoutSetupIfVersion(f.db, f.setup.id, 1, 'staff'), 'pending');
+    await handleScoutFinishButton(f.interaction(`scout:finishconfirm:${f.setup.id}:1`), f.db);
+    assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
+    f.db.prepare('DELETE FROM scout_roster_updates WHERE setup_id = ?').run(f.setup.id);
+    f.db.prepare('UPDATE scout_setups SET signup_post_reconciled = 0 WHERE id = ?').run(f.setup.id);
+    assert.equal(finishScoutSetupIfVersion(f.db, f.setup.id, 1, 'staff'), 'pending');
+    f.db.prepare('UPDATE scout_setups SET signup_post_reconciled = 1 WHERE id = ?').run(f.setup.id);
+    assert.equal(finishScoutSetupIfVersion(f.db, f.setup.id, 1, 'staff'), 'finished');
+    assert.equal(finishScoutSetupIfVersion(f.db, f.setup.id, 1, 'other'), 'already_finished');
+    assert.equal(getScoutCompletion(f.db, f.setup.id)?.finished_by, 'staff');
+  } finally { f.db.close(); }
+});
+
+test('Scout Ops edits and finish retain a legacy two-game roster destination and isolate other setups', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill(4);
+    await handleScoutReviewButton(f.interaction(`scout:buildtwoconfirm:${f.setup.id}:0`), f.db);
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:1`), f.db);
+    const other = f.makeSetup();
+    const legacy = f.channel('legacy-results');
+    const published = getScoutSetupById(f.db, f.setup.id)!;
+    const roster = f.signups.all.get(published.resultMessageId!)!;
+    f.signups.all.delete(roster.id); legacy.all.set(roster.id, roster);
+    f.db.prepare("UPDATE scout_setups SET results_channel_id = 'legacy-results' WHERE id = ?").run(f.setup.id);
+    const before = listScoutRosterSlots(f.db, f.setup.id);
+    const one = before.find((slot) => slot.gameNumber === 1)!;
+    const two = before.find((slot) => slot.gameNumber === 2)!;
+    const swap = f.interaction(`scout:publishedswapsecond:${f.setup.id}:1:${one.id}`);
+    swap.values = [String(two.id)];
+    await handleScoutPublishedSlotSelect(swap, f.db);
+    assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.id === one.id)?.userId, two.userId);
+    f.addMember('replacement');
+    const replace = f.interaction(`scout:publisheduser:${f.setup.id}:2:${two.id}`);
+    replace.values = ['replacement'];
+    await handleScoutPublishedUserSelect(replace, f.db);
+    assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.id === two.id)?.userId, 'replacement');
+    assert.match(roster.content, /replacement/);
+    const card = f.ops.all.first()!;
+    assert.equal(card.components[0].toJSON().components[0].custom_id, `scout:publishedswap:${f.setup.id}:3`);
+    assert.equal(legacy.all.size, 3, 'both update notices go to the original roster channel');
+    await handleScoutFinishButton(f.interaction(`scout:finishconfirm:${f.setup.id}:3`), f.db);
+    assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, 1);
+    assert.deepEqual(roster.components, []);
+    assert.match(card.content, /legacy-results/);
+    assert.equal(f.signups.all.size, 1); assert.equal(legacy.all.size, 3);
+    assert.equal(getScoutCompletion(f.db, other.id), undefined);
+    assert.equal(getScoutSetupById(f.db, other.id)?.status, 'posting');
+  } finally { f.db.close(); }
+});
+
+for (const code of [10008, 50013]) test(`finished post cleanup handles Discord ${code} and survives restart`, async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const directory = mkdtempSync(join(tmpdir(), 'scout-finish-'));
+  const path = join(directory, 'db.sqlite');
+  const f = fixture(path);
+  await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill();
+  await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:0`), f.db);
+  const fetch = f.signups.messages.fetch;
+  f.signups.messages.fetch = async () => { throw { code }; };
+  await handleScoutFinishButton(f.interaction(`scout:finishconfirm:${f.setup.id}:0`), f.db);
+  assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, code === 10008 ? 1 : 0);
+  assert.equal(listDivisionScoutLifecycleBlockers(f.db, 'guild', f.setup.divisionId).length, code === 10008 ? 0 : 1);
+  assert.match(f.ops.all.first()!.content, /finished/);
+  f.db.close();
+  const reopened = openDatabase(path);
+  try {
+    f.signups.messages.fetch = fetch;
+    await reconcileFinishedScoutPosts(f.client, reopened); await reconcileScoutStatusCards(f.client, reopened);
+    assert.equal(getScoutCompletion(reopened, f.setup.id)?.posts_reconciled, 1);
+    assert.deepEqual(listDivisionScoutLifecycleBlockers(reopened, 'guild', f.setup.divisionId), []);
+    assert.equal(f.ops.all.size, 1); assert.deepEqual(f.ops.all.first()!.components, []);
+    assert.equal(finishScoutSetupIfVersion(reopened, f.setup.id, 0, 'staff'), 'already_finished');
+  } finally { reopened.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('lost temporary send response survives disk restart and concurrent refreshes without duplicate cards', async (t) => {

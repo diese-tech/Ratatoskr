@@ -1,11 +1,29 @@
 # Implementation checkpoint
 
-Authorized scope: B1 and the subsequently requested B2 Lucid telemetry adaptation;
-see `docs/plans/backlog-execution-plan.md` v1.7 and `b2-scout-telemetry.md`.
+Authorized scope: B1, the B2 Lucid telemetry adaptation and the user's recovered
+stale-post management follow-up; see `docs/plans/backlog-execution-plan.md` v1.8,
+`b2-scout-telemetry.md` and `scout-stale-post-management.md`.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B1/B2 merged and deployment startup verified
+## Current checkpoint — recovered-post management ready for PR checks
+
+Done: checkpoint 8777d03 adds direct cancellation to recovered cards and repairs
+cancellation display/cleanup. The next chunk adds durable published completion,
+Swap/Replace in Scout Ops, stale-form/database write fences, and restart cleanup.
+The user's screenshot verifies B2 recovery/display, not full interaction acceptance.
+
+Validation: local tests, both typechecks, build and dependency audit pass. Fixtures
+exercise missing/forbidden messages, private confirmation authorization, pending
+delivery fences, disk restart/upgrades and legacy two-game routing. See the
+follow-up plan for the contract and rollback implications of completion records.
+
+Next: push the focused PR, await green Ubuntu/Windows checks, review and merge.
+Keep Railway auto-deploy ON; inspect deployment/startup logs. Then perform the
+separate user-selected live cancel/finish checks; no production setups are being
+automatically closed and no date/time editing or reminder scheduler is included.
+
+## Previous checkpoint — B1/B2 merged and deployment startup verified
 
 Done: B1 PRs #70-#76 merged in order, ending at c594500; B2 #77 merged separately
 at 4ca02d0. The user directed automatic Railway deployments to remain enabled,

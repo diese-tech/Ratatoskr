@@ -30,6 +30,13 @@ ineligible reactions; Ratatoskr retains reactions and filters eligibility.
 
 ## Lifecycle and display
 
+September 3 refinement: the user confirmed recovered cards in production and
+requested official management of stale posts. Open cards now gain Cancel setup;
+published cards gain Swap players, Replace player and Finish scout. This revises
+the original status-only decision below. See
+[`scout-stale-post-management.md`](scout-stale-post-management.md) for the bounded
+follow-up, completion persistence, validation and remaining acceptance.
+
 1. After the public signup post succeeds, create one status-only card in the
    setup's snapshotted scout-ops channel. Private creation previews create no card.
 2. Show unique eligible players against 10 (20 for a two-game draft), uncapped
