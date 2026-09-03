@@ -1,6 +1,6 @@
 # Ratatoskr backlog execution plan
 
-Version: 1.3 — B1 approved, including readable player names
+Version: 1.4 — B1 code complete; deployment and live verification pending
 Recorded: September 2, 2026
 Repository: [diese-tech/Ratatoskr](https://github.com/diese-tech/Ratatoskr)
 Baseline commit: [`866407f3bdca0e26a2ae3b21221d45a96cdc3056`](https://github.com/diese-tech/Ratatoskr/commit/866407f3bdca0e26a2ae3b21221d45a96cdc3056)
@@ -9,7 +9,7 @@ Baseline commit: [`866407f3bdca0e26a2ae3b21221d45a96cdc3056`](https://github.com
 
 This is the durable record of the original dependency-aware backlog assessment and the subsequent B1 scope decisions. It is the reference for implementation, review, and acceptance. Keep the sequence and boundaries below intact unless new evidence requires a documented revision.
 
-The audit and versions 1.1–1.2 were documentation only. The user has now approved B1 implementation, including #69, and requested commits with completed work, validation and next steps after every meaningful chunk. Implementation begins in an isolated worktree; production has not been changed. At the v1.1 checkpoint, GitHub reported the baseline commit, 12 open issues, and no open PRs. Version 1.2 revises the plan from the user's admin-team decisions and a local code inspection; it does not refresh that remote snapshot.
+The audit and versions 1.1–1.2 were documentation only. The user approved B1 implementation, including #69, and requested commits with completed work, validation and next steps after every meaningful chunk. All seven slices now have stacked PRs (#70–#76); implementation and review fixes are committed in an isolated worktree. Production has not been changed. The original audit snapshot remains historical. At this checkpoint, GitHub main still points to baseline 866407f; none of the B1 PRs has merged. Local cumulative validation passes 168 tests, both typechecks, build and dependency audit. See section 12 and the operational checkpoint for exact evidence and remaining gates.
 
 B1 is the currently authorized implementation batch. B2–B7 remain later planned batches. This document is not a blanket instruction to implement every roadmap item, merge changes, or mutate production. Follow the user's current execution authorization at each stage.
 
@@ -128,7 +128,7 @@ Solid arrows are prerequisites. Dotted arrows are recommended sequencing, not in
 | Order | Batch | Scope | Exit gate |
 | --- | --- | --- | --- |
 | 1 | B1 — release verification and Scout recovery | Original validation/division/published-write repairs, plus signup-channel publication, staff-ops reporting and direct cancellation selection | Complete automated gates and review; operational changes prepared with a concrete migration/verification path |
-| 2 | B2 — Scout readiness visibility | #68 live readiness telemetry; #69 moved into B1.7 | Correct names and exact slot selection; canonical counts; durable telemetry-to-control-panel lifecycle |
+| 2 | B2 — Scout readiness visibility | #68 live readiness telemetry; #69 moved into B1.7 | Canonical counts; durable telemetry-to-control-panel lifecycle |
 | 3 | B3 — live Scout acceptance | #45 and #62 in one coordinated session | Evidence tied to deployed SHA, real permissions, routing, migrations, persistent state and restart behavior; evaluate #36 closure |
 | 4 | B4 — season lifecycle | #23 status, then #21 close | Five-channel inspection is read-only; confirmed close archives exactly the intended season, leaves zero active seasons, preserves channels and Scouts |
 | 5 | B5 — Postgres migration | Scoped workstream extracted from #1 | Verified schema/data/invariants, rehearsed cutover and recovery, one replica, post-cutover Scout smoke tests |
@@ -418,14 +418,14 @@ The publication-routing change is an updated product contract, not proof of an u
 | Item | Status | PR / commit | Verification evidence | Remaining live checks |
 | --- | --- | --- | --- | --- |
 | Original audit | Complete | Baseline 866407f | Sections 3 and 11 | #45/#62 remain open |
-| Plan v1.3 | B1 implementation authorized; supersedes v1.2 placement of #69 | This document | Two-channel workflow and cancellation picker added; B1–B7 sequence retained | None for documentation |
-| B1.1 | Planned | — | — | Runtime parity as applicable |
-| B1.2 | Code implemented; review/live pending | codex/b1-division-safety | 136 tests and application typecheck pass; posting blocker regression reproduced before fix. | Fresh/upgrade resource validation |
-| B1.3 | Code implemented; review/live pending | codex/b1-signup-publication | 137 tests and application typecheck pass; routing claim, stale versions and player permission checks covered. | Live ID mapping, routing and migration smoke |
-| B1.4 | Code implemented; review/live pending | codex/b1-published-recovery | 144 tests and application typecheck pass; disk restart, lost edit/send responses, uncertain notice, stale/unauthorized/missing-message cases covered. | Published swap/replacement and restart smoke |
-| B1.5 | Code implemented; review/live pending | codex/b1-staff-errors | 152 tests and application typecheck pass; delivery, missing/public/wrong-guild channels, denied permissions, redaction and repeated alerts covered. | Private staff-ops delivery and log lookup |
-| B1.6 | Code implemented; review/live pending | codex/b1-cancel-picker | 156 tests and application typecheck pass; zero/one/many postings, access changes, stale versions, published exclusion and real cancellation repair verified. | Authorized active-posting selection and cancellation smoke |
-| B1.7 / #69 | Planned | — | — | Readable names, exact multi-game selection and mobile acceptance |
+| Plan v1.4 | Implementation evidence recorded; scope unchanged from v1.3 | This document | Original sequence and every superseding user decision retained | None for documentation |
+| B1.1 | Code complete; CI green; not merged | [PR #70](https://github.com/diese-tech/Ratatoskr/pull/70), 5f81d4b | Recursive discovery and Node 24; Ubuntu/Windows CI | Railway runtime and volume parity |
+| B1.2 | Code complete; review finding fixed; CI green | [PR #71](https://github.com/diese-tech/Ratatoskr/pull/71), fc2192d | Pending blockers, managed identity, parent repair, concurrent shared-role regression | Fresh/upgrade resource validation |
+| B1.3 | Code complete; CI green; not merged | [PR #72](https://github.com/diese-tech/Ratatoskr/pull/72), ebbf9de | Atomic routing, historical destinations, screenshot permissions; final cumulative first-publication check | Live channel IDs, new routing and historical controls |
+| B1.4 | Code complete; CI green; not merged | [PR #73](https://github.com/diese-tech/Ratatoskr/pull/73), 28bb74f | Durable edit/notice recovery, restart, lost responses, version/access checks; final v14 disk-upgrade check | Production backup rehearsal; migration and restart smoke |
+| B1.5 | Code complete; review finding fixed; CI green | [PR #74](https://github.com/diese-tech/Ratatoskr/pull/74), d732feb | Private staff validation/redaction, precise setup/action, early acknowledgement, expired-token reporting | Private staff-ops delivery and Railway reference lookup |
+| B1.6 | Code complete; CI green; not merged | [PR #75](https://github.com/diese-tech/Ratatoskr/pull/75), 26a18dc | Authorized zero/one/many picker, paging, stale selection, legacy controls, cancellation repair | Active-posting selection and cancellation smoke |
+| B1.7 / #69 | Code complete; review finding fixed; not merged | [PR #76](https://github.com/diese-tech/Ratatoskr/pull/76), ed9ebf2 plus final checkpoint | Exact one/two-game mutations/notices; bounded readable names and visible account disambiguation; 168 cumulative tests; require final-head CI | Live/mobile selection and exact multi-game mutation |
 | B2 | Planned | — | — | Feature-specific acceptance |
 | B3 | Planned | — | — | Full #45/#62 session |
 | B4 | Planned | — | — | Season command smoke |
@@ -453,7 +453,7 @@ Commit after each meaningful coherent chunk of work. Each commit body records **
 | 1.0 | Original B1–B7 audit sequence; B1 proposed as three focused repair PRs | Repository, complete open backlog, linked history, tests/CI and targeted authoritative research |
 | 1.1 | Expand B1 to five slices; add division signups/rosters/results separation and existing staff-ops reporting; preserve later batch order | User's channel screenshots, reported swap error, and explicit choice to use existing staff-ops |
 | 1.2 | Supersede B1.3's third-channel proposal: retain signups/results, publish rosters in signups, reserve results for player screenshots; append B1.6 direct cancellation picker; preserve original repairs, staff-ops choice and B2–B7 order | User's admin-team decision and explicit channel-purpose clarification; inspected existing cancellation picker/state checks; planning/documentation only, no implementation or production action |
-
 | 1.3 | Move #69 to B1.7; B2 now contains #68 only; begin approved B1 implementation; require frequent commits and durable Done/Validation/Next records for every batch | Explicit user approval to implement and interruption-resilient commit instructions |
+| 1.4 | Record seven implemented PR slices, review fixes, cumulative validation and remaining operational gates; correct B2's exit gate after moving names to B1 | Current code, real handler regressions, synthetic v14 migration rehearsal and live GitHub PR/CI state; no expansion of scope or production authorization |
 
 For later revisions, record what changed, the evidence or user decision, affected acceptance criteria, dependency/order effects, and authorization status. No change to this plan silently authorizes production actions or expands later product scope.

@@ -1,3 +1,4 @@
+import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import {
   ActionRowBuilder,
@@ -35,7 +36,6 @@ import {
   swapPublishedScoutRosterSlotsIfVersion,
   type ScoutSetup,
 } from '../db/index.js';
-import { SCOUT_ROLE_LABELS } from '../domain/index.js';
 import {
   hasScoutDivisionManagementAccess,
   isScoutOperationsChannel,
@@ -130,10 +130,6 @@ function managementRow(setupId: number, version: number) {
   );
 }
 
-function publishedSlotLabel(slot: ReturnType<typeof listScoutRosterSlots>[number]) {
-  return `Game ${slot.gameNumber} ${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]} — ${slot.userId}`;
-}
-
 async function authorized(
   interaction: MessageComponentInteraction,
   db: Database.Database,
@@ -196,11 +192,12 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     }
     if (parts[1] === 'publishedreplace') {
       const slots = listScoutRosterSlots(db, setupId);
+      const names = await resolveScoutPlayerNames(interaction.guild!, slots.map((slot) => slot.userId));
       const menu = new StringSelectMenuBuilder()
         .setCustomId(`scout:publishedpick:${setupId}:${expectedVersion}`)
         .setPlaceholder('Published slot to replace')
         .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder()
-          .setLabel(publishedSlotLabel(slot).slice(0, 100))
+          .setLabel(formatScoutSlotLabel(slot, names.get(slot.userId)))
           .setValue(String(slot.id))));
       await interaction.editReply({
         content: 'Choose the published roster slot to replace.',
@@ -211,11 +208,12 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
 
     if (parts[1] === 'publishedswap') {
       const slots = listScoutRosterSlots(db, setupId);
+      const names = await resolveScoutPlayerNames(interaction.guild!, slots.map((slot) => slot.userId));
       const menu = new StringSelectMenuBuilder()
         .setCustomId(`scout:publishedswapfirst:${setupId}:${expectedVersion}`)
         .setPlaceholder('First published player')
         .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder()
-          .setLabel(publishedSlotLabel(slot).slice(0, 100))
+          .setLabel(formatScoutSlotLabel(slot, names.get(slot.userId)))
           .setValue(String(slot.id))));
       await interaction.editReply({
         content: 'Choose the first published player to swap.',
@@ -342,11 +340,12 @@ export async function handleScoutPublishedSlotSelect(
     if (parts[1] === 'publishedswapfirst') {
       const slots = listScoutRosterSlots(db, setupId);
       if (!slots.some((slot) => slot.id === slotId)) return false;
+      const names = await resolveScoutPlayerNames(interaction.guild!, slots.map((slot) => slot.userId));
       const menu = new StringSelectMenuBuilder()
         .setCustomId(`scout:publishedswapsecond:${setupId}:${version}:${slotId}`)
         .setPlaceholder('Second published player')
         .addOptions(slots.filter((slot) => slot.id !== slotId).map((slot) => new StringSelectMenuOptionBuilder()
-          .setLabel(publishedSlotLabel(slot).slice(0, 100))
+          .setLabel(formatScoutSlotLabel(slot, names.get(slot.userId)))
           .setValue(String(slot.id))));
       await interaction.editReply({
         content: 'Choose the second player. Players may be swapped across teams, roles, or games.',

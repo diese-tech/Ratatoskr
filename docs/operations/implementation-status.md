@@ -4,6 +4,35 @@ Authorized scope: B1 in `docs/plans/backlog-execution-plan.md` v1.3.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
+## Current checkpoint — B1 code complete
+
+Read this section first. Entries below it preserve the chronological handoff history
+and may describe next steps that have since been completed.
+
+Done: all seven B1 slices are implemented in stacked PRs #70–#76. Automated review
+findings were repaired: shared franchise-role creation across divisions, nested
+interaction error context, duplicate visible player names, and stale plan progress.
+The final boundary also acknowledges errors before staff lookup. Review details
+are in `b1-review-status.md`; scope and PR links are in plan v1.4.
+
+Validation: 168 tests, application/script typechecks, build and zero-vulnerability
+dependency audit pass on Node 24.14.1. New first-publication integration verifies
+separate signup and roster messages in signups with safe stale retries. A disk
+upgrade from synthetic v14 data preserves active, pending and historical setups,
+slots, signups and legacy channel/message IDs; SQLite integrity/foreign-key checks
+pass. This is not a rehearsal against a production backup.
+
+Remote evidence before the final checkpoint: PR70 5f81d4b, PR71 fc2192d,
+PR72 ebbf9de, PR73 28bb74f, PR74 d732feb, PR75 26a18dc and PR76 ed9ebf2
+all passed both Ubuntu and Windows CI. The final commit adds the migration
+regression and this documentation; verify its PR76 checks before merging.
+
+Next: verify CI on the final pushed commit; follow `b1-rollout-checklist.md` for
+the concrete merge/deployment gate and focused live acceptance. Main remains
+866407f. No B1 PR has merged, no production changes were made, and #69/#45/#62/#36
+remain open pending their acceptance evidence. Do not begin B2 without further
+authorization. Keep Done/Validation/Next commits for every future authorized batch.
+
 ## B1.1 — validation/runtime
 
 Done: quote the test glob so Node handles recursive discovery on both shells;
@@ -79,5 +108,28 @@ Done: Direct private active-posting list across authorized divisions, pagination
 Validation: 156 tests and application typecheck pass; zero/one/many postings, access changes, stale versions, published exclusion and real cancellation repair verified.
 
 Next: B1.7 / #69: readable player names in all draft/published swap and replacement selectors; verify exact Game 2 selection and name fallback.
+
+Deployment/live verification: pending; no production changes.
+
+## B1.7 checkpoint A — readable names
+
+Done: shared per-view player-name resolution for draft/published swap/replacement
+menus and eligible replacement candidates; compact labels retain game/team/role
+and stable internal slot IDs. Draft interactions defer before member lookups.
+
+Validation: 158 tests and app typecheck pass, including cached/fetched guild names,
+global/user fallback, unresolved users, duplicate names and bounded labels.
+
+Next: finish real one/two-game draft and published selector-to-mutation tests,
+verify Game 2 notices, then open the #69 implementation PR and run final B1 gates.
+Live mobile acceptance remains pending. No production changes.
+
+## B1.7 checkpoint (codex/b1-player-names)
+
+Done: Readable names across draft and published swaps/replacements, including eligible candidates; preserved exact slot values and one/two-game behavior.
+
+Validation: 162 tests and application typecheck pass; real selector-to-mutation paths verify exact Game 2 replacement, swaps and published notices.
+
+Next: Run final B1 build/script typecheck/audit and inspect the complete diff; open #69 PR, verify all stacked CI, record review/deployment/live gates. Do not start B2.
 
 Deployment/live verification: pending; no production changes.
