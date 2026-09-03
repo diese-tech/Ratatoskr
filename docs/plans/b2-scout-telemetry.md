@@ -55,3 +55,13 @@ Next: implement the shared snapshot/rendering layer and durable card lifecycle,
 wire existing events, test recovery, update #68's adoption contract in repository
 documentation, and open a separate reviewable B2 PR. Keep Done/Validation/Next
 commit bodies after each meaningful chunk. B1 deployment/live gates remain open.
+
+## Checkpoint 1 — snapshot and persistence foundation
+
+Done: pure readiness snapshot/rendering reuses canonical matching, counts distinct
+players and uncapped roles, handles Fill coverage/flex overlap, two-game targets,
+current-draft warnings and historical display. Migration 16 adds card identity,
+send-attempt state and the last saved snapshot without modifying existing rows.
+
+Validation: three domain tests and application typecheck pass. Next: durable
+Discord card lifecycle, event wiring and recovery/upgrade integration tests.
