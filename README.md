@@ -65,7 +65,7 @@ Runtime state is stored in SQLite. Production must point `DATABASE_PATH` at a pe
 
 ## Local setup
 
-1. Install Node.js 20+.
+1. Install Node.js 24 LTS.
 2. Copy `.env.example` to `.env`.
 3. Add the Discord application credentials.
 4. Run `npm install`.
@@ -74,3 +74,13 @@ Runtime state is stored in SQLite. Production must point `DATABASE_PATH` at a pe
 Before opening a pull request, run `npm run typecheck`, `npm run typecheck:scripts`, `npm test`, `npm run build`, and `npm audit`.
 
 Do not commit `.env` or Discord tokens.
+
+CI runs the same quoted test glob on Linux and Windows so nested repository tests
+are included. Node expands the glob rather than relying on shell glob behavior.
+Both platforms install the locked dependencies and exercise native SQLite in tests.
+
+Before deploying a runtime change, verify the Railway build/runtime uses Node 24,
+the native SQLite module loads, and `DATABASE_PATH` still points at the existing
+persistent volume. A successful CI build does not verify the deployed runtime or
+the live database. Retain a consistent database backup and the previous deployment
+reference before deploying; do not start a second bot replica for verification.
