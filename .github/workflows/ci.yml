@@ -2,19 +2,22 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'codex/b1-*']
   push:
     branches: [main]
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - run: npm ci

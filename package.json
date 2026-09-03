@@ -10,12 +10,12 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
-    "test": "node --import tsx --test src/**/*.test.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "guild:plan": "tsx scripts/bootstrap-guild.ts",
     "guild:apply": "tsx scripts/bootstrap-guild.ts --apply"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
