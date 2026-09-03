@@ -419,4 +419,18 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 16,
+    name: 'scout_readiness_cards',
+    sql: `
+      CREATE TABLE scout_readiness_cards (
+        setup_id INTEGER PRIMARY KEY REFERENCES scout_setups(id) ON DELETE CASCADE,
+        telemetry_message_id TEXT UNIQUE,
+        telemetry_attempted INTEGER NOT NULL DEFAULT 0 CHECK (telemetry_attempted IN (0, 1)),
+        control_attempted INTEGER NOT NULL DEFAULT 0 CHECK (control_attempted IN (0, 1)),
+        creator_notification_attempted INTEGER NOT NULL DEFAULT 0 CHECK (creator_notification_attempted IN (0, 1)),
+        snapshot_json TEXT
+      );
+    `,
+  },
 ];

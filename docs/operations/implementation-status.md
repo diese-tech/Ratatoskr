@@ -1,12 +1,40 @@
 # Implementation checkpoint
 
-Authorized scope: B1 in `docs/plans/backlog-execution-plan.md` v1.3.
+Authorized scope: B1 and the subsequently requested B2 Lucid telemetry adaptation;
+see `docs/plans/backlog-execution-plan.md` v1.6 and `b2-scout-telemetry.md`.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B1 code complete
+## Current checkpoint — B2 code complete, PR #77
 
-Read this section first. Entries below it preserve the chronological handoff history
+Done: reviewed Lucid main 827b7b8, its existing persistent card, and open issue #30;
+implemented the preferred Ratatoskr lifecycle in a separate branch above B1.
+Counts appear immediately after signup posting, persist in the fresh ready panel
+through private review, and remain as a labelled historical snapshot after closure.
+The shared matcher and eligibility service govern all counts. Migration 16 adds
+durable card/snapshot/attempt state. No reminder scheduler was added.
+Review fixes: 13dc695 retries confirmed message-creation rejections without
+repeating an earlier creator ping; b54f0f0 freezes current counts atomically with
+publication/cancellation, independently of delayed card delivery. Both reported
+failures were reproduced before repair.
+
+Validation: 187 tests, application/script typechecks, build and dependency audit
+pass. Fifteen real lifecycle/recovery scenarios cover reactions, eligibility changes,
+two-game review/publication, cancelled/open/concurrent setups, disk restart,
+ambiguous sends and denied cleanup. A delayed-card regression now proves that
+new signup writes remain responsive. v14/v15 disk upgrades preserve existing
+rows and B1 pending roster notices.
+
+Next: verify the final PR #77 head has green CI; integrate B1 and B2 separately
+using the documented production-change gates. Rehearse migration 16 on a
+consistent production backup and run the focused Discord card/notification tests.
+No branch is merged or deployed. Reminders are a separate follow-up; B3 full
+acceptance and B4–B7 remain outside this implementation. Preserve meaningful
+Done/Validation/Next commits on all later authorized work.
+
+## Previous checkpoint — B1 code complete
+
+Entries below preserve the chronological B1 handoff history
 and may describe next steps that have since been completed.
 
 Done: all seven B1 slices are implemented in stacked PRs #70–#76. Automated review

@@ -42,10 +42,11 @@ import {
   isScoutResultsChannel,
 } from './scoutAuthorization.js';
 import { renderScoutResult } from './scoutResults.js';
-import { updateScoutControlPanel } from './scoutControlPanel.js';
+import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
 import { renderPersistedScoutSignupPost } from './scoutCreate.js';
+import { withFinalScoutReadiness } from './scoutReadiness.js';
 
 export function scoutResultMarker(setupId: number): string {
   return `SCOUT-RESULT-${setupId}`;
@@ -237,7 +238,8 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       });
       return true;
     }
-    const claim = claimScoutPublish(db, setupId, expectedVersion);
+    const claim = await withFinalScoutReadiness(interaction.client, db, setupId,
+      () => claimScoutPublish(db, setupId, expectedVersion));
     if (claim !== 'claimed') {
       await interaction.editReply({
         content: claim === 'withdrawals' ? 'Publishing is blocked by one or more withdrawn signups.' : 'That publish confirmation is stale or already completed.',
@@ -302,11 +304,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       });
       return true;
     }
-    await updateScoutControlPanel(
-      interaction.client,
-      setup,
-      `✅ **${setup.divisionDisplayName} scout setup #${setup.id} published**\n${resultMessage.url}`,
-    );
+    await refreshScoutStatusCardSafely(interaction.client, db, setup.id);
     await interaction.editReply({ content: `Scout roster published: ${resultMessage.url}`, components: [] });
     return true;
   });

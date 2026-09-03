@@ -41,7 +41,7 @@ test('a replacement control panel mentions the creator without notifying them ag
   assert.deepEqual(view.allowedMentions, { parse: [], users: [], roles: [] });
 });
 
-test('a deleted stored control panel is recreated by CAS without pinging the creator twice', async () => {
+test('a deleted stored control panel is recreated without pinging the creator twice', async () => {
   const db = openDatabase(':memory:');
   try {
     const division = upsertDivision(db, {
@@ -64,11 +64,12 @@ test('a deleted stored control panel is recreated by CAS without pinging the cre
 
     let sentPayload: ReturnType<typeof renderScoutControlPanelPrompt> | undefined;
     const channel = {
+      guildId: 'guild',
       isTextBased: () => true,
       isSendable: () => true,
       messages: {
         fetch: async (input: string | { limit: number }) =>
-          typeof input === 'string' ? undefined : { size: 0, find: () => undefined, last: () => undefined },
+          typeof input === 'string' ? Promise.reject({ code: 10008 }) : { size: 0, find: () => undefined, last: () => undefined },
       },
       send: async (payload: ReturnType<typeof renderScoutControlPanelPrompt>) => {
         sentPayload = payload;
@@ -76,6 +77,7 @@ test('a deleted stored control panel is recreated by CAS without pinging the cre
       },
     };
     const client = {
+      guilds: { fetch: async () => ({ members: { fetch: async () => ({ user: { bot: false }, roles: { cache: new Map() } }) } }) },
       user: { id: 'ratatoskr' },
       channels: { fetch: async () => channel },
     } as unknown as Client;

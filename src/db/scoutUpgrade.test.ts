@@ -7,7 +7,7 @@ import Database from 'better-sqlite3';
 import { migrations } from './migrations.js';
 import { openDatabase } from './client.js';
 
-test('v14 disk upgrade preserves active, pending and historical Scout routing and rows', () => {
+for (const version of [14, 15]) test(`v${version} disk upgrade preserves active, pending and historical Scout routing and rows`, () => {
   const directory = mkdtempSync(join(tmpdir(), 'ratatoskr-upgrade-'));
   const path = join(directory, 'v14.db');
   const legacy = new Database(path);
@@ -16,7 +16,7 @@ test('v14 disk upgrade preserves active, pending and historical Scout routing an
   try {
     legacy.pragma('foreign_keys = ON');
     legacy.exec('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
-    for (const migration of migrations.filter((item) => item.id <= 14)) {
+    for (const migration of migrations.filter((item) => item.id <= version)) {
       legacy.exec(migration.sql);
       legacy.prepare('INSERT INTO schema_migrations (id, name) VALUES (?, ?)').run(migration.id, migration.name);
     }
@@ -37,13 +37,20 @@ test('v14 disk upgrade preserves active, pending and historical Scout routing an
         legacy.prepare("INSERT INTO scout_roster_slots (setup_id, game_number, team, role, user_id) VALUES (?, 1, 'team_one', 'solo', 'player')").run(id);
       }
     }
+    if (version === 15) {
+      legacy.prepare('UPDATE scout_setups SET version = 1 WHERE id = 5').run();
+      legacy.prepare("INSERT INTO scout_roster_updates (setup_id, version, notice) VALUES (5, 1, 'Pending notice')").run();
+      tables.push('scout_roster_updates');
+    }
     snapshot = tables.map((table) => legacy.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
   } finally { legacy.close(); }
   const upgraded = openDatabase(path);
   try {
     assert.deepEqual(tables.map((table) => upgraded.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), snapshot);
-    assert.deepEqual(upgraded.prepare('SELECT * FROM scout_roster_updates').all(), []);
+    if (version === 14) assert.deepEqual(upgraded.prepare('SELECT * FROM scout_roster_updates').all(), []);
+    assert.deepEqual(upgraded.prepare('SELECT * FROM scout_readiness_cards').all(), []);
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 15').get());
+    assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 16').get());
     assert.deepEqual(upgraded.pragma('foreign_key_check'), []);
     assert.equal((upgraded.pragma('integrity_check') as any[])[0].integrity_check, 'ok');
   } finally {

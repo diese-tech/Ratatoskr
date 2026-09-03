@@ -8,6 +8,7 @@ import {
   listActiveScoutSetups,
   removeScoutSignup,
   listScoutSignups,
+  listScoutRosterSlots,
   replaceScoutSignups,
   tryCreateInitialScoutRoster,
   type ScoutSetup,
@@ -15,25 +16,9 @@ import {
 import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS, type ScoutSignupRole } from '../domain/index.js';
 import { generateScoutRoster } from '../domain/scoutRoster.js';
 import { eligibleScoutSignups } from './scoutEligibility.js';
-import { ensureScoutControlPanel } from './scoutControlPanel.js';
+import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { renderPersistedScoutSignupPost } from './scoutCreate.js';
-
-const setupLocks = new Map<number, Promise<void>>();
-
-async function withScoutSetupLock<T>(setupId: number, task: () => Promise<T>): Promise<T> {
-  const previous = setupLocks.get(setupId) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  const tail = previous.then(() => current);
-  setupLocks.set(setupId, tail);
-  await previous;
-  try {
-    return await task();
-  } finally {
-    release();
-    if (setupLocks.get(setupId) === tail) setupLocks.delete(setupId);
-  }
-}
+import { withScoutSetupLock } from './scoutSetupLock.js';
 
 export function scoutRoleForEmoji(
   emojiByRole: Readonly<Record<ScoutSignupRole, string | null>>,
@@ -96,7 +81,7 @@ async function fetchReactionUsers(reaction: MessageReaction): Promise<User[]> {
 export async function reconcileActiveScoutSignups(client: Client, db: Database.Database): Promise<void> {
   for (const candidate of listActiveScoutSetups(db)) {
     try {
-      await withScoutSetupLock(candidate.id, async () => {
+      await withScoutSetupLock(db, candidate.id, async () => {
         const setup = getScoutSetupById(db, candidate.id);
         if (!setup || !['open', 'roster_ready'].includes(setup.status) || !setup.signupMessageId) return;
         const channel = await client.channels.fetch(setup.signupChannelId);
@@ -144,7 +129,7 @@ export async function reconcileActiveScoutSignups(client: Client, db: Database.D
             await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout signup post recovery' }, error);
           });
         }
-        if (latest?.status === 'roster_ready') await ensureScoutControlPanel(client, db, latest.id);
+        if (latest) await refreshScoutStatusCardSafely(client, db, latest.id);
       });
     } catch (error) {
       await reportOperationalError(client, db, { guildId: candidate.guildId, setupId: candidate.id, division: candidate.divisionDisplayName, action: 'Scout signup recovery' }, error);
@@ -187,9 +172,11 @@ export async function handleScoutSignupReactionAdd(
   const resolved = resolveSignupReaction(db, hydrated.reaction);
   if (!resolved) return;
 
-  await withScoutSetupLock(resolved.setup.id, async () => {
+  let changed = false;
+  await withScoutSetupLock(db, resolved.setup.id, async () => {
     const outcome = addScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
     if (outcome.status === 'added') {
+      changed = true;
       const guild = hydrated.reaction.message.guild;
       if (!guild) return;
       const current = getScoutSetupById(db, resolved.setup.id);
@@ -210,7 +197,6 @@ export async function handleScoutSignupReactionAdd(
         }).catch(async (error) => {
           await reportOperationalError(hydrated.reaction.client, db, { guildId: latest.guildId, setupId: latest.id, division: latest.divisionDisplayName, action: 'Scout signup control cleanup' }, error);
         });
-        await ensureScoutControlPanel(hydrated.reaction.client, db, latest.id);
       }
       return;
     }
@@ -225,6 +211,9 @@ export async function handleScoutSignupReactionAdd(
           `Remove one of your current reactions before choosing ${SCOUT_SIGNUP_ROLE_LABELS[resolved.role]}.`,
       )
       .catch(() => undefined);
+  }).finally(async () => {
+    // Staff-message rate limits must not hold the signup persistence lock.
+    if (changed) await refreshScoutStatusCardSafely(hydrated.reaction.client, db, resolved.setup.id);
   });
 }
 
@@ -238,7 +227,33 @@ export async function handleScoutSignupReactionRemove(
   if (!hydrated || hydrated.user.bot) return;
   const resolved = resolveSignupReaction(db, hydrated.reaction);
   if (!resolved) return;
-  await withScoutSetupLock(resolved.setup.id, async () => {
+  await withScoutSetupLock(db, resolved.setup.id, async () => {
     removeScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
   });
+  await refreshScoutStatusCardSafely(hydrated.reaction.client, db, resolved.setup.id);
+}
+
+/** Membership events change eligibility even when nobody adds a reaction. */
+export async function refreshScoutMemberReadiness(client: Client, db: Database.Database, guildId: string,
+  change: { userId: string } | { eligibilityRoleId: string }): Promise<void> {
+  for (const candidate of listActiveScoutSetups(db)) {
+    if (candidate.guildId !== guildId) continue;
+    if ('eligibilityRoleId' in change && candidate.eligibilityRoleId !== change.eligibilityRoleId) continue;
+    if ('userId' in change && !listScoutSignups(db, candidate.id).some((signup) => signup.userId === change.userId)
+      && !listScoutRosterSlots(db, candidate.id).some((slot) => slot.userId === change.userId)) continue;
+    await withScoutSetupLock(db, candidate.id, async () => {
+      try {
+        const setup = getScoutSetupById(db, candidate.id);
+        if (setup?.status === 'open') {
+          const guild = await client.guilds.fetch(guildId);
+          const signups = await eligibleScoutSignups(guild, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
+          const generated = generateScoutRoster(signups);
+          if (generated.feasible) tryCreateInitialScoutRoster(db, setup.id, generated.slots);
+        }
+      } catch (error) {
+        await reportOperationalError(client, db, { guildId, setupId: candidate.id, action: 'Scout membership readiness' }, error);
+      }
+    });
+    await refreshScoutStatusCardSafely(client, db, candidate.id);
+  }
 }

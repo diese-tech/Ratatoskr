@@ -26,8 +26,9 @@ import {
 } from '../db/index.js';
 import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
-import { updateScoutControlPanel } from './scoutControlPanel.js';
+import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
+import { withFinalScoutReadiness } from './scoutReadiness.js';
 
 export function scoutCancelButton(setupId: number, version: number): ButtonBuilder {
   return new ButtonBuilder()
@@ -100,11 +101,7 @@ export async function reconcileCancelledScoutSignupPost(
       const current = getScoutSetupById(db, setup.id);
       if (!current?.signupPostReconciled) throw new Error('The signup post was updated, but reconciliation could not be recorded.');
     }
-    await updateScoutControlPanel(
-      client,
-      setup,
-      `🚫 **${setup.divisionDisplayName} scout setup #${setup.id} cancelled**`,
-    );
+    await refreshScoutStatusCardSafely(client, db, setup.id);
     return undefined;
   } catch (error) {
     const report = await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout cancellation recovery' }, error);
@@ -263,7 +260,8 @@ export async function handleScoutCancelButton(
       return true;
     }
 
-    const outcome = cancelScoutSetupIfVersion(db, setup.id, expectedVersion);
+    const outcome = await withFinalScoutReadiness(interaction.client, db, setup.id,
+      () => cancelScoutSetupIfVersion(db, setup.id, expectedVersion));
     if (outcome !== 'cancelled') {
       await interaction.editReply({
         content: outcome === 'published' ? publishedDirection(getScoutSetupById(db, setup.id) ?? setup) : 'That cancellation was stale or already applied.',
