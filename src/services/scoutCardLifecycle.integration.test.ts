@@ -100,7 +100,7 @@ test('creation shows zero counts; reactions keep one card and readiness replaces
     await ensurePostedScoutSetup(f.client, f.db, f.setup);
     const original = f.ops.all.first()!;
     assert.match(original.content, /0\/10 unique/);
-    assert.deepEqual(original.components, []);
+    assert.equal(original.components[0].toJSON().components[0].custom_id, `scout:cancel:${f.setup.id}:0`);
     await f.react('solo-0', 'solo'); await f.react('solo-0', 'mid');
     assert.equal(f.ops.all.size, 1); assert.match(original.content, /1\/10 unique/);
     await f.fill();
@@ -114,6 +114,49 @@ test('creation shows zero counts; reactions keep one card and readiness replaces
     assert.match(ready.content, /unseated players: \*\*1/);
     await f.react('support-0', 'support', true);
     assert.match(ready.content, /draft needs attention: 1/);
+  } finally { f.db.close(); }
+});
+
+test('a recovered past-dated signup card can officially cancel its setup and keep historical counts', async () => {
+  const f = fixture();
+  try {
+    f.db.prepare('UPDATE scout_setups SET start_at = 1 WHERE id = ?').run(f.setup.id);
+    await ensurePostedScoutSetup(f.client, f.db, getScoutSetupById(f.db, f.setup.id)!);
+    await f.react('old-player', 'solo');
+    const card = f.ops.all.first()!;
+    card.components = []; // The deployed B2 card before this repair.
+    await reconcileScoutStatusCards(f.client, f.db);
+    const cancel = card.components[0]?.toJSON().components[0].custom_id;
+    assert.equal(cancel, `scout:cancel:${f.setup.id}:0`);
+    const replies: any[] = [];
+    const interaction = f.interaction(cancel);
+    interaction.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutCancelButton(interaction, f.db);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'open', 'opening the private confirmation does not cancel');
+    const confirm = replies.at(-1).components[0].toJSON().components[0].custom_id;
+    await handleScoutCancelButton(f.interaction(confirm), f.db);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.signupPostReconciled, true);
+    assert.match(card.content, /cancelled/);
+    assert.match(card.content, /1\/10 unique/);
+    assert.deepEqual(card.components, []);
+    assert.match(f.signups.all.first()!.content, /cancelled/);
+    await reconcileScoutStatusCards(f.client, f.db);
+    assert.equal(f.ops.all.size, 1);
+    assert.deepEqual(card.components, []);
+  } finally { f.db.close(); }
+});
+
+for (const code of [10008, 50013]) test(`cancellation of an old missing or inaccessible signup post handles Discord ${code}`, async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    f.signups.messages.fetch = async () => { throw { code }; };
+    await handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${f.setup.id}:0`), f.db);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.signupPostReconciled, code === 10008);
+    assert.match(f.ops.all.first()!.content, /cancelled/, 'the staff card closes even while public cleanup must retry');
   } finally { f.db.close(); }
 });
 

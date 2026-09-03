@@ -4,6 +4,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   MessageFlags,
+  RESTJSONErrorCodes,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
   type Client,
@@ -88,24 +89,32 @@ export async function reconcileCancelledScoutSignupPost(
   setup: ScoutSetup,
 ): Promise<string | undefined> {
   try {
-    const channel = await client.channels.fetch(setup.signupChannelId);
-    if (!channel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
-    const message = await channel.messages.fetch(setup.signupMessageId);
-    await message.edit({
-      content: `${renderScoutSignupPost(setup)}\n\n🚫 **This scout setup was cancelled.**`,
-      components: [],
-      allowedMentions: { parse: [] },
-    });
-    await message.reactions.removeAll();
+    try {
+      const channel = await client.channels.fetch(setup.signupChannelId);
+      if (!channel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
+      const message = await channel.messages.fetch(setup.signupMessageId);
+      await message.edit({
+        content: `${renderScoutSignupPost(setup)}\n\n🚫 **This scout setup was cancelled.**`,
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+      await message.reactions.removeAll();
+    } catch (error) {
+      const code = Number((error as { code?: number })?.code);
+      // A deleted post/channel cannot retain live controls. Access and transport
+      // failures do not prove deletion and must remain pending for recovery.
+      if (code !== RESTJSONErrorCodes.UnknownMessage && code !== RESTJSONErrorCodes.UnknownChannel) throw error;
+    }
     if (!setup.signupPostReconciled && !markCancelledScoutSignupPostReconciled(db, setup.id)) {
       const current = getScoutSetupById(db, setup.id);
       if (!current?.signupPostReconciled) throw new Error('The signup post was updated, but reconciliation could not be recorded.');
     }
-    await refreshScoutStatusCardSafely(client, db, setup.id);
     return undefined;
   } catch (error) {
     const report = await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout cancellation recovery' }, error);
     return operationalErrorGuidance(report);
+  } finally {
+    await refreshScoutStatusCardSafely(client, db, setup.id);
   }
 }
 

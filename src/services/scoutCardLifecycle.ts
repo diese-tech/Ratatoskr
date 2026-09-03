@@ -5,6 +5,7 @@ import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard,
 import { renderScoutReadiness } from '../domain/scoutReadiness.js';
 import { captureScoutReadiness } from './scoutReadiness.js';
 import { scoutReviewButtonRow } from './scoutReview.js';
+import { scoutCancelButtonRow } from './scoutCancel.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 
 const locks = new WeakMap<Database.Database, Map<number, Promise<void>>>();
@@ -68,7 +69,8 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
       : setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
     `\`${scoutCardMarker(setup.id, kind)}\``,
   ].filter(Boolean).join('\n'),
-  components: setup.status === 'roster_ready' && kind === 'control' ? [scoutReviewButtonRow(setup.id, setup.version)] : [],
+  components: setup.status === 'open' ? [scoutCancelButtonRow(setup.id, setup.version)]
+    : setup.status === 'roster_ready' && kind === 'control' ? [scoutReviewButtonRow(setup.id, setup.version)] : [],
   allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] } };
 }
 
