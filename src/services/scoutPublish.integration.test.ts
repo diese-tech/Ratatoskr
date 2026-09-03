@@ -15,7 +15,7 @@ import { handleScoutReviewButton, handleScoutReviewStringSelect, handleScoutRevi
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
 
-export function publishedFixture(path = ':memory:', gameCount = 1) {
+export function publishedFixture(path = ':memory:', gameCount = 1, published = true) {
   const db = openDatabase(path);
   const division = upsertDivision(db, { guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim',
     roleId: 'division', managerRoleId: 'manager', captainRoleId: 'captain', categoryId: 'category' });
@@ -29,8 +29,10 @@ export function publishedFixture(path = ':memory:', gameCount = 1) {
   for (const slot of slots) addScoutSignup(db, setup.id, slot.userId, slot.role);
   tryCreateInitialScoutRoster(db, setup.id, slots.filter((slot) => slot.gameNumber === 1));
   if (gameCount === 2) expandScoutRosterToTwoGamesIfVersion(db, setup.id, 0, slots);
-  claimScoutPublish(db, setup.id, gameCount - 1);
-  setScoutResultMessage(db, setup.id, 'roster');
+  if (published) {
+    claimScoutPublish(db, setup.id, gameCount - 1);
+    setScoutResultMessage(db, setup.id, 'roster');
+  }
   const replies: any[] = [];
   const messages = new Collection<string, any>();
   let editFailure = false;
@@ -40,7 +42,7 @@ export function publishedFixture(path = ':memory:', gameCount = 1) {
   messages.set('roster', roster);
   const channel = { id: 'signups', isTextBased: () => true, isSendable: () => true,
     messages: { fetch: async (query: any) => typeof query === 'string' ? messages.get(query) : messages },
-    send: async (payload: any) => { const message = { id: `notice-${messages.size}`, content: payload.content, author: { id: 'bot' } };
+    send: async (payload: any) => { const message = { id: `notice-${messages.size}`, url: `https://discord.com/channels/guild/signups/notice-${messages.size}`, content: payload.content, author: { id: 'bot' } };
       messages.set(message.id, message); if (noticeFailure) throw new Error('send response lost'); return message; } };
   const client = { user: { id: 'bot' }, channels: { fetch: async (id: string) => { assert.equal(id, 'signups'); return channel; } } } as unknown as Client;
   const guild: any = { id: 'guild', roles: { cache: new Collection() }, members: { fetch: async (id: string) => ({
@@ -60,6 +62,32 @@ export function publishedFixture(path = ':memory:', gameCount = 1) {
   return { db, setup, division, replies, messages, roster, client, interaction,
     failEdit: (value: boolean) => { editFailure = value; }, failNotice: (value: boolean) => { noticeFailure = value; } };
 }
+
+test('first publication sends a separate roster into signups and preserves the original signup post', async () => {
+  const f = publishedFixture(':memory:', 1, false);
+  const signup = { id: 'signup', content: 'Original signup',
+    edit: async (payload: any) => { signup.content = payload.content; return signup; } };
+  f.messages.clear();
+  f.messages.set('signup', signup);
+  try {
+    const publish = f.interaction(`scout:publishconfirm:${f.setup.id}:0`);
+    publish.channelId = 'ops';
+    await handleScoutPublishButton(publish as unknown as ButtonInteraction, f.db);
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    assert.equal(setup.status, 'published');
+    assert.equal(setup.resultsChannelId, 'signups');
+    assert.equal(setup.signupMessageId, 'signup');
+    assert.notEqual(setup.resultMessageId, setup.signupMessageId);
+    assert.equal(setup.signupPostReconciled, true);
+    assert.equal(f.messages.size, 2);
+    assert.match(signup.content, /Roster published: https:\/\/discord.com\/channels\/guild\/signups\//);
+    assert.match(f.messages.get(setup.resultMessageId!)!.content, /SCOUT-RESULT-1/);
+    const retry = f.interaction(`scout:publishconfirm:${f.setup.id}:0`);
+    retry.channelId = 'ops';
+    await handleScoutPublishButton(retry as unknown as ButtonInteraction, f.db);
+    assert.equal(f.messages.size, 2, 'a stale confirmation cannot create another roster');
+  } finally { f.db.close(); }
+});
 
 test('published Swap opens a private selector with exactly one acknowledgement', async () => {
   const f = publishedFixture();

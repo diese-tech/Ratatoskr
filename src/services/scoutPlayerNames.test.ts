@@ -34,5 +34,16 @@ test('long and duplicate names preserve readable game/team/role labels', async (
   assert.match(label, /^G2 • Chaos • Carry — Long player/);
   assert.ok(label.length < 80);
   assert.ok(!label.includes('\n'));
-  assert.equal(names.get('one'), names.get('two'), 'display names may collide; selectors must retain slot IDs');
+  assert.notEqual(names.get('one'), names.get('two'), 'colliding candidates must also be visibly distinguishable');
+});
+
+test('colliding display names retain a distinguishable account suffix, including truncated names', async () => {
+  const guild = { members: { cache: new Collection(), fetch: async (id: string) => ({
+    displayName: 'Same player nickname '.repeat(5),
+    user: { username: id === '11115678' ? 'first_account' : 'second_account' },
+  }) } } as unknown as Guild;
+  const names = await resolveScoutPlayerNames(guild, ['11115678', '22225678']);
+  assert.match(names.get('11115678')!, /@first_account/);
+  assert.match(names.get('22225678')!, /@second_account/);
+  for (const [userId, name] of names) assert.ok(formatScoutSlotLabel({ gameNumber: 2, team: 'team_two', role: 'support', userId }, name).length <= 100);
 });

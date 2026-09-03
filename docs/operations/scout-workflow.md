@@ -71,5 +71,6 @@ Draft and published swap/replacement menus show compact labels such as
 `G2 • Chaos • Carry — Diese`. Names prefer the server display name, then global
 Discord display name, username, and an abbreviated unknown-player fallback.
 Internal selection values remain stable slot IDs, including across both games.
-Long names are shortened; duplicate display names do not change slot identity.
+Long names are shortened; duplicate display names receive a username or unique
+abbreviated account ID so staff can distinguish candidates without changing slot identity.
 The bot acknowledges the private interaction before fetching missing names.

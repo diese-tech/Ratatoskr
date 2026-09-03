@@ -36,7 +36,6 @@ import {
   swapPublishedScoutRosterSlotsIfVersion,
   type ScoutSetup,
 } from '../db/index.js';
-import { SCOUT_ROLE_LABELS } from '../domain/index.js';
 import {
   hasScoutDivisionManagementAccess,
   isScoutOperationsChannel,
