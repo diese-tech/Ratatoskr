@@ -2,8 +2,16 @@
 
 Authorized direction: review Lucid and adapt its persistent visual staff display
 to Ratatoskr using the lifecycle preferred in this conversation. This is a
-separate B2 branch/PR above B1; no merge or production deployment is authorized.
+separate B2 branch/PR above B1. The user subsequently authorized merging B1 then
+B2 and directed automatic Railway deployment/log checks between merges.
 Reminder scheduling remains a separate follow-up feature.
+
+Current status: PR #77 merged at 4ca02d0 after B1. Windows/Ubuntu main CI passed
+in run 33731963595. Railway deployment be9bed1b-b5c9-4142-87a5-8c925fadc7f5
+succeeded; database startup, bot login, command registration and all Scout card
+reconciliation completed at 08:11:24 UTC on September 3. Auto-deploy remains ON.
+Live Discord acceptance and production-copy rehearsal remain pending. See
+`../operations/batch-integration.md`; the checkpoints below retain prior history.
 
 ## Source review
 
@@ -148,7 +156,7 @@ card lifecycle tests pass, including eligibility-failure fallback and frozen
 recovery. Application typecheck and focused cancellation/publication tests pass.
 Next: cumulative tests, typechecks, build/audit, updated handoff and final PR CI.
 
-## Current implementation checkpoint — review repairs complete
+## Pre-integration implementation checkpoint — review repairs complete
 
 Done: fixes 13dc695 and b54f0f0 address both PR #77 findings. Plan v1.6 and the
 operator guide record retry behavior, atomic closure snapshots and historical

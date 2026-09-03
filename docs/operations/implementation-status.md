@@ -1,11 +1,28 @@
 # Implementation checkpoint
 
 Authorized scope: B1 and the subsequently requested B2 Lucid telemetry adaptation;
-see `docs/plans/backlog-execution-plan.md` v1.6 and `b2-scout-telemetry.md`.
+see `docs/plans/backlog-execution-plan.md` v1.7 and `b2-scout-telemetry.md`.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B2 code complete, PR #77
+## Current checkpoint — B1/B2 merged and deployment startup verified
+
+Done: B1 PRs #70-#76 merged in order, ending at c594500; B2 #77 merged separately
+at 4ca02d0. The user directed automatic Railway deployments to remain enabled,
+with logs checked between merges. Auto-deploy is ON. Each post-hold rollout
+reported success, database ready, bot online, commands registered and all Scout
+reconciliation completed. Node 24.19.0 was selected by the production build.
+
+Validation: fresh Windows/Ubuntu checks passed before each merge; complete B1
+and B2 main CI passed (runs 33731791579 and 33731963595). All 187 cumulative tests
+pass. Exact commits, deployment IDs and timestamps are in `batch-integration.md`.
+
+Next: complete focused live Discord acceptance and the production-copy restore
+rehearsal; keep these distinct from deployment/startup verification. #68/#69 and
+the full #45/#62 acceptance issues remain open. The one-hour reminder remains a
+separate follow-up; B3-B7 are not implemented by this integration.
+
+## Previous checkpoint — B2 code complete, before integration
 
 Done: reviewed Lucid main 827b7b8, its existing persistent card, and open issue #30;
 implemented the preferred Ratatoskr lifecycle in a separate branch above B1.
