@@ -1,3 +1,4 @@
+import { reportOperationalError } from './operationalErrors.js';
 import type { Client, Message } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
@@ -86,7 +87,7 @@ export async function reconcileScoutControlPanels(client: Client, db: Database.D
     try {
       await ensureScoutControlPanel(client, db, setup.id);
     } catch (error) {
-      console.error(`Scout control panel reconciliation failed for setup #${setup.id}`, error);
+      await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout control-panel recovery' }, error);
     }
   }
   for (const setup of listTerminalScoutSetupsWithControlPanels(db)) {
@@ -97,7 +98,7 @@ export async function reconcileScoutControlPanels(client: Client, db: Database.D
         : undefined;
     if (!content) continue;
     const updated = await updateScoutControlPanel(client, setup, content);
-    if (!updated) console.error(`Scout terminal control panel reconciliation failed for setup #${setup.id}`);
+    if (!updated) await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout terminal control-panel recovery' }, new Error('Could not update terminal control panel'));
   }
 }
 

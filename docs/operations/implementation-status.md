@@ -61,3 +61,13 @@ Validation: 144 tests and application typecheck pass; disk restart, lost edit/se
 Next: B1.5: safe staff-ops error reporting with matching private/process references. Verify B1.4 stacked CI and rehearse migration before deployment.
 
 Deployment/live verification: pending; no production changes.
+
+## B1.5 checkpoint (codex/b1-staff-errors)
+
+Done: Managed staff-ops operational reports, private/log correlation, redaction, permission validation and bounded duplicate suppression; connected to command, reaction and Scout recovery failures.
+
+Validation: 152 tests and application typecheck pass; delivery, missing/public/wrong-guild channels, denied permissions, redaction and repeated alerts covered.
+
+Next: B1.6: direct cancellable-posting picker with authorization filtering, paging and stale confirmation tests. Staff-ops live smoke remains pending.
+
+Deployment/live verification: pending; no production changes.
