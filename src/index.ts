@@ -9,6 +9,7 @@ import { handleScoutSignupReactionAdd, handleScoutSignupReactionRemove } from '.
 import { reconcileActiveScoutSignups, refreshScoutMemberReadiness } from './services/scoutSignups.js';
 import { reconcileScoutControlPanels } from './services/scoutControlPanel.js';
 import { reconcileCancelledScoutSignupPosts } from './services/scoutCancel.js';
+import { reconcileFinishedScoutPosts } from './services/scoutFinish.js';
 import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
 import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } from './services/scoutPublish.js';
 import { reportOperationalError } from './services/operationalErrors.js';
@@ -76,6 +77,8 @@ client.once('clientReady', async () => {
   console.log('Active scout signups reconciled.');
   await reconcileCancelledScoutSignupPosts(client, db);
   console.log('Cancelled scout signup posts reconciled.');
+  await reconcileFinishedScoutPosts(client, db);
+  console.log('Finished scout posts reconciled.');
   await reconcileScoutControlPanels(client, db);
   console.log('Scout control panels reconciled.');
 });

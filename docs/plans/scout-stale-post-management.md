@@ -30,9 +30,36 @@ B2 follow-up before B3 acceptance, not authorization for the remaining backlog.
    added Cancel setup and confirmed-deletion cleanup handling.
    Validation: 24 focused lifecycle/cancellation tests and application typecheck pass.
    Next: published finish lifecycle, recovery and authorization tests; full gates.
-2. Next: commit published management independently, then prepare one focused PR.
-   Require green Ubuntu/Windows CI, merge preserving commits, leave Railway
+2. Done: add migration 17 completion records, versioned finish confirmation,
+   startup/manual cleanup recovery, and published Swap/Replace controls in Scout
+   Ops. Finished records fence both database mutations and stale private controls.
+   Pending cleanup blocks division teardown. Original legacy roster routing is
+   preserved, including cross-game swaps and replacements from Scout Ops.
+   Validation: full local suite, both typechecks, build and production dependency
+   audit pass; disk upgrade fixtures cover v14, v15 and v16; live acceptance pending.
+   Next: green Ubuntu/Windows PR CI, merge preserving commits, leave Railway
    auto-deploy enabled, and verify deployment/startup logs before further merges.
+
+## Persistence and recovery
+
+Migration 17 only adds `scout_completions`; it does not rewrite existing setup,
+signup, roster, readiness or pending-update rows. A completion is keyed by setup
+ID with actor/time and a pending post-cleanup flag. The original `published`
+status remains the publication history; the completion row closes its lifecycle.
+Finishing increments the setup version in the same transaction. Further roster
+mutations and overlap listings explicitly exclude completed setups.
+
+Discord cleanup edits only persisted signup/roster message IDs and never sends a
+replacement public post. A lost edit response is idempotently retried. Only
+Discord Unknown Message/Unknown Channel confirms absence. Access failures keep
+cleanup pending and expose a Retry post cleanup button while the setup remains
+finished. Original readiness counts stay frozen. This is process completion,
+not match-score reporting or a season/archive subsystem.
+
+After the first scout has been finished, an application rollback must preserve
+completion checks; older code ignores completion records and could re-enable
+roster edits. Do not remove completion records to enable a rollback. A consistent
+production-copy backup/restore rehearsal remains a separate unverified gate.
 
 ## Live acceptance
 

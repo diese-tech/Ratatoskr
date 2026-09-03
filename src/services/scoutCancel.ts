@@ -38,20 +38,23 @@ export function scoutCancelButton(setupId: number, version: number): ButtonBuild
     .setStyle(ButtonStyle.Danger);
 }
 
-export function scoutCancelButtonRow(setupId: number, version: number) {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(scoutCancelButton(setupId, version));
+export function scoutCancelButtonRow(setupId: number, version: number, retry = false) {
+  const button = scoutCancelButton(setupId, version);
+  if (retry) button.setLabel('Retry post cleanup');
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(button);
 }
 
-async function canManageSetup(
+export async function canManageScoutOperationsSetup(
   interaction: MessageComponentInteraction,
   db: Database.Database,
   setupId: number,
+  requireActiveDivision = true,
 ): Promise<ScoutSetup | undefined> {
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || !interaction.guild) return undefined;
   if (!isScoutOperationsChannel(setup, interaction.channelId)) return undefined;
   const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
-  if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
+  if (!division || division.id !== setup.divisionId || (requireActiveDivision && division.status !== 'active')) return undefined;
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const config = getScoutConfig(db, setup.guildId);
   const { hasAccess } = await import('./authorization.js');
@@ -181,7 +184,7 @@ export async function handleScoutCancelSelect(
   const version = versionValue === undefined ? undefined : Number(versionValue);
   if (!Number.isSafeInteger(setupId) || (!allDivisions && !Number.isSafeInteger(divisionId)) || (allDivisions && !Number.isSafeInteger(version))) return false;
   await interaction.deferUpdate();
-  const setup = await canManageSetup(interaction, db, setupId);
+  const setup = await canManageScoutOperationsSetup(interaction, db, setupId);
   const config = interaction.guildId ? getScoutConfig(db, interaction.guildId) : undefined;
   if (!setup || (!allDivisions && setup.divisionId !== divisionId) || config?.operationsChannelId !== interaction.channelId) {
     await interaction.editReply({ content: 'That setup is no longer available to you.', components: [] });
@@ -220,7 +223,7 @@ export async function handleScoutCancelButton(
   if (![setupId, expectedVersion].every(Number.isInteger)) return false;
   if (parts[1] === 'cancel') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   else await interaction.deferUpdate();
-  const setup = await canManageSetup(interaction, db, setupId);
+  const setup = await canManageScoutOperationsSetup(interaction, db, setupId);
   if (!setup) {
     await interaction.editReply({ content: 'You do not have permission to cancel this scout setup.' });
     return true;

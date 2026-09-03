@@ -27,6 +27,7 @@ import {
   markPublishedScoutSignupPostReconciled,
   releaseScoutPublishClaim,
   getScoutRosterUpdate,
+  getScoutCompletion,
   listScoutRosterUpdates,
   markScoutRosterUpdateEdited,
   markScoutRosterNoticeAttempted,
@@ -56,7 +57,7 @@ export function hasExactScoutMarker(content: string, marker: string): boolean {
   return content.split('\n').some((line) => line.trim() === marker || line.trim() === `\`${marker}\``);
 }
 
-function renderPersistedScoutResult(setup: ScoutSetup, slots: ReturnType<typeof listScoutRosterSlots>): string {
+export function renderPersistedScoutResult(setup: ScoutSetup, slots: ReturnType<typeof listScoutRosterSlots>): string {
   return `${renderScoutResult(setup, slots)}\n\n\`${scoutResultMarker(setup.id)}\``;
 }
 
@@ -118,7 +119,7 @@ export async function reconcilePendingScoutPublishes(client: Client, db: Databas
   }
 }
 
-function managementRow(setupId: number, version: number) {
+export function managementRow(setupId: number, version: number) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`scout:publishedswap:${setupId}:${version}`)
@@ -141,7 +142,7 @@ async function authorized(
   if (!setup || setup.guildId !== interaction.guildId || setup.status !== status || !interaction.guild) return undefined;
   const correctChannel = status === 'roster_ready'
     ? isScoutOperationsChannel(setup, interaction.channelId)
-    : isScoutResultsChannel(setup, interaction.channelId);
+    : isScoutResultsChannel(setup, interaction.channelId) || isScoutOperationsChannel(setup, interaction.channelId);
   if (!correctChannel) return undefined;
   const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
   if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
@@ -166,6 +167,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       await interaction.editReply({ content: 'You do not have permission to manage this scout result.' });
       return true;
     }
+    if (await rejectFinishedScout(interaction, db, setupId)) return true;
 
     if (publishedAction && getScoutRosterUpdate(db, setupId)) {
       await finishPublishedUpdate(interaction, db, setupId);
@@ -327,6 +329,7 @@ export async function handleScoutPublishedSlotSelect(
       await interaction.editReply({ content: 'You do not have permission to manage this result.' });
       return true;
     }
+    if (await rejectFinishedScout(interaction, db, setupId)) return true;
     if (getScoutRosterUpdate(db, setupId)) {
       await finishPublishedUpdate(interaction, db, setupId);
       return true;
@@ -404,6 +407,7 @@ export async function handleScoutPublishedUserSelect(
       await interaction.editReply({ content: 'You do not have permission to replace this player.' });
       return true;
     }
+    if (await rejectFinishedScout(interaction, db, setupId)) return true;
     if (getScoutRosterUpdate(db, setupId)) {
       await finishPublishedUpdate(interaction, db, setupId);
       return true;
@@ -512,7 +516,14 @@ async function finishPublishedUpdate(interaction: MessageComponentInteraction, d
     await interaction.editReply({ content: `The roster change is saved; Discord update or notice delivery is pending recovery. Do not repeat the player change. ${operationalErrorGuidance(report)}`, components: [] });
     return;
   }
+  await refreshScoutStatusCardSafely(interaction.client, db, setupId);
   await interaction.editReply({ content: 'Published roster updated.', components: [] });
+}
+
+async function rejectFinishedScout(interaction: MessageComponentInteraction, db: Database.Database, setupId: number): Promise<boolean> {
+  if (!getScoutCompletion(db, setupId)) return false;
+  await interaction.editReply({ content: 'This scout is finished. The roster is kept for history and player edits are closed.', components: [] });
+  return true;
 }
 
 export async function reconcilePendingScoutRosterUpdates(client: Client, db: Database.Database): Promise<void> {
