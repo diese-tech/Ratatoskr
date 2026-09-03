@@ -21,7 +21,7 @@ export function scoutReadinessSnapshot(signups: readonly ScoutSignupRecord[], ga
 export type ScoutReadinessSnapshot = ReturnType<typeof scoutReadinessSnapshot>;
 
 export function renderScoutReadiness(snapshot: ScoutReadinessSnapshot, historical = false): string {
-  const lines = [historical ? '**Final recorded signup snapshot**' : '**Readiness**',
+  const lines = [historical ? '**Last recorded signup snapshot**' : '**Readiness**',
     `**${snapshot.players}/${snapshot.requiredPlayers} unique eligible players**`,
     ...snapshot.roles.map(({ role, count, compatible }) =>
       `${compatible < snapshot.requiredPerRole ? '⚠️' : '•'} ${SCOUT_ROLE_LABELS[role]} **${count}/${snapshot.requiredPerRole}**`),

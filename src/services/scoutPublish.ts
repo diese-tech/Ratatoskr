@@ -46,6 +46,7 @@ import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
 import { renderPersistedScoutSignupPost } from './scoutCreate.js';
+import { withFinalScoutReadiness } from './scoutReadiness.js';
 
 export function scoutResultMarker(setupId: number): string {
   return `SCOUT-RESULT-${setupId}`;
@@ -237,7 +238,8 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       });
       return true;
     }
-    const claim = claimScoutPublish(db, setupId, expectedVersion);
+    const claim = await withFinalScoutReadiness(interaction.client, db, setupId,
+      () => claimScoutPublish(db, setupId, expectedVersion));
     if (claim !== 'claimed') {
       await interaction.editReply({
         content: claim === 'withdrawals' ? 'Publishing is blocked by one or more withdrawn signups.' : 'That publish confirmation is stale or already completed.',

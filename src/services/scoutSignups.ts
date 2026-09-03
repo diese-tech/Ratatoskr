@@ -18,25 +18,7 @@ import { generateScoutRoster } from '../domain/scoutRoster.js';
 import { eligibleScoutSignups } from './scoutEligibility.js';
 import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { renderPersistedScoutSignupPost } from './scoutCreate.js';
-
-const setupLocksByDatabase = new WeakMap<Database.Database, Map<number, Promise<void>>>();
-
-async function withScoutSetupLock<T>(db: Database.Database, setupId: number, task: () => Promise<T>): Promise<T> {
-  let setupLocks = setupLocksByDatabase.get(db);
-  if (!setupLocks) { setupLocks = new Map(); setupLocksByDatabase.set(db, setupLocks); }
-  const previous = setupLocks.get(setupId) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  const tail = previous.then(() => current);
-  setupLocks.set(setupId, tail);
-  await previous;
-  try {
-    return await task();
-  } finally {
-    release();
-    if (setupLocks.get(setupId) === tail) setupLocks.delete(setupId);
-  }
-}
+import { withScoutSetupLock } from './scoutSetupLock.js';
 
 export function scoutRoleForEmoji(
   emojiByRole: Readonly<Record<ScoutSignupRole, string | null>>,

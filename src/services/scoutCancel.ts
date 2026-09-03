@@ -28,6 +28,7 @@ import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './sc
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
+import { withFinalScoutReadiness } from './scoutReadiness.js';
 
 export function scoutCancelButton(setupId: number, version: number): ButtonBuilder {
   return new ButtonBuilder()
@@ -259,7 +260,8 @@ export async function handleScoutCancelButton(
       return true;
     }
 
-    const outcome = cancelScoutSetupIfVersion(db, setup.id, expectedVersion);
+    const outcome = await withFinalScoutReadiness(interaction.client, db, setup.id,
+      () => cancelScoutSetupIfVersion(db, setup.id, expectedVersion));
     if (outcome !== 'cancelled') {
       await interaction.editReply({
         content: outcome === 'published' ? publishedDirection(getScoutSetupById(db, setup.id) ?? setup) : 'That cancellation was stale or already applied.',

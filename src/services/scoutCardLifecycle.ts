@@ -1,10 +1,9 @@
 import { RESTJSONErrorCodes, type Client, type Message, type TextBasedChannel } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard,
-  readScoutReadinessSnapshot, listScoutReadinessSetupIds, listScoutSignups,
-  listScoutRosterSlots, withdrawnScoutRosterUserIds, type ScoutSetup } from '../db/index.js';
-import { scoutReadinessSnapshot, renderScoutReadiness } from '../domain/scoutReadiness.js';
-import { resolveEligibleScoutUserIds } from './scoutEligibility.js';
+  readScoutReadinessSnapshot, listScoutReadinessSetupIds, type ScoutSetup } from '../db/index.js';
+import { renderScoutReadiness } from '../domain/scoutReadiness.js';
+import { captureScoutReadiness } from './scoutReadiness.js';
 import { scoutReviewButtonRow } from './scoutReview.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 
@@ -50,24 +49,12 @@ async function findCard(channel: TextBasedChannel, botId: string, marker: string
   }
 }
 
-async function snapshot(client: Client, db: Database.Database, setup: ScoutSetup) {
-  const guild = await client.guilds.fetch(setup.guildId);
-  const signups = listScoutSignups(db, setup.id);
-  const slots = listScoutRosterSlots(db, setup.id);
-  const eligibleIds = await resolveEligibleScoutUserIds(guild,
-    [...signups.map((signup) => signup.userId), ...slots.map((slot) => slot.userId)], setup.eligibilityRoleId);
-  const unavailable = new Set([...withdrawnScoutRosterUserIds(db, setup.id),
-    ...slots.filter((slot) => !eligibleIds.has(slot.userId)).map((slot) => slot.userId)]);
-  return scoutReadinessSnapshot(signups.filter((signup) => eligibleIds.has(signup.userId)), setup.gameCount, slots, unavailable.size);
-}
-
 function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 'control', notify: boolean, unavailable?: string) {
   const saved = readScoutReadinessSnapshot(ensureScoutReadinessCard(db, setup.id));
   const terminal = ['published', 'cancelled'].includes(setup.status);
   const status = setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
     : setup.status === 'published' ? 'published' : 'cancelled';
-  let readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
-  if (unavailable) readiness = readiness.replace('Final recorded', 'Last recorded');
+  const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
   return { content: [
     kind === 'control' ? `<@${setup.createdBy}>` : '',
     `**${setup.divisionDisplayName} ${status} — setup #${setup.id}**`,
@@ -108,7 +95,7 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
       let unavailable: string | undefined;
       if (['open', 'roster_ready'].includes(setup.status)) {
         try {
-          const currentSnapshot = await snapshot(client, db, setup);
+          const currentSnapshot = await captureScoutReadiness(client, db, setup);
           const previousSnapshot = readScoutReadinessSnapshot(state);
           if (previousSnapshot && JSON.stringify({ ...currentSnapshot, recordedAt: 0 }) === JSON.stringify({ ...previousSnapshot, recordedAt: 0 })) {
             currentSnapshot.recordedAt = previousSnapshot.recordedAt;

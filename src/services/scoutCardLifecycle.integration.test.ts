@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Collection, type Client, type ButtonInteraction } from 'discord.js';
 import { openDatabase, upsertDivision, createScoutSetup, getScoutSetupById, listScoutSignups,
-  ensureScoutReadinessCard, cancelScoutSetupIfVersion } from '../db/index.js';
+  ensureScoutReadinessCard, readScoutReadinessSnapshot, cancelScoutSetupIfVersion } from '../db/index.js';
 import { SCOUT_ROLES } from '../domain/index.js';
 import { ensurePostedScoutSetup } from './scoutCreate.js';
 import { handleScoutSignupReactionAdd, handleScoutSignupReactionRemove, refreshScoutMemberReadiness } from './scoutSignups.js';
 import { refreshScoutStatusCard, reconcileScoutStatusCards } from './scoutCardLifecycle.js';
 import { handleScoutReviewButton } from './scoutReview.js';
 import { handleScoutPublishButton } from './scoutPublish.js';
+import { handleScoutCancelButton } from './scoutCancel.js';
 
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
@@ -140,7 +141,7 @@ test('two-game draft refresh uses 20/4 targets and publication retains a frozen 
     assert.match(card.content, /20\/20 unique/); assert.match(card.content, /Support \*\*4\/4/);
     await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:1`) as ButtonInteraction, f.db);
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'published');
-    assert.match(card.content, /Final recorded signup snapshot/); assert.match(card.content, /Roster: https:/);
+    assert.match(card.content, /Last recorded signup snapshot/); assert.match(card.content, /Roster: https:/);
     const content = card.content;
     f.members.clear(); await reconcileScoutStatusCards(f.client, f.db);
     assert.equal(card.content, content); assert.deepEqual(card.components, []);
@@ -196,7 +197,7 @@ test('concurrent setups retain isolated cards and an open cancellation preserves
     await refreshScoutStatusCard(f.client, f.db, f.setup.id);
     assert.equal(f.ops.all.size, 2);
     assert.match(f.ops.all.get(firstCardId).content, /cancelled/);
-    assert.match(f.ops.all.get(firstCardId).content, /Final recorded signup snapshot/);
+    assert.match(f.ops.all.get(firstCardId).content, /Last recorded signup snapshot/);
     assert.equal(getScoutSetupById(f.db, other.id)?.status, 'open');
   } finally { f.db.close(); }
 });
@@ -295,3 +296,55 @@ test('a delayed staff-card edit does not block subsequent signup persistence', a
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 2);
   } finally { release(); await Promise.all([first, second]); f.db.close(); }
 });
+
+test('cancellation retains the last known snapshot when final eligibility cannot be verified', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.react('player', 'solo');
+    const saved = ensureScoutReadinessCard(f.db, f.setup.id).snapshot_json;
+    f.roleCache.clear();
+    await handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${f.setup.id}:0`), f.db);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
+    assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).snapshot_json, saved);
+    assert.match(f.ops.all.first()!.content, /Last recorded signup snapshot/);
+    f.roleCache.set('eligible', { id: 'eligible' }); f.members.clear();
+    await reconcileScoutStatusCards(f.client, f.db);
+    assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).snapshot_json, saved);
+  } finally { f.db.close(); }
+});
+
+for (const terminal of ['cancelled', 'published'] as const) {
+  test(`${terminal} captures committed signups even while an older card edit is delayed`, async () => {
+    const f = fixture();
+    let release!: () => void;
+    let editing!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { editing = resolve; });
+    const pending: Promise<unknown>[] = [];
+    try {
+      await ensurePostedScoutSetup(f.client, f.db, f.setup);
+      if (terminal === 'published') await f.fill();
+      const card = f.ops.all.first()!;
+      const edit = card.edit;
+      card.edit = async (payload: any) => { editing(); await gate; return edit(payload); };
+      pending.push(f.react('first-extra', 'solo')); await started;
+      pending.push(f.react('second-extra', 'mid'));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const count = terminal === 'published' ? 12 : 2;
+      assert.equal(listScoutSignups(f.db, f.setup.id).length, count);
+      pending.push(terminal === 'published'
+        ? handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:0`), f.db)
+        : handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${f.setup.id}:0`), f.db));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, terminal);
+      // The final snapshot is durable before Discord card delivery can finish.
+      assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, f.setup.id))?.players, count);
+      release(); await Promise.all(pending);
+      assert.match(card.content, new RegExp(`${count}/10 unique`));
+      const content = card.content;
+      f.members.clear(); await reconcileScoutStatusCards(f.client, f.db);
+      assert.equal(card.content, content);
+    } finally { release(); await Promise.all(pending); f.db.close(); }
+  });
+}

@@ -131,3 +131,17 @@ lost responses and ambiguous delivery still require marker recovery.
 Validation: both new integration regressions failed before repair; all 12 card
 lifecycle tests and application typecheck pass. Next: capture closure snapshots
 without waiting for queued card edits, then rerun cumulative gates and final CI.
+
+## Review checkpoint 6 — capture counts with closure
+
+Done: publication/cancellation shares the signup-state lock while capturing
+eligibility and saves the snapshot in the same SQLite transaction as the terminal
+transition. Discord card delivery stays outside that lock. Failed eligibility
+lookups retain the timestamped last known snapshot and report operationally;
+terminal startup recovery never substitutes today's eligibility for historical
+counts. Historical cards say "Last recorded signup snapshot" consistently.
+
+Validation: both delayed-edit closure regressions failed before repair; all 15
+card lifecycle tests pass, including eligibility-failure fallback and frozen
+recovery. Application typecheck and focused cancellation/publication tests pass.
+Next: cumulative tests, typechecks, build/audit, updated handoff and final PR CI.
