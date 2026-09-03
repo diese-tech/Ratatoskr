@@ -422,7 +422,7 @@ The publication-routing change is an updated product contract, not proof of an u
 | B1.1 | Planned | — | — | Runtime parity as applicable |
 | B1.2 | Code implemented; review/live pending | codex/b1-division-safety | 136 tests and application typecheck pass; posting blocker regression reproduced before fix. | Fresh/upgrade resource validation |
 | B1.3 | Code implemented; review/live pending | codex/b1-signup-publication | 137 tests and application typecheck pass; routing claim, stale versions and player permission checks covered. | Live ID mapping, routing and migration smoke |
-| B1.4 | Planned | — | — | Published swap/replacement and restart smoke |
+| B1.4 | Code implemented; review/live pending | codex/b1-published-recovery | 144 tests and application typecheck pass; disk restart, lost edit/send responses, uncertain notice, stale/unauthorized/missing-message cases covered. | Published swap/replacement and restart smoke |
 | B1.5 | Planned | — | — | Private staff-ops delivery and log lookup |
 | B1.6 | Planned | — | — | Authorized active-posting selection and cancellation smoke |
 | B1.7 / #69 | Planned | — | — | Readable names, exact multi-game selection and mobile acceptance |

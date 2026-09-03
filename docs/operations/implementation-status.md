@@ -37,3 +37,27 @@ Validation: 137 tests and application typecheck pass; routing claim, stale versi
 Next: B1.4: reproduce published Swap double acknowledgement, then add durable roster edit/notice recovery and failure-injection tests.
 
 Deployment/live verification: pending; no production changes.
+
+## B1.4 checkpoint A — durable published updates
+
+Done: migration 15 adds one pending roster update per setup; roster mutation and
+notice intent commit atomically. Published selectors acknowledge once before API
+lookups. Recovery edits the original message and retains uncertain notice delivery
+instead of rolling back or blindly sending twice. Live edits share the division guard.
+
+Validation: 139 tests and application typecheck pass; both original failures now
+pass as real handler regressions. PR70/71/72 CI passes on both Windows and Linux.
+
+Next: add disk-restart, lost-notice-response, unavailable-message and stale/unauthorized
+failure coverage; finish operator recovery instructions; then open the B1.4 PR.
+B1.4 is in progress. Production and live Discord verification remain untouched.
+
+## B1.4 checkpoint (codex/b1-published-recovery)
+
+Done: Exactly-once interaction acknowledgement; transactional pending roster edits/notices; restart repair, version guards and exact marker matching. Migration 15 is append-only.
+
+Validation: 144 tests and application typecheck pass; disk restart, lost edit/send responses, uncertain notice, stale/unauthorized/missing-message cases covered.
+
+Next: B1.5: safe staff-ops error reporting with matching private/process references. Verify B1.4 stacked CI and rehearse migration before deployment.
+
+Deployment/live verification: pending; no production changes.

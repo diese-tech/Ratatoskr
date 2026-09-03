@@ -10,7 +10,7 @@ import { reconcileActiveScoutSignups } from './services/scoutSignups.js';
 import { reconcileScoutControlPanels } from './services/scoutControlPanel.js';
 import { reconcileCancelledScoutSignupPosts } from './services/scoutCancel.js';
 import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
-import { reconcilePendingScoutPublishes } from './services/scoutPublish.js';
+import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } from './services/scoutPublish.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -68,6 +68,8 @@ client.once('clientReady', async () => {
   console.log('Pending scout signup posts reconciled.');
   await reconcilePendingScoutPublishes(client, db);
   console.log('Pending scout publishes reconciled.');
+  await reconcilePendingScoutRosterUpdates(client, db);
+  console.log('Pending published roster updates reconciled.');
   await reconcileActiveScoutSignups(client, db);
   console.log('Active scout signups reconciled.');
   await reconcileCancelledScoutSignupPosts(client, db);
