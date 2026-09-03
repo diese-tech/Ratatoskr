@@ -1,3 +1,4 @@
+import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -104,14 +105,15 @@ export async function reconcileCancelledScoutSignupPost(
     );
     return undefined;
   } catch (error) {
-    return (error as Error).message;
+    const report = await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout cancellation recovery' }, error);
+    return operationalErrorGuidance(report);
   }
 }
 
 export async function reconcileCancelledScoutSignupPosts(client: Client, db: Database.Database): Promise<void> {
   for (const setup of listCancelledScoutSetupsNeedingSignupPostReconciliation(db)) {
-    const error = await reconcileCancelledScoutSignupPost(client, db, setup);
-    if (error) console.error(`Scout cancellation reconciliation failed for setup #${setup.id}: ${error}`);
+    await reconcileCancelledScoutSignupPost(client, db, setup);
+    // The repair function already reports failures with a correlation reference.
   }
 }
 

@@ -1,3 +1,4 @@
+import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -111,7 +112,7 @@ export async function reconcilePendingScoutPublishes(client: Client, db: Databas
       }
       await attachRecoveredScoutResult(client, db, setup, resultMessage);
     } catch (error) {
-      console.error(`Scout publish reconciliation failed for setup #${setup.id}`, error);
+      await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout publication recovery' }, error);
     }
   }
 }
@@ -281,6 +282,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
         throw new Error('Could not record the updated signup post.');
       }
     } catch (error) {
+      const report = await reportOperationalError(interaction.client, db, { guildId: setup.guildId, setupId, action: 'Scout publication' }, error);
       const resultDeleted = resultMessage
         ? await resultMessage.delete().then(() => true, () => false)
         : !resultSendAttempted;
@@ -296,8 +298,8 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       }
       await interaction.editReply({
         content: released
-          ? `Publishing failed and is ready to retry: ${(error as Error).message}`
-          : `Publishing was interrupted after the result post was created. Ratatoskr kept the publish claim and will reconcile it on restart: ${(error as Error).message}`,
+          ? `Publishing failed and is ready to retry: ${operationalErrorGuidance(report)}`
+          : `Publishing was interrupted after the result post was created. Ratatoskr kept the publish claim and will reconcile it on restart: ${operationalErrorGuidance(report)}`,
         components: [],
       });
       return true;
@@ -509,8 +511,8 @@ async function finishPublishedUpdate(interaction: MessageComponentInteraction, d
   try {
     await reconcileScoutRosterUpdateLocked(interaction.client, db, setupId);
   } catch (error) {
-    console.error(`Published roster recovery pending for setup #${setupId}`, error);
-    await interaction.editReply({ content: 'The roster change is saved; Discord update or notice delivery is pending recovery. Use the roster controls to retry recovery, or ask staff to inspect the pending update. Do not repeat the player change.', components: [] });
+    const report = await reportOperationalError(interaction.client, db, { guildId: interaction.guildId!, setupId, action: 'Published roster recovery', next: 'Roster change saved; inspect pending Discord edit or notice before retrying a player change.' }, error);
+    await interaction.editReply({ content: `The roster change is saved; Discord update or notice delivery is pending recovery. Do not repeat the player change. ${operationalErrorGuidance(report)}`, components: [] });
     return;
   }
   await interaction.editReply({ content: 'Published roster updated.', components: [] });
@@ -523,7 +525,7 @@ export async function reconcilePendingScoutRosterUpdates(client: Client, db: Dat
     const release = tryAcquireDivisionOperation(db, setup.guildId, setup.divisionKey);
     if (!release) continue;
     try { await reconcileScoutRosterUpdateLocked(client, db, setup.id); }
-    catch (error) { console.error(`Published roster recovery pending for setup #${setup.id}`, error); }
+    catch (error) { await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Published roster recovery' }, error); }
     finally { release(); }
   }
 }

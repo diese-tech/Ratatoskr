@@ -11,6 +11,7 @@ import { reconcileScoutControlPanels } from './services/scoutControlPanel.js';
 import { reconcileCancelledScoutSignupPosts } from './services/scoutCancel.js';
 import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
 import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } from './services/scoutPublish.js';
+import { reportOperationalError, operationalErrorGuidance } from './services/operationalErrors.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -82,9 +83,14 @@ client.on('interactionCreate', async (interaction) => {
   try {
     await handleInteraction(interaction, db);
   } catch (error) {
-    console.error('Interaction failed', error);
+    const setupId = 'customId' in interaction ? Number(interaction.customId.split(':')[2]) : undefined;
+    const report = await reportOperationalError(client, db, {
+      guildId: interaction.guildId ?? env.DISCORD_GUILD_ID,
+      action: interaction.isChatInputCommand() ? `/${interaction.commandName}` : 'Scout interaction',
+      ...(Number.isSafeInteger(setupId) && setupId! > 0 ? { setupId } : {}),
+    }, error);
     if (interaction.isRepliable()) {
-      const payload = { content: 'Ratatoskr could not complete that command. Check staff logs for details.', flags: MessageFlags.Ephemeral } as const;
+      const payload = { content: `Ratatoskr could not complete that action. ${operationalErrorGuidance(report)}`, flags: MessageFlags.Ephemeral } as const;
       // Best-effort: the interaction token can already be dead here (the
       // 3-second window elapsed, or a partial reply already happened),
       // which makes this apology reply itself throw. Since captureRejections
@@ -110,7 +116,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
     if (await tryHandleScoutEmojiBinding(reaction, user, db)) return;
     await handleScoutSignupReactionAdd(reaction, user, db);
   } catch (error) {
-    console.error('Scout reaction add failed', error);
+    await reportOperationalError(client, db, { guildId: reaction.message.guildId ?? env.DISCORD_GUILD_ID, action: 'Scout signup reaction add' }, error);
   }
 });
 
@@ -118,7 +124,7 @@ client.on('messageReactionRemove', async (reaction, user) => {
   try {
     await handleScoutSignupReactionRemove(reaction, user, db);
   } catch (error) {
-    console.error('Scout reaction remove failed', error);
+    await reportOperationalError(client, db, { guildId: reaction.message.guildId ?? env.DISCORD_GUILD_ID, action: 'Scout signup reaction remove' }, error);
   }
 });
 

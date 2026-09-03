@@ -1,3 +1,4 @@
+import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import { randomUUID } from 'node:crypto';
 import {
   ActionRowBuilder,
@@ -118,7 +119,7 @@ export async function reconcilePostingScoutSetups(client: Client, db: Database.D
     try {
       await ensurePostedScoutSetup(client, db, setup);
     } catch (error) {
-      console.error(`Scout signup post reconciliation failed for setup #${setup.id}`, error);
+      await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout signup creation recovery' }, error);
     }
   }
 }
@@ -574,9 +575,10 @@ async function handleScoutCreateButtonLocked(
       note: draft.note,
     });
   } catch (error) {
+    const report = await reportOperationalError(interaction.client, db, { guildId: draft.guildId, action: 'Save Scout setup' }, error);
     draft.posting = false;
     await interaction.editReply({
-      content: `Ratatoskr could not save this scout setup: ${(error as Error).message}`,
+      content: `Ratatoskr could not save this scout setup: ${operationalErrorGuidance(report)}`,
       components: [],
     });
     return true;
@@ -586,6 +588,7 @@ async function handleScoutCreateButtonLocked(
   try {
     signupMessage = await ensurePostedScoutSetup(interaction.client, db, setup);
   } catch (error) {
+    const report = await reportOperationalError(interaction.client, db, { guildId: draft.guildId, setupId: setup.id, action: 'Post Scout signup' }, error);
     const persisted = getScoutSetupById(db, setup.id);
     let postDeletionConfirmed = false;
     if (persisted?.signupMessageId) {
@@ -599,8 +602,8 @@ async function handleScoutCreateButtonLocked(
     draft.posting = false;
     await interaction.editReply({
       content: postDeletionConfirmed
-        ? `Ratatoskr could not post and seed the scout signup reactions: ${(error as Error).message}`
-        : `Ratatoskr could not finish seeding the scout signup reactions and could not confirm cleanup of the post. The setup remains pending so startup recovery can finish it safely: ${(error as Error).message}`,
+        ? `Ratatoskr could not post and seed the scout signup reactions: ${operationalErrorGuidance(report)}`
+        : `Ratatoskr could not finish seeding the scout signup reactions and could not confirm cleanup of the post. The setup remains pending so startup recovery can finish it safely: ${operationalErrorGuidance(report)}`,
       components: [],
     });
     return true;

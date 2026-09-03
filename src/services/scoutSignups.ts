@@ -1,3 +1,4 @@
+import { reportOperationalError } from './operationalErrors.js';
 import type Database from 'better-sqlite3';
 import type { Client, MessageReaction, PartialMessageReaction, PartialUser, User } from 'discord.js';
 import {
@@ -118,8 +119,8 @@ export async function reconcileActiveScoutSignups(client: Client, db: Database.D
         const { accepted, rejected } = selectReconciledScoutSignups(prioritized, setup.roleLimit);
         if (!replaceScoutSignups(db, setup.id, accepted)) return;
         for (const signup of rejected) {
-          await reactionsByRole.get(signup.role)?.users.remove(signup.userId).catch((error) => {
-            console.error(`Could not remove over-limit scout reaction for setup #${setup.id}`, error);
+          await reactionsByRole.get(signup.role)?.users.remove(signup.userId).catch(async (error) => {
+            await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout excess reaction cleanup' }, error);
           });
         }
 
@@ -139,14 +140,14 @@ export async function reconcileActiveScoutSignups(client: Client, db: Database.D
             content: renderPersistedScoutSignupPost(latest),
             components: [],
             allowedMentions: { parse: [] },
-          }).catch((error) => {
-            console.error(`Could not reconcile public signup post for setup #${setup.id}`, error);
+          }).catch(async (error) => {
+            await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout signup post recovery' }, error);
           });
         }
         if (latest?.status === 'roster_ready') await ensureScoutControlPanel(client, db, latest.id);
       });
     } catch (error) {
-      console.error(`Scout signup reconciliation failed for setup #${candidate.id}`, error);
+      await reportOperationalError(client, db, { guildId: candidate.guildId, setupId: candidate.id, division: candidate.divisionDisplayName, action: 'Scout signup recovery' }, error);
     }
   }
 }
@@ -206,8 +207,8 @@ export async function handleScoutSignupReactionAdd(
           content: renderPersistedScoutSignupPost(latest),
           components: [],
           allowedMentions: { parse: [] },
-        }).catch((error) => {
-          console.error(`Could not clear legacy signup controls for setup #${latest.id}`, error);
+        }).catch(async (error) => {
+          await reportOperationalError(hydrated.reaction.client, db, { guildId: latest.guildId, setupId: latest.id, division: latest.divisionDisplayName, action: 'Scout signup control cleanup' }, error);
         });
         await ensureScoutControlPanel(hydrated.reaction.client, db, latest.id);
       }
@@ -215,8 +216,8 @@ export async function handleScoutSignupReactionAdd(
     }
     if (outcome.status !== 'over_limit') return;
 
-    await hydrated.reaction.users.remove(hydrated.user.id).catch((error) => {
-      console.error('Could not remove over-limit scout reaction', error);
+    await hydrated.reaction.users.remove(hydrated.user.id).catch(async (error) => {
+      await reportOperationalError(hydrated.reaction.client, db, { guildId: resolved.setup.guildId, setupId: resolved.setup.id, division: resolved.setup.divisionDisplayName, action: 'Scout excess reaction cleanup' }, error);
     });
     await hydrated.user
       .send(
