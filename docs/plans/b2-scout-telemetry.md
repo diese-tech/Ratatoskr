@@ -1,0 +1,57 @@
+# B2 — persistent Scout readiness cards
+
+Authorized direction: review Lucid and adapt its persistent visual staff display
+to Ratatoskr using the lifecycle preferred in this conversation. This is a
+separate B2 branch/PR above B1; no merge or production deployment is authorized.
+Reminder scheduling remains a separate follow-up feature.
+
+## Source review
+
+Lucid main 827b7b8371443463b9bd3579746f73b406277848 already creates a staff
+card alongside the signup post and updates it on reactions and roster changes.
+Its `src/discord/render.ts` separates presentation from flow orchestration;
+`src/discord/flows/review.ts` owns card refresh. Its existing open card counts raw
+signup rows. Detailed unique/eligible role telemetry is still planned in Lucid
+#30, not implemented. Ratatoskr #68 also remains open.
+
+Adopt the persistent staff visibility and diagnostic presentation. Preserve
+Ratatoskr's setup/division snapshots, private roster review, two-channel contract,
+canonical eligibility/matching, and fresh ready-panel creator notification.
+Do not adopt Lucid's guild-wide routing, premade format or proposed rejection of
+ineligible reactions; Ratatoskr retains reactions and filters eligibility.
+
+## Lifecycle and display
+
+1. After the public signup post succeeds, create one status-only card in the
+   setup's snapshotted scout-ops channel. Private creation previews create no card.
+2. Show unique eligible players against 10 (20 for a two-game draft), uncapped
+   standard-role counts against 2/4, Fill separately, and actual matching blockers.
+   Role counts overlap; Fill coverage must not produce false missing-role warnings.
+3. Once canonical readiness creates a draft, delete the temporary card with
+   confirmed cleanup, then send the fresh normal ready panel and notify its
+   creator. Carry telemetry into this new panel and continue live updates through
+   review. Existing ready panels gain telemetry in place without another ping.
+4. Reactions, membership/eligibility changes and draft mutations refresh the view.
+   Show eligible unseated participants as overflow after a draft exists, without
+   treating role overage as unique spare players. No new overflow picker in B2.
+5. Publication/cancellation leaves a terminal card with its last recorded signup
+   snapshot and time, plus the published roster link when available. Counts are
+   explicitly historical after closure, not confirmed substitute availability.
+
+## Reliability and acceptance
+
+Append migration 16 for telemetry identity, attempted sends and the last snapshot.
+Serialize per-setup card writes; use exact durable markers and paginated recovery.
+Retain state on ambiguous sends/deletes and 403s; only confirmed absence permits
+replacement. Telemetry errors report to staff-ops without undoing signup/roster
+work. Recover open, ready and terminal cards on startup without duplicate pings.
+
+Test zero signups, overlapping reactions, overflow, Fill, one/two-game targets,
+missing roles, flex overlap, eligibility loss/gain/departure, live reaction and
+draft refreshes, fresh ready notification, terminal snapshots, restart/ambiguous
+delivery, denied cleanup and simultaneous setups. Run the full inherited gates.
+
+Next: implement the shared snapshot/rendering layer and durable card lifecycle,
+wire existing events, test recovery, update #68's adoption contract in repository
+documentation, and open a separate reviewable B2 PR. Keep Done/Validation/Next
+commit bodies after each meaningful chunk. B1 deployment/live gates remain open.
