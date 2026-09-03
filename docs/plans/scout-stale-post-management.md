@@ -2,6 +2,15 @@
 
 Recorded: September 3, 2026. Baseline: main `208eaf88b135d346456130626505cab4ce7c1d14`.
 
+Implementation merged in [PR #79](https://github.com/diese-tech/Ratatoskr/pull/79)
+at `cd1be71284fafc7c69d0058807d046889101238d`. Checkpoints `8777d03` and `3ba4306`
+are preserved. All 196 tests and local gates pass; PR CI `33758762949` and main CI
+`33758944912` passed Windows and Ubuntu. Railway deployment
+`ba9e274e-fe5c-49ea-bd29-c632709f1463` succeeded at 13:06:58 UTC. Inspected logs show
+database readiness, bot login, command registration, finished-post reconciliation
+at 13:07:00 and card reconciliation at 13:07:07, with no startup failures.
+Auto-deploy remains enabled. Live cancellation/completion acceptance is pending.
+
 The user verified that B2 recovered older Scout Ops listings, then reported that
 those cards offer no way to edit or close the underlying setup. This is a bounded
 B2 follow-up before B3 acceptance, not authorization for the remaining backlog.

@@ -36,6 +36,8 @@ published cards gain Swap players, Replace player and Finish scout. This revises
 the original status-only decision below. See
 [`scout-stale-post-management.md`](scout-stale-post-management.md) for the bounded
 follow-up, completion persistence, validation and remaining acceptance.
+The follow-up is merged as PR #79; its 196-test suite and both platform checks
+passed, and Railway card recovery completed at 13:07:07 UTC on September 3.
 
 1. After the public signup post succeeds, create one status-only card in the
    setup's snapshotted scout-ops channel. Private creation previews create no card.

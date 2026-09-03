@@ -1,6 +1,6 @@
 # Ratatoskr backlog execution plan
 
-Version: 1.8 — B1/B2 deployed; recovered-post management follow-up in progress
+Version: 1.8 — B1/B2 and recovered-post management deployed; live acceptance pending
 Recorded: September 2, 2026
 Updated: September 3, 2026
 Repository: [diese-tech/Ratatoskr](https://github.com/diese-tech/Ratatoskr)
@@ -21,6 +21,12 @@ that stale postings have no on-card management. Add explicit cancellation and
 published completion controls before B3 acceptance; see
 [`scout-stale-post-management.md`](scout-stale-post-management.md). This supersedes
 B2's status-only open-card decision. B3–B7 ordering and reminder scope stay intact.
+
+That follow-up is merged in PR #79 at `cd1be71284fafc7c69d0058807d046889101238d`.
+Its 196-test suite, Windows/Ubuntu PR and main CI, and automatic Railway startup
+passed. Recovered-card reconciliation completed at 13:07:07 UTC on September 3.
+Staff must still verify the actual cancel/finish interactions on their chosen
+postings; no production setup was automatically cancelled or finished.
 
 | Topic | Original plan / observed implementation | Current plan |
 | --- | --- | --- |
