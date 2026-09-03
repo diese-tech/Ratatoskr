@@ -71,3 +71,13 @@ Validation: 152 tests and application typecheck pass; delivery, missing/public/w
 Next: B1.6: direct cancellable-posting picker with authorization filtering, paging and stale confirmation tests. Staff-ops live smoke remains pending.
 
 Deployment/live verification: pending; no production changes.
+
+## B1.6 checkpoint (codex/b1-cancel-picker)
+
+Done: Direct private active-posting list across authorized divisions, pagination, confirmation, legacy-control compatibility and early interaction acknowledgement.
+
+Validation: 156 tests and application typecheck pass; zero/one/many postings, access changes, stale versions, published exclusion and real cancellation repair verified.
+
+Next: B1.7 / #69: readable player names in all draft/published swap and replacement selectors; verify exact Game 2 selection and name fallback.
+
+Deployment/live verification: pending; no production changes.

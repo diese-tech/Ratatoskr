@@ -248,15 +248,15 @@ export function markCancelledScoutSignupPostReconciled(
 export function listCancellableScoutSetups(
   db: Database.Database,
   guildId: string,
-  divisionId: number,
+  divisionId?: number,
 ): ScoutSetup[] {
   const rows = db
     .prepare(
       `SELECT * FROM scout_setups
-       WHERE guild_id = ? AND division_id = ? AND status IN ('open', 'roster_ready')
+       WHERE guild_id = ? AND (? IS NULL OR division_id = ?) AND status IN ('open', 'roster_ready')
        ORDER BY start_at, id`,
     )
-    .all(guildId, divisionId) as ScoutSetupRow[];
+    .all(guildId, divisionId ?? null, divisionId ?? null) as ScoutSetupRow[];
   return rows.map(toScoutSetup);
 }
 

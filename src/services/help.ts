@@ -27,7 +27,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       },
       {
         usage: '/scout cancel',
-        description: 'From scout-ops, authorized staff choose a division and cancel one of its open or roster-ready setups after confirmation. Published rosters use their Swap or Replace player controls instead.',
+        description: 'From scout-ops, view active postings you can manage across divisions, choose a posting, then confirm cancellation. Published rosters use their Swap or Replace player controls instead.',
       },
     ],
   },

@@ -16,6 +16,7 @@ import type Database from 'better-sqlite3';
 import {
   cancelScoutSetupIfVersion,
   getDivisionByKey,
+  listDivisions,
   getScoutConfig,
   getScoutSetupById,
   listCancelledScoutSetupsNeedingSignupPostReconciliation,
@@ -26,6 +27,7 @@ import {
 import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { updateScoutControlPanel } from './scoutControlPanel.js';
+import { tryAcquireDivisionOperation } from './divisionOperation.js';
 
 export function scoutCancelButton(setupId: number, version: number): ButtonBuilder {
   return new ButtonBuilder()
@@ -56,7 +58,7 @@ async function canManageSetup(
 
 function confirmation(setup: ScoutSetup) {
   return {
-    content: `Cancel **${setup.divisionDisplayName} scout setup #${setup.id}** at <t:${setup.startAt}:F>? Signups will close and this cannot be undone.`,
+    content: `Cancel **${setup.divisionDisplayName} scout setup #${setup.id}** at <t:${setup.startAt}:F>? Signups will close and this cannot be undone.${setup.signupMessageId ? `\nhttps://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : ''}`,
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -117,58 +119,47 @@ export async function reconcileCancelledScoutSignupPosts(client: Client, db: Dat
   }
 }
 
-export async function handleScoutCancelCommand(
-  interaction: ChatInputCommandInteraction,
-  db: Database.Database,
+async function showCancellationPage(
+  interaction: ChatInputCommandInteraction | ButtonInteraction, db: Database.Database, requestedPage = 0,
 ): Promise<void> {
   if (!interaction.guild) return;
   const config = getScoutConfig(db, interaction.guild.id);
   if (!config?.operationsChannelId || interaction.channelId !== config.operationsChannelId) {
-    await interaction.reply({
-      content: 'Run `/scout cancel` from the configured `scout-ops` channel.',
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  const divisionKey = interaction.options.getString('division', true);
-  const division = getDivisionByKey(db, interaction.guild.id, divisionKey);
-  if (!division || division.status !== 'active') {
-    await interaction.reply({ content: 'This division is not active.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'Run `/scout cancel` from the configured `scout-ops` channel.', components: [] });
     return;
   }
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const { hasAccess } = await import('./authorization.js');
-  const allowed = hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'ADMIN'));
-  if (!allowed) {
-    await interaction.reply({ content: 'You do not have permission to cancel this division\'s scout setups.', flags: MessageFlags.Ephemeral });
+  const manageable = new Set(listDivisions(db, interaction.guild.id)
+    .filter((division) => division.status === 'active' && hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'ADMIN')))
+    .map((division) => division.id));
+  const setups = listCancellableScoutSetups(db, interaction.guild.id)
+    .filter((setup) => manageable.has(setup.divisionId) && setup.operationsChannelId === interaction.channelId);
+  if (!setups.length) {
+    await interaction.editReply({ content: 'There are no active scout postings you can cancel.', components: [] });
     return;
   }
+  const pages = Math.ceil(setups.length / 25);
+  const page = Math.max(0, Math.min(requestedPage, pages - 1));
+  const format = new Intl.DateTimeFormat('en-US', { timeZone: config.timezone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  const menu = new StringSelectMenuBuilder().setCustomId('scout:cancelpick:all')
+    .setPlaceholder('Choose an active scout posting')
+    .addOptions(setups.slice(page * 25, (page + 1) * 25).map((setup) => new StringSelectMenuOptionBuilder()
+      .setLabel(`${setup.divisionDisplayName.slice(0, 35)} — ${format.format(setup.startAt * 1000)}`.slice(0, 100))
+      .setDescription(`#${setup.id} · ${setup.status === 'roster_ready' ? 'Roster ready' : 'Accepting signups'}`)
+      .setValue(`${setup.id}:${setup.version}`)));
+  const components: (ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>)[] = [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)];
+  if (pages > 1) components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`scout:cancelpage:${page - 1}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId(`scout:cancelpage:${page + 1}`).setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page === pages - 1),
+  ));
+  await interaction.editReply({ content: `Choose an active scout posting to cancel. Page ${page + 1}/${pages}. Selection is followed by confirmation.`, components, allowedMentions: { parse: [] } });
+}
 
-  const setups = listCancellableScoutSetups(db, interaction.guild.id, division.id);
-  if (setups.length === 0) {
-    await interaction.reply({ content: 'This division has no open or roster-ready scout setups to cancel.', flags: MessageFlags.Ephemeral });
-    return;
-  }
-  if (setups.length === 1) {
-    await interaction.reply({ ...confirmation(setups[0]!), flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`scout:cancelpick:${division.id}`)
-    .setPlaceholder('Choose the scout setup to cancel')
-    .addOptions(setups.slice(0, 25).map((setup) =>
-      new StringSelectMenuOptionBuilder()
-        .setLabel(`Setup #${setup.id} — ${new Date(setup.startAt * 1_000).toISOString().slice(0, 16).replace('T', ' ')}`)
-        .setDescription(setup.status === 'roster_ready' ? 'Roster ready' : 'Accepting signups')
-        .setValue(String(setup.id)),
-    ));
-  await interaction.reply({
-    content: `Choose one of the cancellable **${division.displayName}** scout setups.`,
-    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
-    flags: MessageFlags.Ephemeral,
-  });
+export async function handleScoutCancelCommand(interaction: ChatInputCommandInteraction, db: Database.Database): Promise<void> {
+  if (!interaction.guild) return;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await showCancellationPage(interaction, db);
 }
 
 export async function handleScoutCancelSelect(
@@ -177,23 +168,31 @@ export async function handleScoutCancelSelect(
 ): Promise<boolean> {
   const parts = interaction.customId.split(':');
   if (parts[0] !== 'scout' || parts[1] !== 'cancelpick') return false;
+  const allDivisions = parts[2] === 'all';
   const divisionId = Number(parts[2]);
-  const setupId = Number(interaction.values[0]);
-  if (![divisionId, setupId].every(Number.isInteger)) return false;
+  const [idValue, versionValue] = (interaction.values[0] ?? '').split(':');
+  const setupId = Number(idValue);
+  const version = versionValue === undefined ? undefined : Number(versionValue);
+  if (!Number.isSafeInteger(setupId) || (!allDivisions && !Number.isSafeInteger(divisionId)) || (allDivisions && !Number.isSafeInteger(version))) return false;
+  await interaction.deferUpdate();
   const setup = await canManageSetup(interaction, db, setupId);
   const config = interaction.guildId ? getScoutConfig(db, interaction.guildId) : undefined;
-  if (!setup || setup.divisionId !== divisionId || config?.operationsChannelId !== interaction.channelId) {
-    await interaction.update({ content: 'That setup is no longer available to you.', components: [] });
+  if (!setup || (!allDivisions && setup.divisionId !== divisionId) || config?.operationsChannelId !== interaction.channelId) {
+    await interaction.editReply({ content: 'That setup is no longer available to you.', components: [] });
+    return true;
+  }
+  if (version !== undefined && setup.version !== version) {
+    await interaction.editReply({ content: 'That posting changed. Run /scout cancel again to refresh the list.', components: [] });
     return true;
   }
   if (!['open', 'roster_ready'].includes(setup.status)) {
-    await interaction.update({
+    await interaction.editReply({
       content: setup.status === 'published' ? publishedDirection(setup) : 'That setup is no longer cancellable.',
       components: [],
     });
     return true;
   }
-  await interaction.update(confirmation(setup));
+  await interaction.editReply(confirmation(setup));
   return true;
 }
 
@@ -202,72 +201,86 @@ export async function handleScoutCancelButton(
   db: Database.Database,
 ): Promise<boolean> {
   const parts = interaction.customId.split(':');
+  if (parts[0] === 'scout' && parts[1] === 'cancelpage') {
+    const page = Number(parts[2]);
+    if (!Number.isSafeInteger(page)) return false;
+    await interaction.deferUpdate();
+    await showCancellationPage(interaction, db, page);
+    return true;
+  }
   if (parts[0] !== 'scout' || !['cancel', 'cancelconfirm', 'cancelkeep'].includes(parts[1] ?? '')) return false;
   const setupId = Number(parts[2]);
   const expectedVersion = Number(parts[3]);
   if (![setupId, expectedVersion].every(Number.isInteger)) return false;
+  if (parts[1] === 'cancel') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  else await interaction.deferUpdate();
   const setup = await canManageSetup(interaction, db, setupId);
   if (!setup) {
-    await interaction.reply({ content: 'You do not have permission to cancel this scout setup.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'You do not have permission to cancel this scout setup.' });
     return true;
   }
 
-  if (parts[1] === 'cancelkeep') {
-    await interaction.update({
-      content: setup.status === 'published'
-        ? 'Cancellation dismissed. The scout setup was published while this confirmation was open.'
-        : setup.status === 'cancelled'
-          ? 'This scout setup was already cancelled.'
-          : 'Cancellation dismissed. The scout setup remains active.',
-      components: [],
-    });
+  const release = tryAcquireDivisionOperation(db, setup.guildId, setup.divisionKey);
+  if (!release) {
+    await interaction.editReply({ content: 'This division has an operation in progress. Retry when it finishes.', components: [] });
     return true;
   }
-  if (setup.status === 'published') {
-    const response = { content: publishedDirection(setup), components: [] };
-    if (parts[1] === 'cancel') await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
-    else await interaction.update(response);
-    return true;
-  }
-  if (setup.status === 'cancelled' && parts[1] === 'cancel') {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const error = await reconcileCancelledScoutSignupPost(interaction.client, db, setup);
-    await interaction.editReply({
-      content: error
-        ? `This setup is cancelled, but its post still could not be repaired: ${error}`
-        : `Scout setup #${setup.id} was already cancelled; its signup post is now reconciled.`,
-    });
-    return true;
-  }
-  if (!['open', 'roster_ready'].includes(setup.status)) {
-    const response = { content: 'That scout setup is no longer cancellable.', components: [] };
-    if (parts[1] === 'cancel') await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
-    else await interaction.update(response);
-    return true;
-  }
-  if (parts[1] === 'cancel') {
-    await interaction.reply({ ...confirmation(setup), flags: MessageFlags.Ephemeral });
-    return true;
-  }
+  try {
+    if (parts[1] === 'cancelkeep') {
+      await interaction.editReply({
+        content: setup.status === 'published'
+          ? 'Cancellation dismissed. The scout setup was published while this confirmation was open.'
+          : setup.status === 'cancelled'
+            ? 'This scout setup was already cancelled.'
+            : 'Cancellation dismissed. The scout setup remains active.',
+        components: [],
+      });
+      return true;
+    }
+    if (setup.status === 'published') {
+      const response = { content: publishedDirection(setup), components: [] };
+      if (parts[1] === 'cancel') await interaction.editReply({ ...response });
+      else await interaction.editReply(response);
+      return true;
+    }
+    if (setup.status === 'cancelled' && parts[1] === 'cancel') {
+      const error = await reconcileCancelledScoutSignupPost(interaction.client, db, setup);
+      await interaction.editReply({
+        content: error
+          ? `This setup is cancelled, but its post still could not be repaired: ${error}`
+          : `Scout setup #${setup.id} was already cancelled; its signup post is now reconciled.`,
+      });
+      return true;
+    }
+    if (!['open', 'roster_ready'].includes(setup.status)) {
+      const response = { content: 'That scout setup is no longer cancellable.', components: [] };
+      if (parts[1] === 'cancel') await interaction.editReply({ ...response });
+      else await interaction.editReply(response);
+      return true;
+    }
+    if (parts[1] === 'cancel') {
+      await interaction.editReply({ ...confirmation(setup) });
+      return true;
+    }
 
-  await interaction.deferUpdate();
-  const outcome = cancelScoutSetupIfVersion(db, setup.id, expectedVersion);
-  if (outcome !== 'cancelled') {
-    await interaction.editReply({
-      content: outcome === 'published' ? publishedDirection(getScoutSetupById(db, setup.id) ?? setup) : 'That cancellation was stale or already applied.',
-      components: [],
-    });
-    return true;
-  }
+    const outcome = cancelScoutSetupIfVersion(db, setup.id, expectedVersion);
+    if (outcome !== 'cancelled') {
+      await interaction.editReply({
+        content: outcome === 'published' ? publishedDirection(getScoutSetupById(db, setup.id) ?? setup) : 'That cancellation was stale or already applied.',
+        components: [],
+      });
+      return true;
+    }
 
-  const postError = await reconcileCancelledScoutSignupPost(interaction.client, db, setup);
-  if (!postError) {
-    await interaction.editReply({ content: `Scout setup #${setup.id} was cancelled.`, components: [] });
-  } else {
-    await interaction.editReply({
-      content: `Scout setup #${setup.id} was cancelled, but its original post could not be updated: ${postError}. Ratatoskr will retry automatically after restart; you can also use this button to retry now.`,
-      components: [scoutCancelButtonRow(setup.id, setup.version)],
-    });
-  }
-  return true;
+    const postError = await reconcileCancelledScoutSignupPost(interaction.client, db, setup);
+    if (!postError) {
+      await interaction.editReply({ content: `Scout setup #${setup.id} was cancelled.`, components: [] });
+    } else {
+      await interaction.editReply({
+        content: `Scout setup #${setup.id} was cancelled, but its original post could not be updated: ${postError}. Ratatoskr will retry automatically after restart; you can also use this button to retry now.`,
+        components: [scoutCancelButtonRow(setup.id, setup.version)],
+      });
+    }
+    return true;
+  } finally { release(); }
 }

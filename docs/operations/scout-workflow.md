@@ -29,7 +29,7 @@ Multiple setups may be open in the same or different divisions. Every signup, ro
 
 ## Cancellation and published replacements
 
-- Use `/scout cancel division:<division>` in `#scout-ops` to select among that division's open or roster-ready setups. A roster-ready setup's Scout Ops panel reaches the same confirmation directly.
+- Use `/scout cancel` in `#scout-ops` to immediately list all open or roster-ready postings you can manage. Entries show division, scheduled time and status; select one and confirm. Larger lists have Previous/Next pages. Published, cancelled and still-posting setups are excluded. A roster-ready setup's Scout Ops panel reaches the same confirmation directly.
 - Cancellation is final. The post is marked cancelled, reactions become inert, and controls are removed.
 - Published setups cannot be cancelled. Use **Swap players** to exchange any two published assignments, including across games. Use **Replace player** to select an occupied slot and then a current, non-bot, non-rostered server member. Ratatoskr edits the one combined result and sends a non-pinging notice naming the exact game, team, and role locations.
 
