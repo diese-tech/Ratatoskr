@@ -39,10 +39,12 @@ The production-copy restore rehearsal and clarification of date/time
 rescheduling also remain outstanding. These live checks and decisions remain
 separate from the completed CI, merge and startup checks.
 
-For future merges, wait for green CI and completed automated review of the
-current PR head, then address findings before merging. Keep Railway auto-deploy
-ON and inspect the new deployment's logs. No production setups are being
-automatically closed and no date/time editing or reminder scheduler is included.
+For future merges, require green CI and completed automated review with all
+findings addressed on the final PR head. After any fix changes that head, wait
+for both CI and a new automated review to complete again; merge only the unchanged
+reviewed commit. Keep Railway auto-deploy ON and inspect the new deployment's
+logs. No production setups are being automatically closed and no date/time
+editing or reminder scheduler is included.
 
 The previous checkpoints below are historical snapshots. Their Next entries
 record what was pending at that time; use the current checkpoint above to resume.
