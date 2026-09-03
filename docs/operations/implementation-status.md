@@ -4,6 +4,35 @@ Authorized scope: B1 in `docs/plans/backlog-execution-plan.md` v1.3.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
+## Current checkpoint — B1 code complete
+
+Read this section first. Entries below it preserve the chronological handoff history
+and may describe next steps that have since been completed.
+
+Done: all seven B1 slices are implemented in stacked PRs #70–#76. Automated review
+findings were repaired: shared franchise-role creation across divisions, nested
+interaction error context, duplicate visible player names, and stale plan progress.
+The final boundary also acknowledges errors before staff lookup. Review details
+are in `b1-review-status.md`; scope and PR links are in plan v1.4.
+
+Validation: 168 tests, application/script typechecks, build and zero-vulnerability
+dependency audit pass on Node 24.14.1. New first-publication integration verifies
+separate signup and roster messages in signups with safe stale retries. A disk
+upgrade from synthetic v14 data preserves active, pending and historical setups,
+slots, signups and legacy channel/message IDs; SQLite integrity/foreign-key checks
+pass. This is not a rehearsal against a production backup.
+
+Remote evidence before the final checkpoint: PR70 5f81d4b, PR71 fc2192d,
+PR72 ebbf9de, PR73 28bb74f, PR74 d732feb, PR75 26a18dc and PR76 ed9ebf2
+all passed both Ubuntu and Windows CI. The final commit adds the migration
+regression and this documentation; verify its PR76 checks before merging.
+
+Next: verify CI on the final pushed commit; follow `b1-rollout-checklist.md` for
+the concrete merge/deployment gate and focused live acceptance. Main remains
+866407f. No B1 PR has merged, no production changes were made, and #69/#45/#62/#36
+remain open pending their acceptance evidence. Do not begin B2 without further
+authorization. Keep Done/Validation/Next commits for every future authorized batch.
+
 ## B1.1 — validation/runtime
 
 Done: quote the test glob so Node handles recursive discovery on both shells;

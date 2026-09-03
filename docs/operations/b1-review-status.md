@@ -43,3 +43,18 @@ complete B1 run passed 166 tests, both typechecks, build and dependency audit.
 Next: rehearse migration 15 on synthetic v14 lifecycle data, finish final gates
 and update the plan/CI snapshot. Production backup rehearsal and live acceptance
 remain pending; no channels or production data have been changed.
+
+## Final migration and continuity checkpoint
+
+Done: a disk-backed v14 fixture covers posting, open, roster-ready, pending and
+settled published, and cancelled setups. Startup migration 15 preserves the
+existing lifecycle rows and original channel/message IDs. Plan v1.4 records every
+implemented slice and its PR, fixing the stale B1.1 progress finding on PR #70.
+`b1-rollout-checklist.md` records the remaining concrete operational gates.
+
+Validation: all 168 tests, application/script typechecks, build and dependency
+audit pass. SQLite integrity and foreign-key checks pass after the upgrade.
+All seven functional PR heads passed Windows and Ubuntu CI before this checkpoint.
+
+Next: verify the final checkpoint's CI and hand off the stack for the documented
+merge/deployment gate. No production backup or live Discord acceptance is claimed.
