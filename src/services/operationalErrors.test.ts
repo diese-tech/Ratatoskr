@@ -3,6 +3,52 @@ import test from 'node:test';
 import { ChannelType, Collection, PermissionFlagsBits, PermissionsBitField, type Client } from 'discord.js';
 import { openDatabase, insertManagedResource } from '../db/index.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
+import { handleInteractionError, interactionOperationContext } from './interactionErrors.js';
+
+test('nested Scout failures identify their setup and operation without confusing division or page IDs', () => {
+  const context = (customId: string, values: string[] = []) => interactionOperationContext({
+    customId, values, guildId: 'guild', isChatInputCommand: () => false,
+  } as any, 'fallback');
+  assert.equal(context('scout:editpick:swapfirst:12:3').setupId, 12);
+  assert.notEqual(context('scout:editpick:swapfirst:12:3').action, context('scout:editpick:replacefirst:12:3').action);
+  assert.notEqual(context('scout:publishedswap:12:3').action, context('scout:publishedreplace:12:3').action);
+  assert.equal(context('scout:cancelpick:all', ['42:7']).setupId, 42);
+  assert.equal(context('scout:cancelpick:9', ['42']).setupId, 42);
+  assert.equal(context('scout:cancelpage:2').setupId, undefined);
+  assert.equal(context('scout:create:post:draft-id').setupId, undefined);
+  assert.equal(context('scout:edituser:explicit:12:3:45').setupId, 12);
+  assert.equal(context('scout:publishedswap:invalid:3').setupId, undefined);
+});
+
+test('unexpected failure acknowledges privately before staff lookup and reports even if the token expires', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  let acknowledged = false;
+  let expired = false;
+  const replies: any[] = [];
+  const originalFetch = f.client.channels.fetch.bind(f.client.channels);
+  t.mock.method(f.client.channels, 'fetch', async (...args: any[]) => {
+    assert.equal(acknowledged, true, 'staff lookup must follow acknowledgement');
+    return originalFetch(...args as [any, any]);
+  });
+  const interaction: any = { client: f.client, guildId: 'guild', customId: 'scout:editpick:swapfirst:12:3',
+    isChatInputCommand: () => false, isRepliable: () => true, replied: false, deferred: false,
+    deferReply: async (payload: any) => { acknowledged = true; assert.equal(payload.flags, 64); if (expired) throw new Error('Expired'); interaction.deferred = true; },
+    editReply: async (payload: any) => { replies.push(payload); },
+    reply: async () => { throw new Error('Expired'); },
+  };
+  try {
+    await handleInteractionError(interaction, f.db, new Error('first failure'), 'guild');
+    assert.equal(f.sent.length, 1);
+    assert.ok(replies[0].content.includes('Staff were notified'));
+    assert.match(f.sent[0].content, /Setup #12/);
+    expired = true; acknowledged = false; interaction.deferred = false;
+    interaction.customId = 'scout:editpick:swapfirst:13:3';
+    await handleInteractionError(interaction, f.db, new Error('second failure'), 'guild');
+    assert.equal(f.sent.length, 2);
+    assert.match(f.sent[1].content, /Setup #13/);
+  } finally { f.db.close(); }
+});
 
 function fixture() {
   const db = openDatabase(':memory:');

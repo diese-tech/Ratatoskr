@@ -571,6 +571,26 @@ async function ensureChannel(
   result.created.push(`channel:${name}`);
 }
 
+// Different divisions share this server-owned role. Join the in-flight repair
+// before observing identity; a per-division guard cannot prevent duplicate creates.
+const franchiseRoleRepairs = new WeakMap<Database.Database, Map<string, Promise<Role>>>();
+
+async function ensureFranchiseRole(db: Database.Database, guild: Guild, result: DivisionProvisionResult): Promise<Role> {
+  let repairs = franchiseRoleRepairs.get(db);
+  if (!repairs) { repairs = new Map(); franchiseRoleRepairs.set(db, repairs); }
+  const existing = repairs.get(guild.id);
+  if (existing) {
+    const role = await existing;
+    result.reused.push(`role:${FRANCHISE_REPRESENTATIVE_ROLE}`);
+    return role;
+  }
+  const repair = ensureRole(db, guild, FRANCHISE_REPRESENTATIVE_KEY, FRANCHISE_REPRESENTATIVE_ROLE,
+    { scaffoldDomain: 'server' }, result);
+  repairs.set(guild.id, repair);
+  try { return await repair; }
+  finally { repairs.delete(guild.id); }
+}
+
 export async function provisionDivision(db: Database.Database, guild: Guild, divisionKey: DivisionKey): Promise<DivisionProvisionResult> {
   await guild.roles.fetch();
   await guild.channels.fetch();
@@ -604,8 +624,7 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
   };
   const template = getDivisionTemplate(division);
 
-  await ensureRole(db, guild, FRANCHISE_REPRESENTATIVE_KEY, FRANCHISE_REPRESENTATIVE_ROLE,
-    { scaffoldDomain: 'server' }, result);
+  await ensureFranchiseRole(db, guild, result);
   const divisionRole = await ensureRole(
     db,
     guild,
