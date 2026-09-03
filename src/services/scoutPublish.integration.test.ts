@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Collection, MessageFlags, type ButtonInteraction, type Client, type UserSelectMenuInteraction } from 'discord.js';
 import { openDatabase, upsertDivision, createScoutSetup, setScoutSetupSignupMessage,
   listScoutRosterSlots, getScoutSetupById, tryCreateInitialScoutRoster, addScoutSignup,
-  claimScoutPublish, setScoutResultMessage } from '../db/index.js';
+  claimScoutPublish, setScoutResultMessage, getScoutRosterUpdate,
+  replacePublishedScoutRosterSlotIfVersion, listDivisionScoutLifecycleBlockers } from '../db/index.js';
 import { SCOUT_ROLES, SCOUT_TEAMS } from '../domain/index.js';
-import { handleScoutPublishButton, handleScoutPublishedUserSelect } from './scoutPublish.js';
+import { handleScoutPublishButton, handleScoutPublishedUserSelect, reconcilePendingScoutRosterUpdates } from './scoutPublish.js';
 
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
@@ -71,5 +75,76 @@ test('ambiguous published edit retains canonical replacement for recovery', asyn
     await handleScoutPublishedUserSelect(f.interaction(`scout:publisheduser:${f.setup.id}:0:${slot.id}`, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
     assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((s) => s.id === slot.id)?.userId, 'replacement');
     assert.match(f.replies.at(-1).content, /saved.*pending|pending.*saved/i);
+  } finally { f.db.close(); }
+});
+
+test('database restart after commit recovers the original roster and sends its notice once', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ratatoskr-published-'));
+  const path = join(dir, 'state.db');
+  const f = publishedFixture(path);
+  const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
+  assert.equal(replacePublishedScoutRosterSlotIfVersion(f.db, f.setup.id, 0, slot.id, 'after-crash'), 'updated');
+  f.db.close(); // crash before the first Discord edit
+  const recovered = openDatabase(path);
+  try {
+    assert.equal(getScoutRosterUpdate(recovered, f.setup.id)?.version, 1);
+    await reconcilePendingScoutRosterUpdates(f.client, recovered);
+    assert.match(f.roster.content, /after-crash/);
+    assert.match(f.roster.content, /SCOUT-RESULT-1/);
+    assert.equal(getScoutRosterUpdate(recovered, f.setup.id), undefined);
+    assert.equal(f.messages.size, 2);
+    await reconcilePendingScoutRosterUpdates(f.client, recovered);
+    assert.equal(f.messages.size, 2);
+  } finally { recovered.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('lost edit and notice responses converge without undoing state or duplicating notices', async () => {
+  const f = publishedFixture();
+  try {
+    const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
+    f.failEdit(true);
+    await handleScoutPublishedUserSelect(f.interaction(`scout:publisheduser:${f.setup.id}:0:${slot.id}`, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
+    assert.equal(getScoutRosterUpdate(f.db, f.setup.id)?.message_reconciled, 0);
+    f.failEdit(false);
+    f.failNotice(true);
+    await reconcilePendingScoutRosterUpdates(f.client, f.db);
+    assert.equal(getScoutRosterUpdate(f.db, f.setup.id)?.notice_attempted, 1);
+    assert.equal(f.messages.size, 2, 'Discord accepted the notice before the response was lost');
+    await reconcilePendingScoutRosterUpdates(f.client, f.db);
+    assert.equal(getScoutRosterUpdate(f.db, f.setup.id), undefined);
+    assert.equal(f.messages.size, 2);
+    assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((s) => s.id === slot.id)?.userId, 'replacement');
+  } finally { f.db.close(); }
+});
+
+test('uncertain notice absence retains pending state and blocks teardown instead of resending', async () => {
+  const f = publishedFixture();
+  try {
+    const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
+    replacePublishedScoutRosterSlotIfVersion(f.db, f.setup.id, 0, slot.id, 'replacement');
+    f.db.prepare('UPDATE scout_roster_updates SET notice_attempted = 1').run();
+    await reconcilePendingScoutRosterUpdates(f.client, f.db);
+    await reconcilePendingScoutRosterUpdates(f.client, f.db);
+    assert.equal(f.messages.size, 1);
+    assert.ok(getScoutRosterUpdate(f.db, f.setup.id));
+    assert.equal(listDivisionScoutLifecycleBlockers(f.db, 'guild', f.division.id).length, 1);
+  } finally { f.db.close(); }
+});
+
+test('missing messages, wrong channel, unauthorized members and stale selections do not mutate rosters', async () => {
+  const f = publishedFixture();
+  try {
+    const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
+    const call = (changes: Record<string, unknown>, version = 0) => handleScoutPublishedUserSelect({
+      ...f.interaction(`scout:publisheduser:${f.setup.id}:${version}:${slot.id}`, ['replacement']), ...changes,
+    } as unknown as UserSelectMenuInteraction, f.db);
+    await call({ channelId: 'other-division' });
+    await call({ user: { id: 'outsider' } });
+    await call({}, 9);
+    f.messages.delete('roster');
+    await call({});
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.version, 0);
+    assert.equal(getScoutRosterUpdate(f.db, f.setup.id), undefined);
+    assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((s) => s.id === slot.id)?.userId, slot.userId);
   } finally { f.db.close(); }
 });

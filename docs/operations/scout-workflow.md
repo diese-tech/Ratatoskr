@@ -35,8 +35,8 @@ Multiple setups may be open in the same or different divisions. Every signup, ro
 
 ## Failure and recovery
 
-- If publication cannot write both the result and original signup post, no result is claimed. Fix the reported channel, message, or permission problem and retry from Review roster.
-- If a published replacement or swap cannot edit the result, Ratatoskr rolls the database change back when safe and tells the manager to retry. If it reports an unsafe rollback, stop editing that setup and reconcile the stored roster with the result message.
+- Interrupted publication retains its claim when the send or cleanup is uncertain. Startup searches for the exact persisted marker before recovering the original message; retry only when the bot reports the claim is safely released.
+- Published swaps/replacements atomically save the roster and a pending Discord update. An edit failure keeps that saved state for startup or button-triggered recovery. Further changes and division teardown remain blocked until recovery completes; do not repeat the player change.
 - Cancellation remains effective if Discord refuses the post edit. Reactions are inert, and Ratatoskr retries the public-post repair on startup; the immediate failure response also provides a manual retry button.
 - Ratatoskr reconciles incomplete signup creation, offline reaction changes, interrupted publication, cancellations, and Scout Ops control panels from SQLite on startup. A private creation preview does not survive a restart; run `/scout create` again.
 - A deleted result message prevents replacement or swap and leaves the database unchanged. A deleted signup post prevents publication and returns the setup to retryable roster-ready state.
@@ -58,3 +58,9 @@ before retrying teardown. Already settled published history remains preserved.
 ## Routing upgrade
 
 Existing published rosters and already-claimed publications retain their original message/channel IDs. Their controls and updates stay there; no historical messages move or duplicate. Unpublished setups switch to signup-channel routing atomically when publication is claimed. The legacy results_channel_id field identifies the bot roster destination, not the manual screenshot channel. No schema migration or bulk snapshot rewrite is needed. Run division provisioning to reconcile player screenshot permissions; verify legacy controls and new publication after deployment.
+
+## Pending published-update recovery
+
+Migration 15 adds scout_roster_updates without rewriting historical setups. Rehearse on a consistent database backup. Keep one bot process. A pending edit retries against the stored roster message ID; its successful notice carries an exact setup/version marker. A lost notice response is resolved by a paginated marker search. If absence remains uncertain, Ratatoskr retains the pending record and does not resend blindly.
+
+Operators should inspect the stored setup/version, canonical slots and destination message, then search for the exact notice marker. Restore channel/message access and retry the roster controls or restart for ordinary failures. If notice absence cannot be established, leave it pending. Any manual completion must first verify the roster message matches the saved version and confirm delivery of exactly one notice; stop the bot and take a consistent backup before an explicitly reviewed, setup/version-specific repair. Do not clear all pending rows or revert the roster from an old snapshot. Rolling back application code with pending updates requires resolving or preserving these records first.

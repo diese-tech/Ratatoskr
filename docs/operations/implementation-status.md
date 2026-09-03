@@ -51,3 +51,13 @@ pass as real handler regressions. PR70/71/72 CI passes on both Windows and Linux
 Next: add disk-restart, lost-notice-response, unavailable-message and stale/unauthorized
 failure coverage; finish operator recovery instructions; then open the B1.4 PR.
 B1.4 is in progress. Production and live Discord verification remain untouched.
+
+## B1.4 checkpoint (codex/b1-published-recovery)
+
+Done: Exactly-once interaction acknowledgement; transactional pending roster edits/notices; restart repair, version guards and exact marker matching. Migration 15 is append-only.
+
+Validation: 144 tests and application typecheck pass; disk restart, lost edit/send responses, uncertain notice, stale/unauthorized/missing-message cases covered.
+
+Next: B1.5: safe staff-ops error reporting with matching private/process references. Verify B1.4 stacked CI and rehearse migration before deployment.
+
+Deployment/live verification: pending; no production changes.
