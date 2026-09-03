@@ -23,16 +23,32 @@ deployment ba9e274e-fe5c-49ea-bd29-c632709f1463 succeeded; database/login/regist
 finished-post recovery and control-card recovery completed without startup errors
 at 13:07:07 UTC on September 3. The persistent volume was mounted.
 
-Next: complete the user-selected live cancel/finish checks and the outstanding
-production-copy restore rehearsal; clarify whether date/time rescheduling is
-needed. These remain separate from the completed CI, merge and startup checks.
+Next: complete the full B1/B2 live Discord acceptance session tracked by
+[#45](https://github.com/diese-tech/Ratatoskr/issues/45) and
+[#62](https://github.com/diese-tech/Ratatoskr/issues/62), as planned in B3 of the
+[backlog execution plan](../plans/backlog-execution-plan.md). Use the current
+[Scout workflow](scout-workflow.md): signup-channel roster routing and historical
+controls, staff/captain authorization, eligibility and Fill, intentional same-time
+setups and division isolation, one/two-game review, shuffle and publication, swaps and
+replacements with readable mobile selectors, staff-ops reporting, readiness
+telemetry/creator notification, and restart recovery. Retain separate evidence
+for both acceptance issues. The user-selected stale-post cancel/finish checks
+supplement this full session; they do not replace it.
 
-For future merges, keep Railway auto-deploy ON and inspect the new deployment's
+The production-copy restore rehearsal and clarification of date/time
+rescheduling also remain outstanding. These live checks and decisions remain
+separate from the completed CI, merge and startup checks.
+
+For future merges, require green CI and completed automated review with all
+findings addressed on the final PR head. After any fix changes that head, wait
+for both CI and a new automated review to complete again; merge only the unchanged
+reviewed commit. Keep Railway auto-deploy ON and inspect the new deployment's
 logs. No production setups are being automatically closed and no date/time
 editing or reminder scheduler is included.
 
 The previous checkpoints below are historical snapshots. Their Next entries
 record what was pending at that time; use the current checkpoint above to resume.
+Their historical label does not retire outstanding issue acceptance checklists.
 
 ## Previous checkpoint — B1/B2 merged and deployment startup verified
 

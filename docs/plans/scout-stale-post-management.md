@@ -34,10 +34,20 @@ B2 follow-up before B3 acceptance, not authorization for the remaining backlog.
 
 ## Current next steps
 
-Complete the user-selected live cancel/finish acceptance described below and the
-outstanding production-copy restore rehearsal. Clarify whether date/time
-rescheduling is needed. CI, merge and deployment/startup checks for the recorded
-implementation are complete; they are not pending prerequisites for this work.
+Complete the full B1/B2 live Discord acceptance session under
+[#45](https://github.com/diese-tech/Ratatoskr/issues/45) and
+[#62](https://github.com/diese-tech/Ratatoskr/issues/62), following B3 in the
+[backlog execution plan](backlog-execution-plan.md) and the current
+[implementation checkpoint](../operations/implementation-status.md). This covers
+routing and permissions, eligibility and Fill, overlapping setups and isolation,
+multi-game roster management/publication, telemetry, operational reporting and
+restart recovery. Add the user-selected stale-post cancel/finish checks below
+to that full session; they do not replace the broader acceptance gate.
+
+The production-copy restore rehearsal and clarification of date/time
+rescheduling also remain outstanding. CI, merge and deployment/startup checks
+for the recorded implementation are complete; they do not establish live
+Discord acceptance or close either acceptance issue.
 
 ## Historical implementation checkpoints
 
