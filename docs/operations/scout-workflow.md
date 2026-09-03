@@ -20,7 +20,7 @@ Each division has two channels: scout-signups contains signup posts followed by 
 2. Enter the start time, number of roles each player may select, and an optional note. Optionally select one Discord eligibility role; all reactions remain recorded, but only current members of that role may be rostered.
 3. Review the private preview and post it. The division role is pinged only when the public post is created.
 4. Players react for roles. Ratatoskr enforces the per-player limit separately for each setup.
-5. When ten compatible players can fill Solo, Jungle, Mid, Support, and Carry on both teams, Ratatoskr posts a persistent control panel in `#scout-ops` and pings the setup creator once. The public signup post remains information and reactions only. A Fill signup counts against the player's selection limit and may satisfy any missing standard role; explicit role selections are preferred.
+5. Once the signup post succeeds, a status-only card appears in `#scout-ops` with unique eligible players, uncapped role counts and Fill coverage. When ten compatible players can fill the two teams, Ratatoskr removes that temporary card and posts the fresh persistent control panel, pinging the creator once. Live counts remain visible in that panel throughout review. The public signup post stays information and reactions only. Fill counts against the role limit and can cover a standard role; explicit choices are preferred.
 6. From that control panel, authorized staff or that division's captains open a private review, shuffle, swap, change roles, replace slots, and publish. If twenty compatible eligible players are currently available, Review roster also offers **Build 2 games**. Its confirmation explains that both games are recalculated, including prior one-game manual edits. Signups remain open while the roster is reviewed.
 7. A two-game roster is still one setup. Shuffle balances all twenty unique players, **Swap any two players** can exchange assignments across games, teams, or roles, and replacement excludes everyone already seated in either game. A withdrawn signup blocks publication until resolved; staff-selected substitutes remain explicit overrides.
 8. Publish after the confirmation names the correct division signup channel. Ratatoskr posts a separate combined roster containing Game 1 and Game 2 (or the original single game) in `<division>-scout-signups`. The original signup post closes to signups and links the roster. Its Swap/Replace controls and change notices stay with that roster. Players post match-result screenshots manually in `<division>-scout-results`; the bot does not process scores.
@@ -74,3 +74,38 @@ Internal selection values remain stable slot IDs, including across both games.
 Long names are shortened; duplicate display names receive a username or unique
 abbreviated account ID so staff can distinguish candidates without changing slot identity.
 The bot acknowledges the private interaction before fetching missing names.
+
+## Persistent readiness cards (B2)
+
+Readiness describes the eligible signup pool. Role numerators are never capped:
+Solo 4/2 means four eligible Solo choices, not four distinct spare players.
+The unique-player total counts each person once. Fill has its own count and can
+cover standard roles; matching, including flex overlap, determines feasibility.
+Two-game drafts show 20 players and four per standard role. Once a draft exists,
+eligible unseated participants are shown separately and unavailable drafted
+players produce a warning. Explicit staff substitutes can make a draft differ
+from the signup pool; existing publish validation remains authoritative.
+
+Reactions, member eligibility changes, departures and draft edits refresh the
+card. Staff-card edits do not hold the live signup persistence lock. Unchanged
+views are not edited repeatedly. Unknown role/member access marks the last
+snapshot historical and reports an actionable error; the bot never silently
+turns a restricted setup into an unrestricted one.
+
+Published/cancelled cards retain their last recorded snapshot and timestamp.
+Those historical signups are not confirmation that unseated players remain
+available as substitutes. Published cards link the original roster destination.
+
+Migration 16 adds `scout_readiness_cards`. Rehearse on a consistent backup and
+verify existing pending roster updates from migration 15 remain unchanged. On
+restart the bot recovers cards by exact markers and stored IDs. A denied deletion
+keeps temporary-card ownership and delays the fresh ready notification. An
+uncertain send stays pending until its message can be recovered; do not clear
+attempt flags and resend without verifying the original delivery. Restore access
+and retry via a normal refresh or restart. Review pending cards before rolling
+back to older code, which does not manage their lifecycle.
+
+Live acceptance remains required: check initial zero counts, overflow/Fill,
+eligibility loss/gain/departure, one fresh creator ping, counts through two-game
+review, terminal snapshots, concurrent setups and restart. Reminder pings are
+a separate planned feature and are not enabled by B2.

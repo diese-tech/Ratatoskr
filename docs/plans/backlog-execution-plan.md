@@ -1,6 +1,6 @@
 # Ratatoskr backlog execution plan
 
-Version: 1.4 — B1 code complete; deployment and live verification pending
+Version: 1.5 — B1 and adapted B2 code complete; deployment/live verification pending
 Recorded: September 2, 2026
 Repository: [diese-tech/Ratatoskr](https://github.com/diese-tech/Ratatoskr)
 Baseline commit: [`866407f3bdca0e26a2ae3b21221d45a96cdc3056`](https://github.com/diese-tech/Ratatoskr/commit/866407f3bdca0e26a2ae3b21221d45a96cdc3056)
@@ -11,7 +11,7 @@ This is the durable record of the original dependency-aware backlog assessment a
 
 The audit and versions 1.1–1.2 were documentation only. The user approved B1 implementation, including #69, and requested commits with completed work, validation and next steps after every meaningful chunk. All seven slices now have stacked PRs (#70–#76); implementation and review fixes are committed in an isolated worktree. Production has not been changed. The original audit snapshot remains historical. At this checkpoint, GitHub main still points to baseline 866407f; none of the B1 PRs has merged. Local cumulative validation passes 168 tests, both typechecks, build and dependency audit. See section 12 and the operational checkpoint for exact evidence and remaining gates.
 
-B1 is the currently authorized implementation batch. B2–B7 remain later planned batches. This document is not a blanket instruction to implement every roadmap item, merge changes, or mutate production. Follow the user's current execution authorization at each stage.
+B1 implementation remains complete. The user subsequently requested review and adoption of Lucid's persistent staff-card pattern using the preferred Ratatoskr lifecycle. That authorizes the bounded B2 telemetry adaptation now in [PR #77](https://github.com/diese-tech/Ratatoskr/pull/77), based on B1's final PR #76. B1 and B2 remain separate merge/release batches; neither has been deployed. B3–B7 remain later planned batches. This document is not a blanket instruction to implement the remaining roadmap, merge changes, or mutate production.
 
 ## 2. Agreed changes since the original assessment
 
@@ -25,7 +25,9 @@ B1 is the currently authorized implementation batch. B2–B7 remain later planne
 | `/scout cancel` | Required division selection before discovering whether it has cancellable setups | Immediately list active, cancellable postings the coordinator can manage across divisions; select a posting, then confirm |
 | Operational alerts | Generic response says “Check staff logs”; exceptions go to process logs | Use the existing staff-only `#staff-ops`, with matching error references in private replies and Railway logs |
 | New logging channel | `#bot-logs` was considered | Do not add one in B1; use `#staff-ops` |
-| Scout control channel | Shared `#scout-ops` | Remains the Scout management/control channel; readiness telemetry arrives in B2 |
+| Scout control channel | Shared `#scout-ops` | B2 adds immediate status cards and retains live telemetry in the fresh ready panel through review; closure leaves a historical snapshot |
+| Lucid adoption | Lucid has an existing persistent staff card; detailed telemetry remains its open issue #30 | Adopt persistent visibility and diagnostics while retaining Ratatoskr's fresh creator notification and setup/division routing |
+| Reminder pings | Previously manual; one-hour follow-up helped coordinators sort availability | Separate follow-up PR after B2: proposed one-hour/15-minute roster reminders; no scheduler in B1/B2 |
 
 The screenshots show the current channel layout and an error after attempting a published swap. They do not prove who renamed a channel or identify the exact production exception. The current code itself intentionally provisions two division Scout channels and routes lineups to its results destination. Verify live identities and message history before deciding which resource to adopt or rename.
 
@@ -88,7 +90,7 @@ The open backlog contains six bounded feature issues, two live acceptance gates,
 | [#45 — Complete live Discord scout acceptance and deployment](https://github.com/diese-tech/Ratatoskr/issues/45) | Deployment evidence exists; full live acceptance unproven | Real permissions, routing, migration/volume, interaction and restart behavior | #36 acceptance | High | Rewrite current-flow checklist, include B1 routing/log/cancellation changes, execute in B3 with #62 |
 | [#62 — Live-verify eligibility, Fill, overlap, and two-game scout flows](https://github.com/diese-tech/Ratatoskr/issues/62) | #56–#61 closed and PR #64 merged; live evidence remains outstanding | Eligibility, Fill, overlap, two-game management and recovery; depends on release repairs | Expanded Scout acceptance | High | Keep separate checklist; share B3 session/evidence with #45 |
 | [#67 — Refresh the permanent YSL server bootstrap scaffold](https://github.com/diese-tech/Ratatoskr/issues/67) | Existing reconciler is reusable; requested rename/move/order behavior incomplete; full live reference missing | Managed identities, permissions, bootstrap reconciliation; complete approved inventory needed | Repeatable permanent setup and #22 | High | Minimal required-role repair in B1.2; division channel correction in B1.3; full permanent refresh remains B6a |
-| [#68 — Priority: Add live scout signup readiness telemetry](https://github.com/diese-tech/Ratatoskr/issues/68) | Telemetry absent; eligibility, roster matching and control-panel foundations exist | Canonical eligibility events, setup serialization, durable message lifecycle | Staff visibility into readiness | Medium–high | B2, separate PR after B1; no telemetry implementation in B1 |
+| [#68 — Priority: Add live scout signup readiness telemetry](https://github.com/diese-tech/Ratatoskr/issues/68) | B2 code implemented in PR #77; refined to retain telemetry through review and a historical snapshot after closure | Canonical eligibility events, setup serialization, durable message lifecycle | Staff visibility into readiness | Medium–high | Separate B2 PR/release after B1; live acceptance pending |
 | [#69 — Fix replacement slot labels and verify multi-game replacement flow](https://github.com/diese-tech/Ratatoskr/issues/69) | Ready; raw IDs displayed, stable slot values already exist | Name lookup, interaction timing, single/two-game selection; reliable write path for full verification | Readable selectors and stronger #62 coverage | Medium | B1.7, separate focused PR; preserve stable values and verify exact multi-game slot selection |
 
 Research and engineering requirements map to each issue in section 10. Shared infrastructure is limited to observed repeated needs: complete test discovery, managed-resource identity resolution, recoverable published writes, a small error reporter, and the later asynchronous storage boundary.
@@ -328,7 +330,11 @@ B1 is complete only when its acceptance checklists, relevant automated gates, co
 ### B2 — #68 readiness telemetry
 
 - #69 moved into B1.7 by explicit user approval. Its name/slot verification precedes this batch.
-- #68: count unique eligible players separately from uncapped per-role counts. Reuse canonical eligibility and matching, including Fill. React to relevant membership/eligibility changes, not only reaction additions. Persist telemetry identity and cleanup progress; delete telemetry before posting a fresh roster-ready control panel with the intended creator notification. Cover cancellation/restart/stale telemetry and duplicate-send recovery.
+- #68: count unique eligible players separately from uncapped per-role counts. Reuse canonical eligibility and matching, including Fill. React to membership/eligibility changes and departures as well as reaction additions/removals. A one-game draft targets 10 players and 2 per standard role; two games target 20 and 4. Fill is separate compatibility, not a sixth required slot.
+- Approved Lucid refinement: show the status-only card immediately after signup posting; delete it with confirmed cleanup before sending the fresh roster-ready panel and creator notification. Carry telemetry into that panel and update it through review, including draft changes and eligible unseated counts. Publication/cancellation retains the last recorded snapshot with explicit historical labelling.
+- Keep public signup posts reaction-only and preserve existing division/setup snapshots and private controls. Lucid's detailed telemetry is still planned, and its proposed rejection of ineligible signups and premade format are not adopted. Ratatoskr retains signup records and applies current eligibility.
+- Persist message identity, attempted sends, creator notification attempts and snapshots in migration 16. Keep card writes serialized independently of live signup persistence; retain ambiguous delivery/denied deletion and recover by exact marker. See `b2-scout-telemetry.md` for code review, implementation checkpoints and acceptance evidence.
+- Reminders remain a separate proposed feature after B2. The one-hour reminder is an availability follow-up; the proposed 15-minute reminder targets the current published roster. Finalize late-publication, replacement and reminder-control rules before implementation. Neither this plan nor the telemetry PR creates a scheduler.
 
 ### B3 — #45/#62/#36
 
@@ -425,8 +431,9 @@ The publication-routing change is an updated product contract, not proof of an u
 | B1.4 | Code complete; CI green; not merged | [PR #73](https://github.com/diese-tech/Ratatoskr/pull/73), 28bb74f | Durable edit/notice recovery, restart, lost responses, version/access checks; final v14 disk-upgrade check | Production backup rehearsal; migration and restart smoke |
 | B1.5 | Code complete; review finding fixed; CI green | [PR #74](https://github.com/diese-tech/Ratatoskr/pull/74), d732feb | Private staff validation/redaction, precise setup/action, early acknowledgement, expired-token reporting | Private staff-ops delivery and Railway reference lookup |
 | B1.6 | Code complete; CI green; not merged | [PR #75](https://github.com/diese-tech/Ratatoskr/pull/75), 26a18dc | Authorized zero/one/many picker, paging, stale selection, legacy controls, cancellation repair | Active-posting selection and cancellation smoke |
-| B1.7 / #69 | Code complete; review finding fixed; not merged | [PR #76](https://github.com/diese-tech/Ratatoskr/pull/76), ed9ebf2 plus final checkpoint | Exact one/two-game mutations/notices; bounded readable names and visible account disambiguation; 168 cumulative tests; require final-head CI | Live/mobile selection and exact multi-game mutation |
-| B2 | Planned | — | — | Feature-specific acceptance |
+| B1.7 / #69 | Code complete; review finding fixed; CI green; not merged | [PR #76](https://github.com/diese-tech/Ratatoskr/pull/76), b0b6b3c | Exact one/two-game mutations/notices; bounded readable names; 168 cumulative tests and both CI platforms | Live/mobile selection and exact multi-game mutation |
+| B2 / #68 | Code complete; separate PR; final review/CI gate applies | [PR #77](https://github.com/diese-tech/Ratatoskr/pull/77), ca182d6 plus final checkpoint | 182 tests, both typechecks, build/audit; real lifecycle and ambiguous-delivery tests; v14/v15 disk upgrades | Migration 16 rehearsal on a production copy, live card layout, membership refresh, creator ping and restart smoke |
+| Reminder follow-up | Proposed separately; not implemented | — | One-hour purpose agreed; one-hour/15-minute structure discussed | Final contract and separate implementation/acceptance |
 | B3 | Planned | — | — | Full #45/#62 session |
 | B4 | Planned | — | — | Season command smoke |
 | B5 | Planned | — | — | Migration rehearsal/cutover/recovery |
@@ -455,5 +462,6 @@ Commit after each meaningful coherent chunk of work. Each commit body records **
 | 1.2 | Supersede B1.3's third-channel proposal: retain signups/results, publish rosters in signups, reserve results for player screenshots; append B1.6 direct cancellation picker; preserve original repairs, staff-ops choice and B2–B7 order | User's admin-team decision and explicit channel-purpose clarification; inspected existing cancellation picker/state checks; planning/documentation only, no implementation or production action |
 | 1.3 | Move #69 to B1.7; B2 now contains #68 only; begin approved B1 implementation; require frequent commits and durable Done/Validation/Next records for every batch | Explicit user approval to implement and interruption-resilient commit instructions |
 | 1.4 | Record seven implemented PR slices, review fixes, cumulative validation and remaining operational gates; correct B2's exit gate after moving names to B1 | Current code, real handler regressions, synthetic v14 migration rehearsal and live GitHub PR/CI state; no expansion of scope or production authorization |
+| 1.5 | Review Lucid's actual persistent card and its pending telemetry plan; implement approved B2 adaptation in a separate PR while retaining Ratatoskr's fresh ready notification; document separate reminder follow-up | User requested Lucid code/plan review and adoption after preferring persistent counts through review; PR #77 and 182-test local evidence; no merge or production authorization |
 
 For later revisions, record what changed, the evidence or user decision, affected acceptance criteria, dependency/order effects, and authorization status. No change to this plan silently authorizes production actions or expands later product scope.

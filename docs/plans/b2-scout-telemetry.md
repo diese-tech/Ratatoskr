@@ -101,3 +101,23 @@ re-read canonical state. A delayed edit can no longer delay another signup write
 Validation: the real delayed-edit regression failed before repair (one signup
 persisted instead of two); all ten lifecycle integration tests and typecheck pass.
 Next: final cumulative gates, documentation and PR/CI. No production changes.
+
+## Final implementation checkpoint
+
+PR: https://github.com/diese-tech/Ratatoskr/pull/77
+Branch: codex/b2-scout-telemetry; base: codex/b1-player-names (PR #76).
+
+Done: Lucid source review and the adapted persistent telemetry lifecycle are
+implemented. The master plan is v1.5; the operating guide explains counts,
+membership changes, historical snapshots and recovery. B1 and B2 retain separate
+release boundaries, and reminder scheduling remains a separate proposed feature.
+
+Validation: 182 tests, both typechecks, build and dependency audit pass. Functional
+commit ca182d6 passed Ubuntu and Windows CI in run 33713297824. Require green
+checks on the final documentation checkpoint as well before integration.
+
+Next: inspect final PR checks/review; release B1 first and then B2 under the
+documented production-change gate. Rehearse migration 16 against a consistent
+production copy, verify one writer/runtime/volume, and run the focused live card,
+eligibility, creator notification and restart checks. No merge, deployment or
+live acceptance is claimed. #68 remains open for its acceptance evidence.
