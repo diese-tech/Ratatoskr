@@ -3,18 +3,19 @@ import test from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Collection, MessageFlags, type ButtonInteraction, type Client, type UserSelectMenuInteraction } from 'discord.js';
+import { Collection, MessageFlags, type ButtonInteraction, type Client, type UserSelectMenuInteraction, type StringSelectMenuInteraction } from 'discord.js';
 import { openDatabase, upsertDivision, createScoutSetup, setScoutSetupSignupMessage,
   listScoutRosterSlots, getScoutSetupById, tryCreateInitialScoutRoster, addScoutSignup,
   claimScoutPublish, setScoutResultMessage, getScoutRosterUpdate,
-  replacePublishedScoutRosterSlotIfVersion, listDivisionScoutLifecycleBlockers } from '../db/index.js';
+  replacePublishedScoutRosterSlotIfVersion, listDivisionScoutLifecycleBlockers, expandScoutRosterToTwoGamesIfVersion } from '../db/index.js';
 import { SCOUT_ROLES, SCOUT_TEAMS } from '../domain/index.js';
-import { handleScoutPublishButton, handleScoutPublishedUserSelect, reconcilePendingScoutRosterUpdates } from './scoutPublish.js';
+import { handleScoutPublishButton, handleScoutPublishedSlotSelect, handleScoutPublishedUserSelect, reconcilePendingScoutRosterUpdates } from './scoutPublish.js';
+import { handleScoutReviewButton, handleScoutReviewStringSelect, handleScoutReviewUserSelect } from './scoutReview.js';
 
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
 
-export function publishedFixture(path = ':memory:') {
+export function publishedFixture(path = ':memory:', gameCount = 1) {
   const db = openDatabase(path);
   const division = upsertDivision(db, { guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim',
     roleId: 'division', managerRoleId: 'manager', captainRoleId: 'captain', categoryId: 'category' });
@@ -23,10 +24,12 @@ export function publishedFixture(path = ':memory:') {
     operationsChannelId: 'ops', divisionRoleId: 'division', startAt: 2_000_000_000, roleLimit: 2,
     emojiByRole: { solo: 'solo', jungle: 'jungle', mid: 'mid', support: 'support', carry: 'carry' } });
   setScoutSetupSignupMessage(db, setup.id, 'signup');
-  const slots = SCOUT_ROLES.flatMap((role) => SCOUT_TEAMS.map((team, i) => ({ team, role, userId: `${role}-${i}` })));
+  const slots = Array.from({ length: gameCount }, (_, game) => game + 1).flatMap((gameNumber) =>
+    SCOUT_ROLES.flatMap((role) => SCOUT_TEAMS.map((team, i) => ({ gameNumber, team, role, userId: `g${gameNumber}-${role}-${i}` }))));
   for (const slot of slots) addScoutSignup(db, setup.id, slot.userId, slot.role);
-  tryCreateInitialScoutRoster(db, setup.id, slots);
-  claimScoutPublish(db, setup.id, 0);
+  tryCreateInitialScoutRoster(db, setup.id, slots.filter((slot) => slot.gameNumber === 1));
+  if (gameCount === 2) expandScoutRosterToTwoGamesIfVersion(db, setup.id, 0, slots);
+  claimScoutPublish(db, setup.id, gameCount - 1);
   setScoutResultMessage(db, setup.id, 'roster');
   const replies: any[] = [];
   const messages = new Collection<string, any>();
@@ -41,7 +44,7 @@ export function publishedFixture(path = ':memory:') {
       messages.set(message.id, message); if (noticeFailure) throw new Error('send response lost'); return message; } };
   const client = { user: { id: 'bot' }, channels: { fetch: async (id: string) => { assert.equal(id, 'signups'); return channel; } } } as unknown as Client;
   const guild: any = { id: 'guild', roles: { cache: new Collection() }, members: { fetch: async (id: string) => ({
-    id, guild, user: { id, bot: false }, roles: { cache: new Collection(id === 'staff' ? [['manager', {}]] : []) },
+    id, guild, displayName: `Player ${id}`, user: { id, bot: false }, roles: { cache: new Collection(id === 'staff' ? [['manager', {}]] : []) },
   }) } };
   function interaction(customId: string, values: string[] = []) {
     let acknowledged = false;
@@ -148,3 +151,60 @@ test('missing messages, wrong channel, unauthorized members and stale selections
     assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((s) => s.id === slot.id)?.userId, slot.userId);
   } finally { f.db.close(); }
 });
+
+for (const gameCount of [1, 2]) {
+  test(`${gameCount}-game published selectors use names and replace/swap only exact selected slots`, async () => {
+    const f = publishedFixture(':memory:', gameCount);
+    try {
+      const version = gameCount - 1;
+      const before = listScoutRosterSlots(f.db, f.setup.id);
+      const selected = before.find((s) => s.gameNumber === gameCount && s.team === 'team_two' && s.role === 'carry')!;
+      await handleScoutPublishButton(f.interaction(`scout:publishedreplace:${f.setup.id}:${version}`) as unknown as ButtonInteraction, f.db);
+      const menu = f.replies.at(-1).components[0].toJSON().components[0];
+      assert.equal(menu.options.length, gameCount * 10);
+      assert.equal(new Set(menu.options.map((o: any) => o.value)).size, gameCount * 10);
+      const option = menu.options.find((o: any) => o.value === String(selected.id));
+      assert.match(option.label, new RegExp(`^G${gameCount} • Chaos • Carry — Player`));
+      await handleScoutPublishedSlotSelect(f.interaction(menu.custom_id, [option.value]) as unknown as StringSelectMenuInteraction, f.db);
+      const userMenu = f.replies.at(-1).components[0].toJSON().components[0];
+      await handleScoutPublishedUserSelect(f.interaction(userMenu.custom_id, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
+      const after = listScoutRosterSlots(f.db, f.setup.id);
+      assert.equal(after.find((s) => s.id === selected.id)?.userId, 'replacement');
+      assert.deepEqual(after.filter((s) => s.id !== selected.id).map((s) => [s.id, s.userId]), before.filter((s) => s.id !== selected.id).map((s) => [s.id, s.userId]));
+      assert.match(f.roster.content, /replacement/);
+      assert.ok([...f.messages.values()].some((m) => m.content.includes(`Game ${gameCount} Chaos Carry`) && m.content.includes(selected.userId) && m.content.includes('replacement')));
+      const first = after.find((s) => s.id !== selected.id)!;
+      await handleScoutPublishButton(f.interaction(`scout:publishedswap:${f.setup.id}:${version + 1}`) as unknown as ButtonInteraction, f.db);
+      const firstMenu = f.replies.at(-1).components[0].toJSON().components[0];
+      await handleScoutPublishedSlotSelect(f.interaction(firstMenu.custom_id, [String(first.id)]) as unknown as StringSelectMenuInteraction, f.db);
+      const secondMenu = f.replies.at(-1).components[0].toJSON().components[0];
+      assert.equal(secondMenu.options.length, gameCount * 10 - 1);
+      await handleScoutPublishedSlotSelect(f.interaction(secondMenu.custom_id, [String(selected.id)]) as unknown as StringSelectMenuInteraction, f.db);
+      const swapped = listScoutRosterSlots(f.db, f.setup.id);
+      assert.equal(swapped.find((s) => s.id === first.id)?.userId, 'replacement');
+      assert.equal(swapped.find((s) => s.id === selected.id)?.userId, first.userId);
+      assert.equal(getScoutRosterUpdate(f.db, f.setup.id), undefined);
+    } finally { f.db.close(); }
+  });
+
+  test(`${gameCount}-game draft menus retain named slot identity through replacement`, async () => {
+    const f = publishedFixture(':memory:', gameCount);
+    try {
+      f.db.prepare("UPDATE scout_setups SET status = 'roster_ready', result_message_id = NULL WHERE id = ?").run(f.setup.id);
+      const version = gameCount - 1;
+      const before = listScoutRosterSlots(f.db, f.setup.id);
+      const selected = before.find((s) => s.gameNumber === gameCount && s.team === 'team_two' && s.role === 'carry')!;
+      const draft = (customId: string, values: string[] = []) => ({ ...f.interaction(customId, values), channelId: 'ops', users: new Collection() });
+      await handleScoutReviewButton(draft(`scout:edit:replace:${f.setup.id}:${version}`) as unknown as ButtonInteraction, f.db);
+      const menu = f.replies.at(-1).components[0].toJSON().components[0];
+      assert.equal(menu.options.length, gameCount * 10);
+      assert.ok(menu.options.every((o: any) => o.label.includes('Player')));
+      await handleScoutReviewStringSelect(draft(menu.custom_id, [String(selected.id)]) as unknown as StringSelectMenuInteraction, f.db);
+      const userMenu = f.replies.at(-1).components.at(-1).toJSON().components[0];
+      await handleScoutReviewUserSelect(draft(userMenu.custom_id, ['draft-substitute']) as unknown as UserSelectMenuInteraction, f.db);
+      const after = listScoutRosterSlots(f.db, f.setup.id);
+      assert.equal(after.find((s) => s.id === selected.id)?.userId, 'draft-substitute');
+      assert.deepEqual(after.filter((s) => s.id !== selected.id).map((s) => [s.id, s.userId]), before.filter((s) => s.id !== selected.id).map((s) => [s.id, s.userId]));
+    } finally { f.db.close(); }
+  });
+}

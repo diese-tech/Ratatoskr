@@ -64,3 +64,12 @@ Existing published rosters and already-claimed publications retain their origina
 Migration 15 adds scout_roster_updates without rewriting historical setups. Rehearse on a consistent database backup. Keep one bot process. A pending edit retries against the stored roster message ID; its successful notice carries an exact setup/version marker. A lost notice response is resolved by a paginated marker search. If absence remains uncertain, Ratatoskr retains the pending record and does not resend blindly.
 
 Operators should inspect the stored setup/version, canonical slots and destination message, then search for the exact notice marker. Restore channel/message access and retry the roster controls or restart for ordinary failures. If notice absence cannot be established, leave it pending. Any manual completion must first verify the roster message matches the saved version and confirm delivery of exactly one notice; stop the bot and take a consistent backup before an explicitly reviewed, setup/version-specific repair. Do not clear all pending rows or revert the roster from an old snapshot. Rolling back application code with pending updates requires resolving or preserving these records first.
+
+## Player selection labels
+
+Draft and published swap/replacement menus show compact labels such as
+`G2 • Chaos • Carry — Diese`. Names prefer the server display name, then global
+Discord display name, username, and an abbreviated unknown-player fallback.
+Internal selection values remain stable slot IDs, including across both games.
+Long names are shortened; duplicate display names do not change slot identity.
+The bot acknowledges the private interaction before fetching missing names.

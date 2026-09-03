@@ -94,3 +94,13 @@ global/user fallback, unresolved users, duplicate names and bounded labels.
 Next: finish real one/two-game draft and published selector-to-mutation tests,
 verify Game 2 notices, then open the #69 implementation PR and run final B1 gates.
 Live mobile acceptance remains pending. No production changes.
+
+## B1.7 checkpoint (codex/b1-player-names)
+
+Done: Readable names across draft and published swaps/replacements, including eligible candidates; preserved exact slot values and one/two-game behavior.
+
+Validation: 162 tests and application typecheck pass; real selector-to-mutation paths verify exact Game 2 replacement, swaps and published notices.
+
+Next: Run final B1 build/script typecheck/audit and inspect the complete diff; open #69 PR, verify all stacked CI, record review/deployment/live gates. Do not start B2.
+
+Deployment/live verification: pending; no production changes.
