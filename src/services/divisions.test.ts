@@ -201,16 +201,16 @@ test('scout signups let players react while managers, captains, franchise repres
   assert.deepEqual(byId.get('division')?.allow, [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.AddReactions]);
 });
 
-test('scout results restrict posting, threads, and new reactions to its approved writers', () => {
+test('scout results allow division players to post screenshots while keeping other division access restricted', () => {
   const overwrites = resolveDivisionPermissionOverwrites(permissionRoleIds, 'scout_results');
   const byId = new Map(overwrites.map((overwrite) => [overwrite.id, overwrite]));
-  const restricted = [PermissionFlagsBits.ViewChannel, ...NO_POST_PERMISSIONS, PermissionFlagsBits.AddReactions];
+  const restricted = [PermissionFlagsBits.ViewChannel, ...NO_POST_PERMISSIONS, PermissionFlagsBits.AddReactions, PermissionFlagsBits.AttachFiles];
 
   assert.deepEqual(byId.get('everyone')?.deny, restricted);
   for (const roleId of ['manager', 'captain', 'franchise', 'allfather', 'aesir']) {
     assert.deepEqual(byId.get(roleId)?.allow, restricted);
   }
-  assert.deepEqual(byId.get('division')?.allow, [PermissionFlagsBits.ViewChannel]);
+  assert.deepEqual(byId.get('division')?.allow, [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles]);
 });
 
 test('classifyDivisionChannelMatch adopts one legacy unprefixed scout channel from the expected division category', () => {

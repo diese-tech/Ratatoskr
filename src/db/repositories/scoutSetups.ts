@@ -653,7 +653,8 @@ export function claimScoutPublish(
     if (withdrawnScoutRosterUserIds(db, setupId).length) return 'withdrawals';
     const result = db
       .prepare(
-        `UPDATE scout_setups SET status = 'published', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        `UPDATE scout_setups SET status = 'published', results_channel_id = signup_channel_id,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ? AND status = 'roster_ready' AND version = ?`,
       )
       .run(setupId, expectedVersion);

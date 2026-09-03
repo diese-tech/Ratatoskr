@@ -7,6 +7,7 @@ import {
   cancelScoutSetupIfVersion,
   claimScoutPublish,
   createScoutSetup,
+  getScoutSetupById,
   expandScoutRosterToTwoGamesIfVersion,
   getScoutSetupBySignupMessageId,
   listScoutSignups,
@@ -65,6 +66,30 @@ const emojiByRole = {
   carry: 'emoji-carry',
   fill: 'emoji-fill',
 } as const;
+
+test('publication claim transitions an unpublished legacy destination while preserving pending/published history', () => {
+  const { db, division } = setupDatabase();
+  try {
+    const setup = createScoutSetup(db, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'staff', signupChannelId: 'signups',
+      resultsChannelId: 'legacy-results', divisionRoleId: 'division-role', emojiByRole,
+      startAt: 2_000_000_000, roleLimit: 2,
+    });
+    db.prepare("UPDATE scout_setups SET status = 'published' WHERE id = ?").run(setup.id);
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'stale');
+    assert.equal(getScoutSetupById(db, setup.id)?.resultsChannelId, 'legacy-results');
+    db.prepare("UPDATE scout_setups SET result_message_id = 'old-roster', signup_post_reconciled = 1 WHERE id = ?").run(setup.id);
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'stale');
+    assert.equal(getScoutSetupById(db, setup.id)?.resultMessageId, 'old-roster');
+    db.prepare("UPDATE scout_setups SET status = 'roster_ready', result_message_id = NULL, signup_post_reconciled = 0 WHERE id = ?").run(setup.id);
+    assert.equal(claimScoutPublish(db, setup.id, 9), 'stale');
+    assert.equal(getScoutSetupById(db, setup.id)?.resultsChannelId, 'legacy-results');
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'claimed');
+    assert.equal(getScoutSetupById(db, setup.id)?.resultsChannelId, 'signups');
+    assert.equal(claimScoutPublish(db, setup.id, 0), 'stale');
+  } finally { closeDatabase(db); }
+});
 
 test('posting and unresolved publication block teardown but settled history does not', () => {
   const { db, division } = setupDatabase();

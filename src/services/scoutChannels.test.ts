@@ -104,7 +104,7 @@ test('resolveScoutChannelGroup returns the complete live signup/results pair for
   });
 });
 
-test('resolveScoutChannelGroupForDivision resolves both managed channels after they move to Scout Operations', () => {
+test('new division setup publishes in signups even when the manual screenshot channel is missing', () => {
   const managedResources = [
     resource({ parentResourceId: 'scout-ops-category' }),
     resource({
@@ -122,7 +122,6 @@ test('resolveScoutChannelGroupForDivision resolves both managed channels after t
     managedResources,
     liveChannels: new Map([
       ['legacy-unprefixed-signups', { resourceType: 'text_channel' as const, parentId: 'scout-ops-category' }],
-      ['legacy-unprefixed-results', { resourceType: 'text_channel' as const, parentId: 'scout-ops-category' }],
     ]),
   });
 
@@ -130,7 +129,7 @@ test('resolveScoutChannelGroupForDivision resolves both managed channels after t
     divisionId: 1,
     divisionKey: 'vanaheim',
     signupChannelId: 'legacy-unprefixed-signups',
-    resultsChannelId: 'legacy-unprefixed-results',
+    resultsChannelId: 'legacy-unprefixed-signups',
   });
 });
 

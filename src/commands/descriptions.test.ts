@@ -37,7 +37,7 @@ test('every slash command, subcommand, and option uses readable English', () => 
   assert.equal(scout.description, 'Create and manage preseason scouting games.');
   const scoutCreate = child(scout, 'create');
   assert.equal(scoutCreate.description, 'Set up and post a scouting game for a division.');
-  assert.equal(child(scoutCreate, 'division').description, 'Division whose signup and results channels will be used.');
+  assert.equal(child(scoutCreate, 'division').description, 'Division whose signup channel will receive signups and rosters.');
   const scoutCancel = child(scout, 'cancel');
   assert.equal(scoutCancel.description, 'Cancel an open scouting game for a division.');
   assert.equal(child(scoutCancel, 'division').description, 'Division whose scouting game should be cancelled.');

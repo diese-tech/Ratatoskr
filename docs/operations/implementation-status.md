@@ -27,3 +27,13 @@ Validation: 136 tests and application typecheck pass; posting blocker regression
 Next: B1.3: route new roster posts into signup channels while preserving historical/pending destinations. PR70 is the base; verify stacked CI.
 
 Deployment/live verification: pending; no production changes.
+
+## B1.3 checkpoint (codex/b1-signup-publication)
+
+Done: Publish new/unclaimed rosters in signup channels; retain legacy pending/published destinations; allow player screenshots in results. No bulk rewrite or schema migration.
+
+Validation: 137 tests and application typecheck pass; routing claim, stale versions and player permission checks covered.
+
+Next: B1.4: reproduce published Swap double acknowledgement, then add durable roster edit/notice recovery and failure-injection tests.
+
+Deployment/live verification: pending; no production changes.

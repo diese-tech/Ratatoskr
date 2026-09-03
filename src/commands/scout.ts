@@ -33,7 +33,7 @@ export const scoutCommand = new SlashCommandBuilder()
       .addStringOption((option) =>
         option
           .setName('division')
-          .setDescription('Division whose signup and results channels will be used.')
+          .setDescription('Division whose signup channel will receive signups and rosters.')
           .setRequired(true)
           .addChoices(...divisionChoices),
       ),

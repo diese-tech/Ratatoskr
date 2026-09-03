@@ -152,7 +152,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
   const expectedVersion = Number(parts[3]);
   if (!Number.isInteger(setupId) || !Number.isInteger(expectedVersion)) return false;
   const publishedAction = ['publishedreplace', 'publishedswap'].includes(parts[1] ?? '');
-  const setup = await authorized(interaction, db, setupId, publishedAction ? 'published' : 'roster_ready');
+  let setup = await authorized(interaction, db, setupId, publishedAction ? 'published' : 'roster_ready');
   if (!setup) {
     await interaction.reply({ content: 'You do not have permission to manage this scout result.', flags: MessageFlags.Ephemeral });
     return true;
@@ -169,7 +169,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       new ButtonBuilder().setCustomId(`scout:publishback:${setupId}:${expectedVersion}`).setLabel('Back').setStyle(ButtonStyle.Secondary),
     );
     await interaction.update({
-      content: `Publish this finalized roster to <#${setup.resultsChannelId}>? This can only happen once.`,
+      content: `Publish this finalized roster to <#${setup.signupChannelId}>? This can only happen once.`,
       components: [row],
     });
     return true;
@@ -230,6 +230,9 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     return true;
   }
 
+  // Claim atomically switches only unclaimed rosters to signup-channel routing.
+  // Already-published/pending records keep their original destination on retry.
+  setup = getScoutSetupById(db, setupId)!;
   const slots = listScoutRosterSlots(db, setupId);
   let resultMessage;
   let signupMessage;
