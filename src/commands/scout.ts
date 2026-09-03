@@ -41,14 +41,7 @@ export const scoutCommand = new SlashCommandBuilder()
   .addSubcommand((subcommand) =>
     subcommand
       .setName('cancel')
-      .setDescription('Cancel an open scouting game for a division.')
-      .addStringOption((option) =>
-        option
-          .setName('division')
-          .setDescription('Division whose scouting game should be cancelled.')
-          .setRequired(true)
-          .addChoices(...divisionChoices),
-      ),
+      .setDescription('Choose an active scouting posting to cancel.'),
   )
   .addSubcommand((subcommand) =>
     subcommand
