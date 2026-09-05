@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { closeDatabase, openDatabase } from '../client.js';
 import { upsertDivision } from './divisions.js';
+import { finishScoutSetupIfVersion, markScoutCompletionReconciled } from './scoutCompletions.js';
 import {
   addScoutSignup,
   cancelScoutSetupIfVersion,
@@ -92,7 +93,7 @@ test('publication claim transitions an unpublished legacy destination while pres
   } finally { closeDatabase(db); }
 });
 
-test('posting and unresolved publication block teardown but settled history does not', () => {
+test('posting and unfinished publication block teardown until finish reconciliation settles history', () => {
   const { db, division } = setupDatabase();
   try {
     const setup = createScoutSetup(db, {
@@ -108,6 +109,10 @@ test('posting and unresolved publication block teardown but settled history does
     db.prepare("UPDATE scout_setups SET result_message_id = 'roster' WHERE id = ?").run(setup.id);
     assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 1);
     db.prepare('UPDATE scout_setups SET signup_post_reconciled = 1 WHERE id = ?').run(setup.id);
+    assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 1);
+    assert.equal(finishScoutSetupIfVersion(db, setup.id, 0, 'staff'), 'finished');
+    assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 1);
+    markScoutCompletionReconciled(db, setup.id);
     assert.equal(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).length, 0);
   } finally { closeDatabase(db); }
 });
@@ -437,6 +442,9 @@ test('cancellation is division-scoped, atomic, and only active setups block divi
     assert.equal(claimScoutPublish(db, second.id, 0), 'claimed');
     assert.equal(setScoutResultMessage(db, second.id, 'cancel-result'), true);
     assert.equal(cancelScoutSetupIfVersion(db, second.id, 0), 'published');
+    assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id).map((setup) => setup.id), [second.id]);
+    assert.equal(finishScoutSetupIfVersion(db, second.id, 0, 'captain-1'), 'finished');
+    markScoutCompletionReconciled(db, second.id);
     assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', division.id), []);
     assert.deepEqual(listDivisionScoutLifecycleBlockers(db, 'guild-1', otherDivision.id).map((setup) => setup.id), [other.id]);
   } finally {

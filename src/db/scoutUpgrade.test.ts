@@ -7,9 +7,23 @@ import Database from 'better-sqlite3';
 import { migrations } from './migrations.js';
 import { openDatabase } from './client.js';
 
-for (const version of [14, 15, 16]) test(`v${version} disk upgrade preserves active, pending and historical Scout routing and rows`, () => {
+function withoutFoundationSlotColumns(rows: unknown[]): unknown[] {
+  return rows.map((item) => {
+    const row = item as Record<string, unknown>;
+    const {
+      off_role: _offRole,
+      assigned_by_user_id: _assignedBy,
+      replacement_needed: _replacementNeeded,
+      replacement_requested_at: _replacementRequestedAt,
+      ...legacy
+    } = row;
+    return legacy;
+  });
+}
+
+for (const version of [14, 15, 16, 17]) test(`v${version} disk upgrade preserves active, pending and historical Scout routing and rows`, () => {
   const directory = mkdtempSync(join(tmpdir(), 'ratatoskr-upgrade-'));
-  const path = join(directory, 'v14.db');
+  const path = join(directory, `v${version}.db`);
   const legacy = new Database(path);
   const tables = ['divisions', 'scout_setups', 'scout_signups', 'scout_roster_slots'];
   let snapshot: unknown[];
@@ -21,7 +35,7 @@ for (const version of [14, 15, 16]) test(`v${version} disk upgrade preserves act
       legacy.prepare('INSERT INTO schema_migrations (id, name) VALUES (?, ?)').run(migration.id, migration.name);
     }
     legacy.prepare("INSERT INTO divisions (guild_id, division_key, display_name) VALUES ('guild', 'vanaheim', 'Vanaheim')").run();
-    const states = ['posting', 'open', 'roster_ready', 'published', 'published', 'cancelled'];
+    const states = ['posting', 'open', 'roster_ready', 'published', 'published', 'cancelled', 'published'];
     for (const [index, status] of states.entries()) {
       const id = index + 1;
       legacy.prepare(`INSERT INTO scout_setups (
@@ -31,7 +45,13 @@ for (const version of [14, 15, 16]) test(`v${version} disk upgrade preserves act
         start_at, role_limit, status, signup_message_id, result_message_id, signup_post_reconciled
       ) VALUES (?, 'guild', 1, 'vanaheim', 'Vanaheim', 'staff', 'signups', 'legacy-rosters', 'ops', 'division',
         'solo', 'jungle', 'mid', 'support', 'carry', 2000000000, 2, ?, ?, ?, ?)`)
-        .run(id, status, status === 'posting' ? null : `signup-${id}`, index === 4 ? 'old-roster-message' : null, index === 4 ? 1 : 0);
+        .run(
+          id,
+          status,
+          status === 'posting' ? null : `signup-${id}`,
+          index === 4 || index === 6 ? `old-roster-message-${id}` : null,
+          index === 4 || index === 6 ? 1 : 0,
+        );
       legacy.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, 'player', 'solo')").run(id);
       if (['roster_ready', 'published'].includes(status)) {
         legacy.prepare("INSERT INTO scout_roster_slots (setup_id, game_number, team, role, user_id) VALUES (?, 1, 'team_one', 'solo', 'player')").run(id);
@@ -46,17 +66,44 @@ for (const version of [14, 15, 16]) test(`v${version} disk upgrade preserves act
       legacy.prepare("INSERT INTO scout_readiness_cards (setup_id, telemetry_message_id, telemetry_attempted) VALUES (2, 'telemetry-2', 1)").run();
       tables.push('scout_readiness_cards');
     }
+    if (version >= 17) {
+      legacy.prepare("INSERT INTO scout_completions (setup_id, finished_by, posts_reconciled) VALUES (7, 'staff', 1)").run();
+      tables.push('scout_completions');
+    }
     snapshot = tables.map((table) => legacy.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
   } finally { legacy.close(); }
   const upgraded = openDatabase(path);
   try {
-    assert.deepEqual(tables.map((table) => upgraded.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), snapshot);
+    const upgradedRows = tables.map((table) => {
+      const rows = upgraded.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+      return table === 'scout_roster_slots' ? withoutFoundationSlotColumns(rows) : rows;
+    });
+    assert.deepEqual(upgradedRows, snapshot);
     if (version === 14) assert.deepEqual(upgraded.prepare('SELECT * FROM scout_roster_updates').all(), []);
     if (version < 16) assert.deepEqual(upgraded.prepare('SELECT * FROM scout_readiness_cards').all(), []);
-    assert.deepEqual(upgraded.prepare('SELECT * FROM scout_completions').all(), []);
+    if (version < 17) assert.deepEqual(upgraded.prepare('SELECT * FROM scout_completions').all(), []);
+    assert.equal(
+      (upgraded.prepare('SELECT COUNT(*) AS count FROM scout_coordination').get() as { count: number }).count,
+      7,
+    );
+    assert.deepEqual(
+      upgraded.prepare('SELECT DISTINCT organizer_user_id FROM scout_coordination').all(),
+      [{ organizer_user_id: 'staff' }],
+    );
+    assert.deepEqual(upgraded.prepare('SELECT * FROM scout_game_hosts').all(), []);
+    assert.deepEqual(upgraded.prepare('SELECT * FROM scout_events').all(), []);
+    assert.deepEqual(upgraded.prepare('SELECT * FROM scout_notifications').all(), []);
+    assert.deepEqual(
+      upgraded.prepare(
+        `SELECT DISTINCT off_role, assigned_by_user_id, replacement_needed, replacement_requested_at
+         FROM scout_roster_slots`,
+      ).all(),
+      [{ off_role: 0, assigned_by_user_id: null, replacement_needed: 0, replacement_requested_at: null }],
+    );
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 15').get());
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 16').get());
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 17').get());
+    assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 18').get());
     assert.deepEqual(upgraded.pragma('foreign_key_check'), []);
     assert.equal((upgraded.pragma('integrity_check') as any[])[0].integrity_check, 'ok');
   } finally {
