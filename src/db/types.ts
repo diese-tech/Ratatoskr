@@ -124,6 +124,69 @@ export type ScoutRosterSlotRecord = {
   role: ScoutRole;
   userId: string;
   staffAssigned: boolean;
+  offRole: boolean;
+  assignedByUserId: string | null;
+  replacementNeeded: boolean;
+  replacementRequestedAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ScoutCoordination = {
+  setupId: number;
+  organizerUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScoutGameHost = {
+  setupId: number;
+  gameNumber: 1 | 2;
+  lobbyHostUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScoutEvent = {
+  id: number;
+  setupId: number;
+  setupVersion: number;
+  eventType: string;
+  actorUserId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type ScoutNotificationKind =
+  | 't30'
+  | 'manual_roster'
+  | 'host_organizer'
+  | 'availability_alert'
+  | 'replacement_notice'
+  | 'host_change';
+
+export type ScoutNotificationState = 'scheduled' | 'attempted' | 'sent' | 'skipped';
+
+export type ScoutNotificationPayload = {
+  content: string;
+  links: { label: string; url: string }[];
+  allowedUserIds: string[];
+};
+
+export type ScoutNotification = {
+  id: number;
+  setupId: number;
+  gameNumber: 1 | 2 | null;
+  kind: ScoutNotificationKind;
+  dedupeKey: string;
+  nonce: string;
+  channelId: string;
+  dueAt: number;
+  payload: ScoutNotificationPayload | null;
+  state: ScoutNotificationState;
+  attemptedAt: number | null;
+  sentAt: number | null;
+  messageId: string | null;
+  skippedReason: string | null;
+  createdAt: string;
 };

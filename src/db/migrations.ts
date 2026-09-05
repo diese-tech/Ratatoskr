@@ -445,4 +445,72 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 18,
+    name: 'scout_working_roster_foundation',
+    sql: `
+      CREATE TABLE scout_coordination (
+        setup_id INTEGER PRIMARY KEY REFERENCES scout_setups(id) ON DELETE CASCADE,
+        organizer_user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
+      INSERT INTO scout_coordination (setup_id, organizer_user_id)
+        SELECT id, created_by FROM scout_setups;
+
+      CREATE TABLE scout_game_hosts (
+        setup_id INTEGER NOT NULL REFERENCES scout_setups(id) ON DELETE CASCADE,
+        game_number INTEGER NOT NULL CHECK (game_number IN (1, 2)),
+        lobby_host_user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (setup_id, game_number)
+      );
+
+      ALTER TABLE scout_roster_slots ADD COLUMN off_role INTEGER NOT NULL DEFAULT 0
+        CHECK (off_role IN (0, 1));
+      ALTER TABLE scout_roster_slots ADD COLUMN assigned_by_user_id TEXT;
+      ALTER TABLE scout_roster_slots ADD COLUMN replacement_needed INTEGER NOT NULL DEFAULT 0
+        CHECK (replacement_needed IN (0, 1));
+      ALTER TABLE scout_roster_slots ADD COLUMN replacement_requested_at TEXT;
+
+      CREATE UNIQUE INDEX idx_scout_roster_slots_setup_user
+        ON scout_roster_slots(setup_id, user_id);
+
+      CREATE TABLE scout_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id INTEGER NOT NULL REFERENCES scout_setups(id) ON DELETE CASCADE,
+        setup_version INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        actor_user_id TEXT,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE INDEX idx_scout_events_setup_id ON scout_events(setup_id, id);
+
+      CREATE TABLE scout_notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id INTEGER NOT NULL REFERENCES scout_setups(id) ON DELETE CASCADE,
+        game_number INTEGER CHECK (game_number IN (1, 2)),
+        kind TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL UNIQUE,
+        nonce TEXT NOT NULL UNIQUE,
+        channel_id TEXT NOT NULL,
+        due_at INTEGER NOT NULL,
+        payload_json TEXT,
+        state TEXT NOT NULL DEFAULT 'scheduled'
+          CHECK (state IN ('scheduled', 'attempted', 'sent', 'skipped')),
+        attempted_at INTEGER,
+        sent_at INTEGER,
+        message_id TEXT,
+        skipped_reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE INDEX idx_scout_notifications_state_due
+        ON scout_notifications(state, due_at);
+      CREATE INDEX idx_scout_notifications_cooldown
+        ON scout_notifications(setup_id, kind, game_number, attempted_at);
+    `,
+  },
 ];

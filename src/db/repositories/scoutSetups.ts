@@ -90,8 +90,9 @@ export type CreateScoutSetupInput = Omit<
 };
 
 export function createScoutSetup(db: Database.Database, input: CreateScoutSetupInput): ScoutSetup {
-  const row = db
-    .prepare(
+  return db.transaction(() => {
+    const row = db
+      .prepare(
       `INSERT INTO scout_setups (
          guild_id, division_id, division_key, division_display_name, created_by,
          signup_channel_id, results_channel_id, operations_channel_id, division_role_id, eligibility_role_id,
@@ -104,19 +105,22 @@ export function createScoutSetup(db: Database.Database, input: CreateScoutSetupI
          @startAt, @roleLimit, @note
        ) RETURNING *`,
     )
-    .get({
-      ...input,
-      soloEmojiId: input.emojiByRole.solo,
-      jungleEmojiId: input.emojiByRole.jungle,
-      midEmojiId: input.emojiByRole.mid,
-      supportEmojiId: input.emojiByRole.support,
-      carryEmojiId: input.emojiByRole.carry,
-      fillEmojiId: input.emojiByRole.fill ?? null,
-      operationsChannelId: input.operationsChannelId ?? null,
-      eligibilityRoleId: input.eligibilityRoleId ?? null,
-      note: input.note ?? null,
-    }) as ScoutSetupRow;
-  return toScoutSetup(row);
+      .get({
+        ...input,
+        soloEmojiId: input.emojiByRole.solo,
+        jungleEmojiId: input.emojiByRole.jungle,
+        midEmojiId: input.emojiByRole.mid,
+        supportEmojiId: input.emojiByRole.support,
+        carryEmojiId: input.emojiByRole.carry,
+        fillEmojiId: input.emojiByRole.fill ?? null,
+        operationsChannelId: input.operationsChannelId ?? null,
+        eligibilityRoleId: input.eligibilityRoleId ?? null,
+        note: input.note ?? null,
+      }) as ScoutSetupRow;
+    db.prepare('INSERT INTO scout_coordination (setup_id, organizer_user_id) VALUES (?, ?)')
+      .run(row.id, input.createdBy);
+    return toScoutSetup(row);
+  })();
 }
 
 export function getScoutSetupById(db: Database.Database, setupId: number): ScoutSetup | undefined {
@@ -264,7 +268,8 @@ export function listDivisionScoutLifecycleBlockers(db: Database.Database, guildI
   const rows = db.prepare(`SELECT * FROM scout_setups
     WHERE guild_id = ? AND division_id = ? AND (
       status IN ('posting', 'open', 'roster_ready') OR
-      (status = 'published' AND (result_message_id IS NULL OR signup_post_reconciled = 0
+      (status = 'published' AND (NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)
+        OR result_message_id IS NULL OR signup_post_reconciled = 0
         OR EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)
         OR EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id AND posts_reconciled = 0)))
     ) ORDER BY start_at, id`).all(guildId, divisionId) as ScoutSetupRow[];
@@ -478,6 +483,10 @@ type ScoutRosterSlotRow = {
   role: ScoutRole;
   user_id: string;
   staff_assigned: number;
+  off_role: number;
+  assigned_by_user_id: string | null;
+  replacement_needed: number;
+  replacement_requested_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -552,6 +561,10 @@ export function listScoutRosterSlots(db: Database.Database, setupId: number): Sc
     role: row.role,
     userId: row.user_id,
     staffAssigned: row.staff_assigned === 1,
+    offRole: row.off_role === 1,
+    assignedByUserId: row.assigned_by_user_id,
+    replacementNeeded: row.replacement_needed === 1,
+    replacementRequestedAt: row.replacement_requested_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
@@ -583,8 +596,10 @@ export function swapScoutRosterSlotsIfVersion(
       `UPDATE scout_roster_slots
        SET user_id = ?, staff_assigned = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
     );
-    update.run(second.user_id, staffOverride || second.staff_assigned === 1 ? 1 : 0, first.id);
+    db.prepare('UPDATE scout_roster_slots SET user_id = ? WHERE id = ?')
+      .run(`__scout_swap_${setupId}_${first.id}_${second.id}`, first.id);
     update.run(first.user_id, staffOverride || first.staff_assigned === 1 ? 1 : 0, second.id);
+    update.run(second.user_id, staffOverride || second.staff_assigned === 1 ? 1 : 0, first.id);
     return true;
   })();
 }
@@ -776,8 +791,10 @@ export function swapPublishedScoutRosterSlotsIfVersion(
       `UPDATE scout_roster_slots SET user_id = ?, staff_assigned = ?,
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
     );
-    update.run(second.user_id, second.staff_assigned, first.id);
+    db.prepare('UPDATE scout_roster_slots SET user_id = ? WHERE id = ?')
+      .run(`__scout_swap_${setupId}_${first.id}_${second.id}`, first.id);
     update.run(first.user_id, first.staff_assigned, second.id);
+    update.run(second.user_id, second.staff_assigned, first.id);
     db.prepare('INSERT INTO scout_roster_updates (setup_id, version, notice) VALUES (?, ?, ?)')
       .run(setupId, expectedVersion + 1, `Roster update: <@${first.user_id}> and <@${second.user_id}> swapped between ${rosterSlotLocation(first)} and ${rosterSlotLocation(second)}.`);
     return true;

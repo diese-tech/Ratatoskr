@@ -4,8 +4,16 @@ export const SCOUT_TEAMS = ['team_one', 'team_two'] as const;
 export type ScoutTeam = (typeof SCOUT_TEAMS)[number];
 export type ScoutSignupRecord = { userId: string; role: ScoutSignupRole; createdAt: string };
 export type ScoutRosterSlot = { gameNumber?: number; team: ScoutTeam; role: ScoutRole; userId: string };
+export type ScoutRosterLocation = { gameNumber: number; team: ScoutTeam; role: ScoutRole };
 export type ScoutRosterResult = { feasible: boolean; slots: ScoutRosterSlot[] };
 export type ScoutRosterOptions = { mode?: 'deterministic' | 'shuffle'; random?: () => number; gameCount?: 1 | 2 };
+export type ScoutWorkingRosterOptions = ScoutRosterOptions & { fixedSlots?: readonly ScoutRosterSlot[] };
+export type ScoutWorkingRosterResult = {
+  complete: boolean;
+  slots: ScoutRosterSlot[];
+  missingLocations: ScoutRosterLocation[];
+  unseatedUserIds: string[];
+};
 
 function eligibilityFor(signups: readonly ScoutSignupRecord[]) {
   const rolesByUser = new Map<string, Set<ScoutSignupRole>>();
@@ -45,20 +53,20 @@ function tryAssign(
   eligibility: Map<string, readonly ScoutRole[]>,
   assignment: Map<ScoutRole, string[]>,
   visited: Set<ScoutRole>,
-  capacity: number,
+  capacityByRole: ReadonlyMap<ScoutRole, number>,
 ): boolean {
   for (const role of eligibility.get(userId) ?? []) {
     if (visited.has(role)) continue;
     visited.add(role);
     const holders = assignment.get(role)!;
-    if (holders.length < capacity) {
+    if (holders.length < (capacityByRole.get(role) ?? 0)) {
       holders.push(userId);
       return true;
     }
     for (let index = 0; index < holders.length; index++) {
       const holder = holders[index]!;
       holders.splice(index, 1);
-      if (tryAssign(holder, eligibility, assignment, visited, capacity)) {
+      if (tryAssign(holder, eligibility, assignment, visited, capacityByRole)) {
         holders.push(userId);
         return true;
       }
@@ -68,16 +76,58 @@ function tryAssign(
   return false;
 }
 
-export function generateScoutRoster(
+function locationKey(location: ScoutRosterLocation): string {
+  return `${location.gameNumber}:${location.team}:${location.role}`;
+}
+
+function rosterLocations(gameCount: 1 | 2): ScoutRosterLocation[] {
+  return SCOUT_ROLES.flatMap((role) =>
+    Array.from({ length: gameCount }, (_, gameIndex) =>
+      SCOUT_TEAMS.map((team) => ({ gameNumber: gameIndex + 1, team, role })),
+    ).flat(),
+  );
+}
+
+function normalizeFixedSlots(
+  fixedSlots: readonly ScoutRosterSlot[],
+  gameCount: 1 | 2,
+): ScoutRosterSlot[] {
+  const locations = new Set<string>();
+  const users = new Set<string>();
+  return fixedSlots.map((slot) => {
+    const normalized = { ...slot, gameNumber: slot.gameNumber ?? 1 };
+    if (normalized.gameNumber < 1 || normalized.gameNumber > gameCount) {
+      throw new Error(`Fixed scout roster slot has invalid game number ${normalized.gameNumber}.`);
+    }
+    const key = locationKey(normalized);
+    if (locations.has(key)) throw new Error(`Fixed scout roster location ${key} is duplicated.`);
+    if (users.has(normalized.userId)) throw new Error(`Fixed scout roster user ${normalized.userId} is duplicated.`);
+    locations.add(key);
+    users.add(normalized.userId);
+    return normalized;
+  });
+}
+
+export function generateScoutWorkingRoster(
   signups: readonly ScoutSignupRecord[],
-  options: ScoutRosterOptions = {},
-): ScoutRosterResult {
+  options: ScoutWorkingRosterOptions = {},
+): ScoutWorkingRosterResult {
   const eligibility = eligibilityFor(signups);
   const gameCount = options.gameCount ?? 1;
-  const capacity = gameCount * 2;
+  const fixedSlots = normalizeFixedSlots(options.fixedSlots ?? [], gameCount);
+  const fixedUsers = new Set(fixedSlots.map((slot) => slot.userId));
+  const fixedLocations = new Set(fixedSlots.map((slot) => locationKey({
+    gameNumber: slot.gameNumber ?? 1,
+    team: slot.team,
+    role: slot.role,
+  })));
+  const availableLocations = rosterLocations(gameCount).filter((location) => !fixedLocations.has(locationKey(location)));
+  const capacityByRole = new Map(
+    SCOUT_ROLES.map((role) => [role, availableLocations.filter((location) => location.role === role).length]),
+  );
   const earliest = earliestFor(signups);
   const random = options.random ?? Math.random;
-  let players = [...eligibility.keys()];
+  let players = [...eligibility.keys()].filter((userId) => !fixedUsers.has(userId));
   const hasExplicitRole = (userId: string) =>
     signups.some((signup) => signup.userId === userId && signup.role !== 'fill');
   if (options.mode === 'shuffle') {
@@ -96,22 +146,38 @@ export function generateScoutRoster(
   }
 
   const assignment = new Map(SCOUT_ROLES.map((role) => [role, [] as string[]]));
-  for (const player of players) tryAssign(player, eligibility, assignment, new Set(), capacity);
-  if ([...assignment.values()].some((holders) => holders.length !== capacity)) return { feasible: false, slots: [] };
+  for (const player of players) tryAssign(player, eligibility, assignment, new Set(), capacityByRole);
 
-  const slots: ScoutRosterSlot[] = [];
+  const automaticSlots: ScoutRosterSlot[] = [];
   for (const role of SCOUT_ROLES) {
     const holders = [...assignment.get(role)!];
     if (options.mode === 'shuffle') shuffle(holders, random);
     else holders.sort((a, b) => (earliest.get(a) ?? '').localeCompare(earliest.get(b) ?? '') || a.localeCompare(b));
-    holders.forEach((userId, index) => slots.push({
-      gameNumber: Math.floor(index / 2) + 1,
-      team: SCOUT_TEAMS[index % 2]!,
-      role,
-      userId,
-    }));
+    const locations = availableLocations.filter((location) => location.role === role);
+    holders.forEach((userId, index) => automaticSlots.push({ ...locations[index]!, userId }));
   }
-  return { feasible: true, slots };
+  const slots = [...fixedSlots, ...automaticSlots];
+  const occupiedLocations = new Set(slots.map((slot) => locationKey({
+    gameNumber: slot.gameNumber ?? 1,
+    team: slot.team,
+    role: slot.role,
+  })));
+  const seatedUsers = new Set(slots.map((slot) => slot.userId));
+  const missingLocations = rosterLocations(gameCount).filter((location) => !occupiedLocations.has(locationKey(location)));
+  return {
+    complete: missingLocations.length === 0,
+    slots,
+    missingLocations,
+    unseatedUserIds: players.filter((userId) => !seatedUsers.has(userId)),
+  };
+}
+
+export function generateScoutRoster(
+  signups: readonly ScoutSignupRecord[],
+  options: ScoutRosterOptions = {},
+): ScoutRosterResult {
+  const working = generateScoutWorkingRoster(signups, options);
+  return working.complete ? { feasible: true, slots: working.slots } : { feasible: false, slots: [] };
 }
 
 export function scoutRosterFingerprint(slots: readonly ScoutRosterSlot[]): string {
