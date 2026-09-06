@@ -9,12 +9,16 @@ import {
   removeScoutSignup,
   listScoutSignups,
   listScoutRosterSlots,
+  reconcileScoutWorkingRoster,
   replaceScoutSignups,
-  tryCreateInitialScoutRoster,
   type ScoutSetup,
+  type ReconcileScoutWorkingRosterOutcome,
 } from '../db/index.js';
 import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS, type ScoutSignupRole } from '../domain/index.js';
-import { generateScoutRoster } from '../domain/scoutRoster.js';
+import {
+  generateScoutWorkingRoster,
+  type ScoutSignupRecord,
+} from '../domain/scoutRoster.js';
 import { eligibleScoutSignups } from './scoutEligibility.js';
 import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { renderPersistedScoutSignupPost } from './scoutCreate.js';
@@ -66,6 +70,36 @@ export function prioritizeObservedScoutSignups(
   return prioritized;
 }
 
+export function reconcileWorkingScoutRoster(
+  db: Database.Database,
+  setupId: number,
+  eligibleSignups: readonly ScoutSignupRecord[],
+  source: 'signup' | 'startup' | 'membership' | 'refresh',
+  actorUserId?: string | null,
+): ReconcileScoutWorkingRosterOutcome {
+  const setup = getScoutSetupById(db, setupId);
+  if (!setup || !['open', 'roster_ready'].includes(setup.status)) return 'stale';
+  const fixedSlots = listScoutRosterSlots(db, setupId)
+    .filter((slot) => slot.staffAssigned)
+    .map((slot) => ({
+      gameNumber: slot.gameNumber,
+      team: slot.team,
+      role: slot.role,
+      userId: slot.userId,
+    }));
+  const generated = generateScoutWorkingRoster(eligibleSignups, {
+    gameCount: setup.gameCount,
+    fixedSlots,
+  });
+  return reconcileScoutWorkingRoster(db, {
+    setupId,
+    expectedVersion: setup.version,
+    slots: generated.slots,
+    source,
+    actorUserId,
+  });
+}
+
 async function fetchReactionUsers(reaction: MessageReaction): Promise<User[]> {
   const users: User[] = [];
   let after: string | undefined;
@@ -110,14 +144,13 @@ export async function reconcileActiveScoutSignups(client: Client, db: Database.D
         }
 
         const latestBeforeRoster = getScoutSetupBySignupMessageId(db, setup.signupMessageId);
-        if (latestBeforeRoster?.status === 'open' && message.guild) {
+        if (latestBeforeRoster && ['open', 'roster_ready'].includes(latestBeforeRoster.status) && message.guild) {
           const eligible = await eligibleScoutSignups(
             message.guild,
             listScoutSignups(db, setup.id),
             setup.eligibilityRoleId,
           );
-          const roster = generateScoutRoster(eligible);
-          if (roster.feasible) tryCreateInitialScoutRoster(db, setup.id, roster.slots);
+          reconcileWorkingScoutRoster(db, setup.id, eligible, 'startup');
         }
         const latest = getScoutSetupBySignupMessageId(db, setup.signupMessageId);
         if (latest && ['open', 'roster_ready'].includes(latest.status)) {
@@ -186,10 +219,10 @@ export async function handleScoutSignupReactionAdd(
         listScoutSignups(db, resolved.setup.id),
         current.eligibilityRoleId,
       );
-      const roster = generateScoutRoster(signups);
-      const becameReady = roster.feasible && tryCreateInitialScoutRoster(db, resolved.setup.id, roster.slots);
+      const wasReady = current.status === 'roster_ready';
+      reconcileWorkingScoutRoster(db, resolved.setup.id, signups, 'signup', hydrated.user.id);
       const latest = getScoutSetupBySignupMessageId(db, hydrated.reaction.message.id);
-      if (becameReady && latest?.status === 'roster_ready') {
+      if (!wasReady && latest?.status === 'roster_ready') {
         await hydrated.reaction.message.edit({
           content: renderPersistedScoutSignupPost(latest),
           components: [],
@@ -229,6 +262,14 @@ export async function handleScoutSignupReactionRemove(
   if (!resolved) return;
   await withScoutSetupLock(db, resolved.setup.id, async () => {
     removeScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
+    const current = getScoutSetupById(db, resolved.setup.id);
+    const guild = hydrated.reaction.message.guild;
+    if (current && guild) {
+      const signups = await eligibleScoutSignups(
+        guild, listScoutSignups(db, current.id), current.eligibilityRoleId,
+      );
+      reconcileWorkingScoutRoster(db, current.id, signups, 'signup', hydrated.user.id);
+    }
   });
   await refreshScoutStatusCardSafely(hydrated.reaction.client, db, resolved.setup.id);
 }
@@ -244,11 +285,10 @@ export async function refreshScoutMemberReadiness(client: Client, db: Database.D
     await withScoutSetupLock(db, candidate.id, async () => {
       try {
         const setup = getScoutSetupById(db, candidate.id);
-        if (setup?.status === 'open') {
+        if (setup && ['open', 'roster_ready'].includes(setup.status)) {
           const guild = await client.guilds.fetch(guildId);
           const signups = await eligibleScoutSignups(guild, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
-          const generated = generateScoutRoster(signups);
-          if (generated.feasible) tryCreateInitialScoutRoster(db, setup.id, generated.slots);
+          reconcileWorkingScoutRoster(db, setup.id, signups, 'membership');
         }
       } catch (error) {
         await reportOperationalError(client, db, { guildId, setupId: candidate.id, action: 'Scout membership readiness' }, error);
