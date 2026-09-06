@@ -32,17 +32,28 @@ import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerName
 import { reconcileScoutPublishedPresentation } from './scoutPublish.js';
 import { reportOperationalError } from './operationalErrors.js';
 
-async function activePublishedSetup(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
+async function activePublishedSetup(
+  interaction: MessageComponentInteraction,
+  db: Database.Database,
+  setupId: number,
+  requireCanonicalMessage = true,
+) {
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || setup.resultsChannelId !== interaction.channelId ||
-      setup.status !== 'published' || !setup.resultMessageId || interaction.message.id !== setup.resultMessageId ||
+      setup.status !== 'published' || !setup.resultMessageId ||
+      (requireCanonicalMessage && interaction.message.id !== setup.resultMessageId) ||
       !setup.signupPostReconciled ||
       getScoutCompletion(db, setupId) || !interaction.guild) return undefined;
   return setup;
 }
 
-async function managerCanAct(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
-  const setup = await activePublishedSetup(interaction, db, setupId);
+async function managerCanAct(
+  interaction: MessageComponentInteraction,
+  db: Database.Database,
+  setupId: number,
+  requireCanonicalMessage = true,
+) {
+  const setup = await activePublishedSetup(interaction, db, setupId, requireCanonicalMessage);
   if (!setup) return undefined;
   const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
   if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
@@ -113,7 +124,12 @@ export async function handleScoutCoordinationButton(
     return true;
   }
 
-  const setup = await managerCanAct(interaction, db, setupId);
+  const setup = await managerCanAct(
+    interaction,
+    db,
+    setupId,
+    !['pingrosterconfirm', 'pingrosterback'].includes(parts[1]!),
+  );
   if (!setup || setup.version !== expectedVersion) {
     await interaction.editReply({ content: 'You are not authorized or that roster view is stale.', components: [] });
     return true;

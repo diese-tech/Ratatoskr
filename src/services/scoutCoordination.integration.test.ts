@@ -114,25 +114,82 @@ test("Can't play is bound to the canonical message and actor, remains idempotent
       f.interaction(`scout:cantplay:${f.setupId}:${initial.version}`, first.userId), f.db,
     );
     const firstConfirm = f.replies.at(-1).components[0].toJSON().components[0].custom_id;
-    await handleScoutAvailabilityButton(f.interaction(firstConfirm, first.userId), f.db);
+    const confirmationMessageId = 'ephemeral-confirm';
+    assert.notEqual(confirmationMessageId, initial.resultMessageId);
+    await handleScoutAvailabilityButton(f.interaction(firstConfirm, first.userId, confirmationMessageId), f.db);
     assert.match(f.roster.content, /replacement needed/);
     assert.equal(listScoutRosterSlots(f.db, f.setupId).filter((slot) => slot.replacementNeeded).length, 1);
     assert.equal(notificationCount(f.db, 'availability_alert'), 1);
-
     const afterFirst = getScoutSetupById(f.db, f.setupId)!;
+    assert.match(JSON.stringify(f.roster.components), new RegExp(`scout:cantplay:${f.setupId}:${afterFirst.version}`));
+
+    await handleScoutAvailabilityButton(f.interaction(firstConfirm, first.userId, confirmationMessageId), f.db);
+    assert.match(f.replies.at(-1).content, /already marked/);
+    assert.equal(listScoutRosterSlots(f.db, f.setupId).filter((slot) => slot.replacementNeeded).length, 1);
+    assert.equal(notificationCount(f.db, 'availability_alert'), 1);
+
     await handleScoutAvailabilityButton(
       f.interaction(`scout:cantplay:${f.setupId}:${afterFirst.version}`, first.userId), f.db,
     );
     const repeatConfirm = f.replies.at(-1).components[0].toJSON().components[0].custom_id;
-    await handleScoutAvailabilityButton(f.interaction(repeatConfirm, first.userId), f.db);
+    await handleScoutAvailabilityButton(f.interaction(repeatConfirm, first.userId, 'ephemeral-repeat'), f.db);
     assert.equal(notificationCount(f.db, 'availability_alert'), 1);
 
     await handleScoutAvailabilityButton(
       f.interaction(`scout:cantplay:${f.setupId}:${afterFirst.version}`, second.userId), f.db,
     );
     const secondConfirm = f.replies.at(-1).components[0].toJSON().components[0].custom_id;
-    await handleScoutAvailabilityButton(f.interaction(secondConfirm, second.userId), f.db);
+    await handleScoutAvailabilityButton(f.interaction(secondConfirm, second.userId, 'ephemeral-second'), f.db);
     assert.equal(listScoutRosterSlots(f.db, f.setupId).filter((slot) => slot.replacementNeeded).length, 2);
+  } finally {
+    closeDatabase(f.db);
+  }
+});
+
+test("Can't play rejects an ephemeral confirmation after another canonical availability change", async () => {
+  const f = fixture();
+  try {
+    const initial = getScoutSetupById(f.db, f.setupId)!;
+    const hosts = new Set(listScoutGameHosts(f.db, f.setupId).map((host) => host.lobbyHostUserId));
+    const [first, second] = listScoutRosterSlots(f.db, f.setupId)
+      .filter((slot) => !hosts.has(slot.userId));
+
+    await handleScoutAvailabilityButton(
+      f.interaction(`scout:cantplay:${f.setupId}:${initial.version}`, first!.userId), f.db,
+    );
+    const firstConfirm = f.replies.at(-1).components[0].toJSON().components[0].custom_id;
+    await handleScoutAvailabilityButton(
+      f.interaction(`scout:cantplay:${f.setupId}:${initial.version}`, second!.userId), f.db,
+    );
+    const staleConfirm = f.replies.at(-1).components[0].toJSON().components[0].custom_id;
+
+    await handleScoutAvailabilityButton(f.interaction(firstConfirm, first!.userId, 'ephemeral-first'), f.db);
+    assert.equal(getScoutSetupById(f.db, f.setupId)!.version, initial.version + 1);
+    await handleScoutAvailabilityButton(f.interaction(staleConfirm, second!.userId, 'ephemeral-stale'), f.db);
+
+    assert.match(f.replies.at(-1).content, /roster changed/);
+    assert.equal(listScoutRosterSlots(f.db, f.setupId).filter((slot) => slot.replacementNeeded).length, 1);
+    assert.equal(notificationCount(f.db, 'availability_alert'), 1);
+  } finally {
+    closeDatabase(f.db);
+  }
+});
+
+test("Can't play Never mind works from the ephemeral confirmation without changing the roster", async () => {
+  const f = fixture();
+  try {
+    const setup = getScoutSetupById(f.db, f.setupId)!;
+    const player = listScoutRosterSlots(f.db, f.setupId)[0]!;
+    await handleScoutAvailabilityButton(
+      f.interaction(`scout:cantplay:${f.setupId}:${setup.version}`, player.userId), f.db,
+    );
+    const back = f.replies.at(-1).components[0].toJSON().components[1].custom_id;
+    await handleScoutAvailabilityButton(f.interaction(back, player.userId, 'ephemeral-back'), f.db);
+
+    assert.match(f.replies.at(-1).content, /not changed/);
+    assert.equal(getScoutSetupById(f.db, f.setupId)!.version, setup.version);
+    assert.equal(listScoutRosterSlots(f.db, f.setupId).some((slot) => slot.replacementNeeded), false);
+    assert.equal(notificationCount(f.db, 'availability_alert'), 0);
   } finally {
     closeDatabase(f.db);
   }

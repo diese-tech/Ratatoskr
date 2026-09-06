@@ -7,10 +7,12 @@ import { Collection, MessageFlags, type ButtonInteraction, type Client, type Use
 import { openDatabase, upsertDivision, createScoutSetup, setScoutSetupSignupMessage,
   listScoutRosterSlots, getScoutSetupById, tryCreateInitialScoutRoster, addScoutSignup,
   claimScoutPublish, setScoutResultMessage, getScoutRosterUpdate,
-  replacePublishedScoutRosterSlotIfVersion, listDivisionScoutLifecycleBlockers, expandScoutRosterToTwoGamesIfVersion } from '../db/index.js';
+  replacePublishedScoutRosterSlotIfVersion, listDivisionScoutLifecycleBlockers, expandScoutRosterToTwoGamesIfVersion,
+  listDueScoutNotifications } from '../db/index.js';
 import { SCOUT_ROLES, SCOUT_TEAMS } from '../domain/index.js';
 import { handleScoutPublishButton, handleScoutPublishedSlotSelect, handleScoutPublishedUserSelect, reconcilePendingScoutRosterUpdates } from './scoutPublish.js';
 import { handleScoutReviewButton, handleScoutReviewStringSelect, handleScoutReviewUserSelect } from './scoutReview.js';
+import { handleScoutCoordinationButton } from './scoutCoordination.js';
 
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
@@ -246,3 +248,50 @@ for (const gameCount of [1, 2]) {
     } finally { f.db.close(); }
   });
 }
+
+test('Ping roster uses the final canonical controls after a published replacement and swap', async () => {
+  const f = publishedFixture();
+  try {
+    const before = listScoutRosterSlots(f.db, f.setup.id);
+    const replaced = before.find((slot) => slot.team === 'team_two' && slot.role === 'carry')!;
+    await handleScoutPublishButton(
+      f.interaction(`scout:publishedreplace:${f.setup.id}:0`) as unknown as ButtonInteraction, f.db,
+    );
+    const replaceMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutPublishedSlotSelect(
+      f.interaction(replaceMenu.custom_id, [String(replaced.id)]) as unknown as StringSelectMenuInteraction, f.db,
+    );
+    const replacementMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutPublishedUserSelect(
+      f.interaction(replacementMenu.custom_id, ['replacement']) as unknown as UserSelectMenuInteraction, f.db,
+    );
+
+    let controls = f.roster.components[0].toJSON().components;
+    const swapId = controls.find((component: any) => component.label === 'Swap players').custom_id;
+    await handleScoutPublishButton(f.interaction(swapId) as unknown as ButtonInteraction, f.db);
+    const firstMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    const first = listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.id !== replaced.id)!;
+    await handleScoutPublishedSlotSelect(
+      f.interaction(firstMenu.custom_id, [String(first.id)]) as unknown as StringSelectMenuInteraction, f.db,
+    );
+    const secondMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutPublishedSlotSelect(
+      f.interaction(secondMenu.custom_id, [String(replaced.id)]) as unknown as StringSelectMenuInteraction, f.db,
+    );
+
+    controls = f.roster.components[0].toJSON().components;
+    const pingId = controls.find((component: any) => component.label === 'Ping roster').custom_id;
+    assert.match(pingId, new RegExp(`:${getScoutSetupById(f.db, f.setup.id)!.version}$`));
+    await handleScoutCoordinationButton(f.interaction(pingId) as unknown as ButtonInteraction, f.db);
+    const pingConfirmId = f.replies.at(-1).components[0].toJSON().components[0].custom_id;
+    const pingConfirm = f.interaction(pingConfirmId);
+    pingConfirm.message = { id: 'ephemeral-ping-confirm' };
+    await handleScoutCoordinationButton(pingConfirm as unknown as ButtonInteraction, f.db);
+
+    assert.match(f.replies.at(-1).content, /queued/);
+    assert.equal(listDueScoutNotifications(f.db, Number.MAX_SAFE_INTEGER)
+      .filter((notification) => notification.kind === 'manual_roster').length, 1);
+  } finally {
+    f.db.close();
+  }
+});

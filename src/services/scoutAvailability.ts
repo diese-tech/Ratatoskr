@@ -32,7 +32,8 @@ export async function handleScoutAvailabilityButton(
   const setup = getScoutSetupById(db, setupId);
   const seated = setup && listScoutRosterSlots(db, setupId).find((slot) => slot.userId === interaction.user.id);
   if (!setup || setup.guildId !== interaction.guildId || setup.resultsChannelId !== interaction.channelId ||
-      setup.status !== 'published' || !setup.resultMessageId || interaction.message.id !== setup.resultMessageId ||
+      setup.status !== 'published' || !setup.resultMessageId ||
+      (parts[1] === 'cantplay' && interaction.message.id !== setup.resultMessageId) ||
       getScoutCompletion(db, setupId) || !seated) {
     await interaction.editReply({ content: 'Only a player currently seated on this active roster can use Can’t play.', components: [] });
     return true;
