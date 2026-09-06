@@ -17,8 +17,10 @@ import {
 } from './scoutNotifications.js';
 import {
   createScoutSetup,
+  completeScoutRosterUpdate,
   getScoutSetupById,
   listScoutRosterSlots,
+  markScoutRosterUpdateEdited,
   markScoutPlayerUnavailableIfVersion,
   prepareScoutPublication,
   reconcileScoutWorkingRoster,
@@ -33,6 +35,11 @@ const emojiByRole = {
   solo: 'emoji-solo', jungle: 'emoji-jungle', mid: 'emoji-mid',
   support: 'emoji-support', carry: 'emoji-carry', fill: 'emoji-fill',
 } as const;
+
+function settlePresentation(db: ReturnType<typeof openDatabase>, setupId: number, version: number) {
+  markScoutRosterUpdateEdited(db, setupId, version);
+  assert.equal(completeScoutRosterUpdate(db, setupId, version), true);
+}
 
 function setupDatabase() {
   const db = openDatabase(':memory:');
@@ -192,6 +199,7 @@ test('Organizer changes are setup-scoped and Host changes are roster-validated a
     assert.equal(changeScoutOrganizerIfVersion(db, setup.id, 1, 'new-organizer', 'staff'), 'updated');
     assert.equal(getScoutCoordination(db, setup.id)?.organizerUserId, 'new-organizer');
     assert.equal(changeScoutOrganizerIfVersion(db, setup.id, 1, 'stale-organizer', 'staff'), 'stale');
+    settlePresentation(db, setup.id, 2);
 
     assert.equal(changeScoutGameHostIfVersion(
       db, setup.id, 2, 1, 'not-rostered', 'staff',
@@ -200,6 +208,7 @@ test('Organizer changes are setup-scoped and Host changes are roster-validated a
       db, setup.id, 2, 1, slots[1]!.userId, 'staff',
     ), 'updated');
     assert.equal(listScoutGameHosts(db, setup.id)[0]?.lobbyHostUserId, slots[1]!.userId);
+    settlePresentation(db, setup.id, 3);
 
     db.prepare('UPDATE scout_roster_slots SET replacement_needed = 1 WHERE setup_id = ? AND user_id = ?')
       .run(setup.id, slots[1]!.userId);
@@ -283,10 +292,12 @@ test("Can't Play flags stay independent and replacement clears only the resolved
     assert.notEqual(listScoutGameHosts(db, setup.id).find((host) => host.gameNumber === 1)?.lobbyHostUserId, firstHost);
     assert.equal(listScoutGameHosts(db, setup.id).find((host) => host.gameNumber === 2)?.lobbyHostUserId,
       hostsBefore.find((host) => host.gameNumber === 2)?.lobbyHostUserId);
+    settlePresentation(db, setup.id, 2);
     assert.equal(markScoutPlayerUnavailableIfVersion(db, {
       setupId: setup.id, expectedVersion: 2, userId: gameTwoPlayer, now: 101, random: () => 0,
     }).status, 'updated');
     assert.equal(listScoutRosterSlots(db, setup.id).filter((slot) => slot.replacementNeeded).length, 2);
+    settlePresentation(db, setup.id, 3);
 
     addSignup.run(setup.id, 'incoming', slots.find((slot) => slot.userId === firstHost)!.role);
     const flaggedSlot = listScoutRosterSlots(db, setup.id).find((slot) => slot.userId === firstHost)!;

@@ -29,12 +29,14 @@ import {
 import { hasScoutDivisionManagementAccess } from './scoutAuthorization.js';
 import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
-import { publishedRosterRows, renderPersistedScoutResult } from './scoutPublish.js';
+import { reconcileScoutPublishedPresentation } from './scoutPublish.js';
+import { reportOperationalError } from './operationalErrors.js';
 
 async function activePublishedSetup(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || setup.resultsChannelId !== interaction.channelId ||
-      setup.status !== 'published' || !setup.resultMessageId || !setup.signupPostReconciled ||
+      setup.status !== 'published' || !setup.resultMessageId || interaction.message.id !== setup.resultMessageId ||
+      !setup.signupPostReconciled ||
       getScoutCompletion(db, setupId) || !interaction.guild) return undefined;
   return setup;
 }
@@ -52,16 +54,19 @@ async function managerCanAct(interaction: MessageComponentInteraction, db: Datab
 
 async function refreshPublishedPresentation(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
   const setup = getScoutSetupById(db, setupId)!;
-  const channel = await interaction.client.channels.fetch(setup.resultsChannelId).catch(() => undefined);
-  const message = channel?.isTextBased()
-    ? await channel.messages.fetch(setup.resultMessageId!).catch(() => undefined)
-    : undefined;
-  if (message) await message.edit({
-    content: renderPersistedScoutResult(setup, listScoutRosterSlots(db, setupId), listScoutGameHosts(db, setupId)),
-    components: publishedRosterRows(setup),
-    allowedMentions: { parse: [] },
-  });
+  try {
+    await reconcileScoutPublishedPresentation(interaction.client, db, setupId);
+  } catch (error) {
+    await reportOperationalError(interaction.client, db, {
+      guildId: setup.guildId, setupId, division: setup.divisionDisplayName,
+      action: 'Coordination roster presentation',
+      next: 'The coordination change is saved; startup recovery will retry the canonical roster edit.',
+    }, error);
+    await refreshScoutStatusCardSafely(interaction.client, db, setupId);
+    return false;
+  }
   await refreshScoutStatusCardSafely(interaction.client, db, setupId);
+  return true;
 }
 
 export async function handleScoutCoordinationButton(
@@ -83,7 +88,8 @@ export async function handleScoutCoordinationButton(
   if (parts[1] === 'pingorganizer') {
     const setup = await activePublishedSetup(interaction, db, setupId);
     const gameNumber = Number(parts[4]) as 1 | 2;
-    const host = setup && listScoutGameHosts(db, setupId).find((candidate) => candidate.gameNumber === gameNumber);
+    const host = setup && listScoutGameHosts(db, setupId)
+      .find((candidate) => candidate.gameNumber === gameNumber);
     if (!setup || setup.version !== expectedVersion || !host || host.lobbyHostUserId !== interaction.user.id || !setup.operationsChannelId) {
       await interaction.editReply({ content: 'Only the current Lobby Host for that game can ping the Organizer.', components: [] });
       return true;
@@ -186,19 +192,23 @@ export async function handleScoutCoordinationStringSelect(
     await interaction.editReply({ content: 'That Host selection is stale or unauthorized.', components: [] });
     return true;
   }
-  const outcome = changeScoutGameHostIfVersion(
-    db, setupId, expectedVersion, gameNumber, userId, interaction.user.id,
-  );
-  if (outcome === 'updated') {
+  const outcome = db.transaction(() => {
+    const changed = changeScoutGameHostIfVersion(
+      db, setupId, expectedVersion, gameNumber, userId, interaction.user.id,
+    );
+    if (changed !== 'updated') return changed;
     const now = Math.floor(Date.now() / 1_000);
     scheduleScoutNotification(db, {
       setupId, gameNumber, kind: 'host_change', dedupeKey: `host-change:${setupId}:${expectedVersion + 1}`,
       nonce: `c${setupId}-${expectedVersion + 1}`, channelId: setup.resultsChannelId,
       dueAt: now,
     });
-    await refreshPublishedPresentation(interaction, db, setupId);
-  }
-  await interaction.editReply({ content: outcome === 'updated' ? 'Lobby Host changed.' : `No Host change was made (${outcome}).`, components: [] });
+    return changed;
+  })();
+  const presented = outcome === 'updated' ? await refreshPublishedPresentation(interaction, db, setupId) : true;
+  await interaction.editReply({ content: outcome === 'updated'
+    ? `Lobby Host changed.${presented ? '' : ' The roster display update is pending recovery.'}`
+    : `No Host change was made (${outcome}).`, components: [] });
   return true;
 }
 
@@ -219,7 +229,9 @@ export async function handleScoutCoordinationUserSelect(
     return true;
   }
   const outcome = changeScoutOrganizerIfVersion(db, setupId, expectedVersion, userId, interaction.user.id);
-  if (outcome === 'updated') await refreshPublishedPresentation(interaction, db, setupId);
-  await interaction.editReply({ content: outcome === 'updated' ? 'Organizer changed.' : `No Organizer change was made (${outcome}).`, components: [] });
+  const presented = outcome === 'updated' ? await refreshPublishedPresentation(interaction, db, setupId) : true;
+  await interaction.editReply({ content: outcome === 'updated'
+    ? `Organizer changed.${presented ? '' : ' The roster controls update is pending recovery.'}`
+    : `No Organizer change was made (${outcome}).`, components: [] });
   return true;
 }

@@ -342,7 +342,9 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
     const signups = await eligibleScoutSignups(
       interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId,
     );
-    const outcome = reconcileWorkingScoutRoster(db, setup.id, signups, 'refresh', interaction.user.id);
+    const outcome = reconcileWorkingScoutRoster(
+      db, setup.id, signups, 'refresh', interaction.user.id, expectedVersion,
+    );
     await interaction.editReply({ content: outcome === 'stale'
       ? 'The working roster changed during refresh. No stale update was applied.'
       : outcome === 'unchanged' ? 'The working roster is already current.' : 'Working roster refreshed.' });

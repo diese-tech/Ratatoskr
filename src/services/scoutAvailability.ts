@@ -9,13 +9,13 @@ import {
 import {
   getScoutCompletion,
   getScoutSetupById,
-  listScoutGameHosts,
   listScoutRosterSlots,
   markScoutPlayerUnavailableIfVersion,
 } from '../db/index.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
 import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
-import { publishedRosterRows, renderPersistedScoutResult } from './scoutPublish.js';
+import { reconcileScoutPublishedPresentation } from './scoutPublish.js';
+import { operationalErrorGuidance, reportOperationalError } from './operationalErrors.js';
 
 export async function handleScoutAvailabilityButton(
   interaction: ButtonInteraction,
@@ -32,7 +32,8 @@ export async function handleScoutAvailabilityButton(
   const setup = getScoutSetupById(db, setupId);
   const seated = setup && listScoutRosterSlots(db, setupId).find((slot) => slot.userId === interaction.user.id);
   if (!setup || setup.guildId !== interaction.guildId || setup.resultsChannelId !== interaction.channelId ||
-      setup.status !== 'published' || !setup.resultMessageId || getScoutCompletion(db, setupId) || !seated) {
+      setup.status !== 'published' || !setup.resultMessageId || interaction.message.id !== setup.resultMessageId ||
+      getScoutCompletion(db, setupId) || !seated) {
     await interaction.editReply({ content: 'Only a player currently seated on this active roster can use Can’t play.', components: [] });
     return true;
   }
@@ -66,17 +67,23 @@ export async function handleScoutAvailabilityButton(
     return true;
   }
   const current = getScoutSetupById(db, setupId)!;
-  const channel = await interaction.client.channels.fetch(current.resultsChannelId).catch(() => undefined);
-  const message = channel?.isTextBased()
-    ? await channel.messages.fetch(current.resultMessageId!).catch(() => undefined)
-    : undefined;
-  if (message) await message.edit({
-    content: renderPersistedScoutResult(
-      current, listScoutRosterSlots(db, setupId), listScoutGameHosts(db, setupId),
-    ),
-    components: publishedRosterRows(current),
-    allowedMentions: { parse: [] },
-  });
+  if (outcome.status === 'updated') {
+    try {
+      await reconcileScoutPublishedPresentation(interaction.client, db, setupId);
+    } catch (error) {
+      const report = await reportOperationalError(interaction.client, db, {
+        guildId: current.guildId, setupId, division: current.divisionDisplayName,
+        action: 'Availability roster presentation',
+        next: 'The availability flag is saved; startup recovery will retry the canonical roster edit.',
+      }, error);
+      await refreshScoutStatusCardSafely(interaction.client, db, setupId);
+      await interaction.editReply({
+        content: `Your seat is marked as needing a replacement. The roster display update is pending recovery. ${operationalErrorGuidance(report)}`,
+        components: [],
+      });
+      return true;
+    }
+  }
   await refreshScoutStatusCardSafely(interaction.client, db, setupId);
   await interaction.editReply({
     content: outcome.status === 'unchanged'

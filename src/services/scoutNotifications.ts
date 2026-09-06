@@ -21,6 +21,7 @@ import {
   type ScoutNotificationPayload,
 } from '../db/index.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
+import { tryAcquireDivisionOperation } from './divisionOperation.js';
 import { reportOperationalError } from './operationalErrors.js';
 
 type NotificationResolution =
@@ -196,8 +197,17 @@ export async function processDueScoutNotifications(
 ): Promise<void> {
   const due = listDueScoutNotifications(db, now, limit);
   for (const notification of due) {
-    await serializeForSetup(db, notification.setupId,
-      () => deliverScoutNotification(client, db, notification, now));
+    await serializeForSetup(db, notification.setupId, async () => {
+      const setup = getScoutSetupById(db, notification.setupId);
+      if (!setup) {
+        await deliverScoutNotification(client, db, notification, now);
+        return;
+      }
+      const release = tryAcquireDivisionOperation(db, setup.guildId, setup.divisionKey);
+      if (!release) return;
+      try { await deliverScoutNotification(client, db, notification, now); }
+      finally { release(); }
+    });
   }
 }
 

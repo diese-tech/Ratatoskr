@@ -26,9 +26,6 @@ async function withCardLock<T>(db: Database.Database, setupId: number, action: (
   finally { release(); if (entries.get(setupId) === tail) entries.delete(setupId); }
 }
 
-export function scoutCardMarker(setupId: number, kind: 'telemetry' | 'control'): string {
-  return kind === 'telemetry' ? `SCOUT-TELEMETRY-${setupId}` : `SCOUT-CONTROL-${setupId}`;
-}
 const missingMessage = (error: unknown) => Number((error as { code?: number })?.code) === 10008;
 // These API responses reject message creation. Transport errors and unknown
 // responses retain the attempt marker because delivery may still have occurred.
@@ -58,6 +55,21 @@ async function findCard(channel: TextBasedChannel, botId: string, setupId: numbe
 }
 
 function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 'control', notify: boolean, unavailable?: string) {
+  const completion = getScoutCompletion(db, setup.id);
+  if (completion) {
+    return {
+      content: [
+        `**✓ ${setup.divisionDisplayName} Scout finished**`,
+        `<t:${setup.startAt}:t>`,
+        `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>.`,
+        completion.posts_reconciled ? '' : 'Discord post cleanup is pending. Retry after access is restored.',
+      ].filter(Boolean).join('\n'),
+      components: completion.posts_reconciled
+        ? [scoutResultLinkRow(setup, 'View final roster')]
+        : [scoutResultLinkRow(setup, 'View final roster'), scoutFinishButtonRow(setup.id, setup.version, true)],
+      allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
+    };
+  }
   if (!getScoutCompletion(db, setup.id) && ['open', 'roster_ready'].includes(setup.status)) {
     const unavailableUsers = new Set(withdrawnScoutRosterUserIds(db, setup.id));
     const view = buildScoutWorkingRosterView(
@@ -82,33 +94,29 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
           `<t:${setup.startAt}:t> · ${replacementSlots.map((slot) => `${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]}`).join(', ')}`,
         ].join('\n')
         : `**✓ ${setup.divisionDisplayName} Scout filled**\n<t:${setup.startAt}:t>`,
-      components: [scoutResultLinkRow(setup)],
+      components: [scoutResultLinkRow(setup), scoutFinishButtonRow(setup.id, setup.version)],
       allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
     };
   }
   const saved = readScoutReadinessSnapshot(ensureScoutReadinessCard(db, setup.id));
-  const completion = getScoutCompletion(db, setup.id);
   const terminal = ['published', 'cancelled'].includes(setup.status);
-  const status = completion ? 'finished' : setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
+  const status = setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
     : setup.status === 'published' ? 'published' : 'cancelled';
   const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
   return { content: [
     kind === 'control' ? `<@${setup.createdBy}>` : '',
-    `**${setup.divisionDisplayName} ${status} — setup #${setup.id}**`,
+    `**${setup.divisionDisplayName} Scout ${status}**`,
     `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
     setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
     unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
     readiness,
-    completion ? `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>. Roster edits are closed.` : '',
-    completion && !completion.posts_reconciled ? 'Discord post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
     setup.status === 'cancelled' && !setup.signupPostReconciled ? 'Cancelled in the records; public post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
     setup.status === 'roster_ready' ? 'Review and balance the roster here, then publish it to the signup channel.' : '',
     setup.status === 'published' && setup.resultMessageId
       ? `Roster: https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`
       : setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
   ].filter(Boolean).join('\n'),
-  components: completion ? (completion.posts_reconciled ? [] : [scoutFinishButtonRow(setup.id, setup.version, true)])
-    : setup.status === 'cancelled' && !setup.signupPostReconciled ? [scoutCancelButtonRow(setup.id, setup.version, true)]
+  components: setup.status === 'cancelled' && !setup.signupPostReconciled ? [scoutCancelButtonRow(setup.id, setup.version, true)]
     : setup.status === 'published' ? [managementRow(setup.id, setup.version), scoutFinishButtonRow(setup.id, setup.version)]
     : setup.status === 'open' ? [scoutCancelButtonRow(setup.id, setup.version)]
     : [],

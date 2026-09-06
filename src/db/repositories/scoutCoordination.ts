@@ -45,6 +45,7 @@ export function changeScoutOrganizerIfVersion(
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE id = ? AND version = ? AND status = 'published'
          AND result_message_id IS NOT NULL AND signup_post_reconciled = 1
+         AND NOT EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)
          AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)`,
     ).run(setupId, expectedVersion);
     if (claimed.changes !== 1 || !current) return 'stale';
@@ -52,6 +53,8 @@ export function changeScoutOrganizerIfVersion(
       `UPDATE scout_coordination SET organizer_user_id = ?,
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE setup_id = ?`,
     ).run(organizerUserId, setupId);
+    db.prepare("INSERT INTO scout_roster_updates (setup_id, version, notice) VALUES (?, ?, '')")
+      .run(setupId, expectedVersion + 1);
     appendScoutEvent(db, {
       setupId,
       setupVersion: expectedVersion + 1,

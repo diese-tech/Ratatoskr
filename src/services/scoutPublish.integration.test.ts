@@ -37,14 +37,25 @@ export function publishedFixture(path = ':memory:', gameCount = 1, published = t
   const messages = new Collection<string, any>();
   let editFailure = false;
   let noticeFailure = false;
-  const roster = { id: 'roster', content: '', author: { id: 'bot' },
-    edit: async (payload: any) => { roster.content = payload.content; if (editFailure) throw new Error('edit response lost'); return roster; } };
+  const roster = { id: 'roster', content: '', components: [] as any[], author: { id: 'bot' },
+    url: 'https://discord.com/channels/guild/signups/roster',
+    edit: async (payload: any) => { roster.content = payload.content; roster.components = payload.components ?? roster.components; if (editFailure) throw new Error('edit response lost'); return roster; } };
   messages.set('roster', roster);
   const channel = { id: 'signups', isTextBased: () => true, isSendable: () => true,
     messages: { fetch: async (query: any) => typeof query === 'string' ? messages.get(query) : messages },
-    send: async (payload: any) => { const message = { id: `notice-${messages.size}`, url: `https://discord.com/channels/guild/signups/notice-${messages.size}`, content: payload.content, author: { id: 'bot' } };
+    send: async (payload: any) => { const message = { id: `notice-${messages.size}`, url: `https://discord.com/channels/guild/signups/notice-${messages.size}`, content: payload.content, components: payload.components ?? [], author: { id: 'bot' } };
       messages.set(message.id, message); if (noticeFailure) throw new Error('send response lost'); return message; } };
-  const client = { user: { id: 'bot' }, channels: { fetch: async (id: string) => { assert.equal(id, 'signups'); return channel; } } } as unknown as Client;
+  const opsMessages = new Collection<string, any>();
+  const opsChannel = { id: 'ops', guildId: 'guild', isTextBased: () => true, isSendable: () => true,
+    messages: { fetch: async (query: any) => typeof query === 'string' ? opsMessages.get(query) : opsMessages },
+    send: async (payload: any) => {
+      const message: any = { id: `ops-${opsMessages.size + 1}`, content: payload.content, components: payload.components ?? [], author: { id: 'bot' },
+        edit: async (next: any) => { message.content = next.content; message.components = next.components; return message; },
+      };
+      opsMessages.set(message.id, message);
+      return message;
+    } };
+  const client = { user: { id: 'bot' }, channels: { fetch: async (id: string) => id === 'ops' ? opsChannel : channel } } as unknown as Client;
   const guild: any = { id: 'guild', roles: { cache: new Collection() }, members: { fetch: async (id: string) => ({
     id, guild, displayName: `Player ${id}`, user: { id, bot: false }, roles: { cache: new Collection(id === 'staff' ? [['manager', {}]] : []) },
   }) } };
@@ -81,7 +92,8 @@ test('first publication sends a separate roster into signups and preserves the o
     assert.equal(setup.signupPostReconciled, true);
     assert.equal(f.messages.size, 2);
     assert.match(signup.content, /Roster published: https:\/\/discord.com\/channels\/guild\/signups\//);
-    assert.match(f.messages.get(setup.resultMessageId!)!.content, /SCOUT-RESULT-1/);
+    assert.doesNotMatch(f.messages.get(setup.resultMessageId!)!.content, /SCOUT-/);
+    assert.match(JSON.stringify(f.messages.get(setup.resultMessageId!)!.components), /scout:publishedswap:1:/);
     const retry = f.interaction(`scout:publishconfirm:${f.setup.id}:0`);
     retry.channelId = 'ops';
     await handleScoutPublishButton(retry as unknown as ButtonInteraction, f.db);
@@ -121,7 +133,7 @@ test('database restart after commit recovers the original roster and sends its n
     assert.equal(getScoutRosterUpdate(recovered, f.setup.id)?.version, 1);
     await reconcilePendingScoutRosterUpdates(f.client, recovered);
     assert.match(f.roster.content, /after-crash/);
-    assert.match(f.roster.content, /SCOUT-RESULT-1/);
+    assert.doesNotMatch(f.roster.content, /SCOUT-/);
     assert.equal(getScoutRosterUpdate(recovered, f.setup.id), undefined);
     assert.equal(f.messages.size, 2);
     await reconcilePendingScoutRosterUpdates(f.client, recovered);
@@ -129,7 +141,7 @@ test('database restart after commit recovers the original roster and sends its n
   } finally { recovered.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('lost edit and notice responses converge without undoing state or duplicating notices', async () => {
+test('lost canonical edit response converges without undoing state or emitting a legacy notice', async () => {
   const f = publishedFixture();
   try {
     const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
@@ -137,13 +149,9 @@ test('lost edit and notice responses converge without undoing state or duplicati
     await handleScoutPublishedUserSelect(f.interaction(`scout:publisheduser:${f.setup.id}:0:${slot.id}`, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
     assert.equal(getScoutRosterUpdate(f.db, f.setup.id)?.message_reconciled, 0);
     f.failEdit(false);
-    f.failNotice(true);
-    await reconcilePendingScoutRosterUpdates(f.client, f.db);
-    assert.equal(getScoutRosterUpdate(f.db, f.setup.id)?.notice_attempted, 1);
-    assert.equal(f.messages.size, 2, 'Discord accepted the notice before the response was lost');
     await reconcilePendingScoutRosterUpdates(f.client, f.db);
     assert.equal(getScoutRosterUpdate(f.db, f.setup.id), undefined);
-    assert.equal(f.messages.size, 2);
+    assert.equal(f.messages.size, 1);
     assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((s) => s.id === slot.id)?.userId, 'replacement');
   } finally { f.db.close(); }
 });
@@ -200,7 +208,9 @@ for (const gameCount of [1, 2]) {
       assert.equal(after.find((s) => s.id === selected.id)?.userId, 'replacement');
       assert.deepEqual(after.filter((s) => s.id !== selected.id).map((s) => [s.id, s.userId]), before.filter((s) => s.id !== selected.id).map((s) => [s.id, s.userId]));
       assert.match(f.roster.content, /replacement/);
-      assert.ok([...f.messages.values()].some((m) => m.content.includes(`Game ${gameCount} Chaos Carry`) && m.content.includes(selected.userId) && m.content.includes('replacement')));
+      assert.equal(f.messages.size, 1, 'the canonical roster edit replaces legacy change notices');
+      assert.equal((f.db.prepare("SELECT kind FROM scout_notifications WHERE setup_id = ? ORDER BY id DESC LIMIT 1")
+        .get(f.setup.id) as { kind: string }).kind, 'replacement_notice');
       const first = after.find((s) => s.id !== selected.id)!;
       await handleScoutPublishButton(f.interaction(`scout:publishedswap:${f.setup.id}:${version + 1}`) as unknown as ButtonInteraction, f.db);
       const firstMenu = f.replies.at(-1).components[0].toJSON().components[0];

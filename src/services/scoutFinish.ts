@@ -2,10 +2,10 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, RESTJSONErr
   type ButtonInteraction, type Client } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { finishScoutSetupIfVersion, getScoutCompletion, getScoutSetupById, listPendingScoutCompletions,
-  listScoutRosterSlots, markScoutCompletionReconciled, type ScoutSetup } from '../db/index.js';
+  listScoutGameHosts, listScoutRosterSlots, markScoutCompletionReconciled, type ScoutSetup } from '../db/index.js';
 import { canManageScoutOperationsSetup } from './scoutCancel.js';
 import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
-import { renderPersistedScoutResult } from './scoutPublish.js';
+import { renderPersistedScoutResult, scoutResultLinkRow, scoutRosterLinkRow } from './scoutPublish.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
@@ -16,7 +16,14 @@ export function scoutFinishButtonRow(setupId: number, version: number, retry = f
     .setLabel(retry ? 'Retry post cleanup' : 'Finish scout').setStyle(ButtonStyle.Secondary));
 }
 
-async function finishPost(client: Client, setup: ScoutSetup, channelId: string, messageId: string | null, content: string) {
+async function finishPost(
+  client: Client,
+  setup: ScoutSetup,
+  channelId: string,
+  messageId: string | null,
+  content: string,
+  components: ActionRowBuilder<ButtonBuilder>[] = [],
+) {
   if (!messageId) return;
   try {
     const channel = await client.channels.fetch(channelId);
@@ -24,7 +31,7 @@ async function finishPost(client: Client, setup: ScoutSetup, channelId: string, 
       throw new Error('The original Scout post channel is unavailable or belongs to another guild.');
     }
     const message = await channel.messages.fetch(messageId);
-    await message.edit({ content, components: [], allowedMentions: { parse: [] } });
+    await message.edit({ content, components, allowedMentions: { parse: [] } });
   } catch (error) {
     const code = Number((error as { code?: number })?.code);
     if (code !== RESTJSONErrorCodes.UnknownMessage && code !== RESTJSONErrorCodes.UnknownChannel) throw error;
@@ -40,9 +47,11 @@ export async function reconcileFinishedScoutPost(client: Client, db: Database.Da
     if (!completion.posts_reconciled) {
       const finished = `✅ **This scout is finished. Roster changes are closed.**`;
       await finishPost(client, setup, setup.signupChannelId, setup.signupMessageId,
-        `${renderScoutSignupPost(setup)}\n\n${finished}\nRoster: https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`);
+        `${renderScoutSignupPost(setup)}\n\n${finished}`,
+        [scoutResultLinkRow(setup, 'View final roster')]);
       await finishPost(client, setup, setup.resultsChannelId, setup.resultMessageId,
-        `${renderPersistedScoutResult(setup, listScoutRosterSlots(db, setupId))}\n\n${finished}`);
+        `${renderPersistedScoutResult(setup, listScoutRosterSlots(db, setupId), listScoutGameHosts(db, setupId))}\n\n${finished}`,
+        [scoutRosterLinkRow(setup)]);
       markScoutCompletionReconciled(db, setupId);
     }
   } catch (error) {
@@ -100,7 +109,7 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
       return true;
     }
     if (action === 'finish' && !existing) {
-      await interaction.editReply({ content: `Finish **${setup.divisionDisplayName} scout #${setup.id}** at <t:${setup.startAt}:F>? This keeps the roster and signup history, closes player edits, and cannot be undone.`,
+      await interaction.editReply({ content: `Finish the **${setup.divisionDisplayName} Scout** at <t:${setup.startAt}:F>? This keeps the roster and signup history, closes player edits, and cannot be undone.`,
         components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder().setCustomId(`scout:finishconfirm:${setup.id}:${setup.version}`).setLabel('Confirm finish').setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId(`scout:finishkeep:${setup.id}:${setup.version}`).setLabel('Keep open').setStyle(ButtonStyle.Secondary),

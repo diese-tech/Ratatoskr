@@ -76,9 +76,11 @@ export function reconcileWorkingScoutRoster(
   eligibleSignups: readonly ScoutSignupRecord[],
   source: 'signup' | 'startup' | 'membership' | 'refresh',
   actorUserId?: string | null,
+  expectedVersion?: number,
 ): ReconcileScoutWorkingRosterOutcome {
   const setup = getScoutSetupById(db, setupId);
   if (!setup || !['open', 'roster_ready'].includes(setup.status)) return 'stale';
+  if (expectedVersion !== undefined && setup.version !== expectedVersion) return 'stale';
   const fixedSlots = listScoutRosterSlots(db, setupId)
     .filter((slot) => slot.staffAssigned)
     .map((slot) => ({
@@ -93,7 +95,7 @@ export function reconcileWorkingScoutRoster(
   });
   return reconcileScoutWorkingRoster(db, {
     setupId,
-    expectedVersion: setup.version,
+    expectedVersion: expectedVersion ?? setup.version,
     slots: generated.slots,
     source,
     actorUserId,

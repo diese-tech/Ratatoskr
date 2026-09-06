@@ -8,7 +8,7 @@ export function renderScoutResult(
     gameCount?: 1 | 2;
     hosts?: readonly { gameNumber: 1 | 2; lobbyHostUserId: string }[];
   },
-  slots: readonly ScoutRosterSlot[],
+  slots: readonly (ScoutRosterSlot & { replacementNeeded?: boolean })[],
 ): string {
   const lines = [
     `**${setup.divisionDisplayName} Scout Roster — <t:${setup.startAt}:F>**`,
@@ -24,7 +24,9 @@ export function renderScoutResult(
         const slot = slots.find((candidate) =>
           (candidate.gameNumber ?? 1) === gameNumber && candidate.team === team && candidate.role === role,
         );
-        lines.push(`${SCOUT_ROLE_LABELS[role]}: ${slot ? `<@${slot.userId}>` : '_empty_'}`);
+        lines.push(`${SCOUT_ROLE_LABELS[role]}: ${slot
+          ? `<@${slot.userId}>${slot.replacementNeeded ? ' ⚠️ _replacement needed_' : ''}`
+          : '_empty_'}`);
       }
     }
   }

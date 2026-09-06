@@ -33,7 +33,6 @@ import {
   markScoutRosterUpdateEdited,
   markScoutRosterNoticeAttempted,
   completeScoutRosterUpdate,
-  replacePublishedScoutRosterSlotIfVersion,
   replacePublishedScoutRosterCandidateIfVersion,
   setScoutPendingResultMessage,
   swapPublishedScoutRosterSlotsIfVersion,
@@ -51,14 +50,6 @@ import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { eligibleScoutSignups, isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
 import { withFinalScoutReadiness } from './scoutReadiness.js';
 import { rankScoutReplacementCandidates } from './scoutReplacementCandidates.js';
-
-export function scoutResultMarker(setupId: number): string {
-  return `SCOUT-RESULT-${setupId}`;
-}
-
-export function hasExactScoutMarker(content: string, marker: string): boolean {
-  return content.split('\n').some((line) => line.trim() === marker || line.trim() === `\`${marker}\``);
-}
 
 export function renderPersistedScoutResult(
   setup: ScoutSetup,
@@ -632,10 +623,6 @@ async function withPublishedDivisionGuard(
   try { return await work(); } finally { release(); }
 }
 
-export function scoutRosterUpdateMarker(setupId: number, version: number): string {
-  return `SCOUT-UPDATE-${setupId}-${version}`;
-}
-
 // Must run under the same division guard as live published edits.
 async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Database, setupId: number): Promise<void> {
   const pending = getScoutRosterUpdate(db, setupId);
@@ -667,6 +654,14 @@ async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Dat
   markScoutRosterNoticeAttempted(db, setupId, pending.version);
   await channel.send({ content: pending.notice, allowedMentions: { parse: [] } });
   completeScoutRosterUpdate(db, setupId, pending.version);
+}
+
+export async function reconcileScoutPublishedPresentation(
+  client: Client,
+  db: Database.Database,
+  setupId: number,
+): Promise<void> {
+  await reconcileScoutRosterUpdateLocked(client, db, setupId);
 }
 
 async function finishPublishedUpdate(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {

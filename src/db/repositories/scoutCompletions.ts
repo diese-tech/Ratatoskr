@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { getScoutSetupById } from './scoutSetups.js';
+import { appendScoutEvent } from './scoutEvents.js';
 
 export type ScoutCompletion = { setup_id: number; finished_by: string; finished_at: string; posts_reconciled: 0 | 1 };
 
@@ -27,6 +28,16 @@ export function finishScoutSetupIfVersion(db: Database.Database, setupId: number
       || db.prepare('SELECT 1 FROM scout_roster_updates WHERE setup_id = ?').get(setupId)) return 'pending';
     db.prepare('INSERT INTO scout_completions (setup_id, finished_by) VALUES (?, ?)').run(setupId, actorId);
     db.prepare("UPDATE scout_setups SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(setupId);
+    const skippedNotifications = db.prepare(
+      "UPDATE scout_notifications SET state = 'skipped', skipped_reason = 'finished' WHERE setup_id = ? AND state = 'scheduled'",
+    ).run(setupId).changes;
+    appendScoutEvent(db, {
+      setupId,
+      setupVersion: setup.version + 1,
+      eventType: 'scout_finished',
+      actorUserId: actorId,
+      payload: { skippedNotifications },
+    });
     return 'finished';
   })();
 }

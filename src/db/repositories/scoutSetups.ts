@@ -1047,6 +1047,8 @@ export function markScoutPlayerUnavailableIfVersion(
       `UPDATE scout_roster_slots SET replacement_needed = 1, replacement_requested_at = ?,
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
     ).run(requestedAt, slot.id);
+    db.prepare("INSERT INTO scout_roster_updates (setup_id, version, notice) VALUES (?, ?, '')")
+      .run(input.setupId, input.expectedVersion + 1);
 
     const currentHost = db.prepare(
       'SELECT lobby_host_user_id FROM scout_game_hosts WHERE setup_id = ? AND game_number = ?',
@@ -1089,6 +1091,15 @@ export function markScoutPlayerUnavailableIfVersion(
       eventType: 'lobby_host_reassigned',
       actorUserId: input.userId,
       payload: { gameNumber: slot.gameNumber, previousUserId: input.userId, lobbyHostUserId: newHostUserId },
+    });
+    if (newHostUserId) scheduleScoutNotification(db, {
+      setupId: input.setupId,
+      gameNumber: slot.gameNumber as 1 | 2,
+      kind: 'host_change',
+      dedupeKey: `host-change:${input.setupId}:${input.expectedVersion + 1}`,
+      nonce: `c${input.setupId}-${input.expectedVersion + 1}`,
+      channelId: setup.resultsChannelId,
+      dueAt: input.now,
     });
     return {
       status: 'updated',
@@ -1165,6 +1176,15 @@ export function replacePublishedScoutRosterCandidateIfVersion(
       kind: 'replacement_notice',
       dedupeKey: `replacement:${input.setupId}:${input.expectedVersion + 1}`,
       nonce: `r${input.setupId}-${input.expectedVersion + 1}`,
+      channelId: setup.resultsChannelId,
+      dueAt: input.now,
+    });
+    if (newHostUserId) scheduleScoutNotification(db, {
+      setupId: input.setupId,
+      gameNumber: slot.gameNumber as 1 | 2,
+      kind: 'host_change',
+      dedupeKey: `host-change:${input.setupId}:${input.expectedVersion + 1}`,
+      nonce: `c${input.setupId}-${input.expectedVersion + 1}`,
       channelId: setup.resultsChannelId,
       dueAt: input.now,
     });

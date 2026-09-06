@@ -63,7 +63,7 @@ export async function canManageScoutOperationsSetup(
 
 function confirmation(setup: ScoutSetup) {
   return {
-    content: `Cancel **${setup.divisionDisplayName} scout setup #${setup.id}** at <t:${setup.startAt}:F>? Signups will close and this cannot be undone.${setup.signupMessageId ? `\nhttps://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : ''}`,
+    content: `Cancel the **${setup.divisionDisplayName} Scout** at <t:${setup.startAt}:F>? Signups will close and this cannot be undone.${setup.signupMessageId ? `\nhttps://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : ''}`,
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -155,7 +155,7 @@ async function showCancellationPage(
     .setPlaceholder('Choose an active scout posting')
     .addOptions(setups.slice(page * 25, (page + 1) * 25).map((setup) => new StringSelectMenuOptionBuilder()
       .setLabel(`${setup.divisionDisplayName.slice(0, 35)} — ${format.format(setup.startAt * 1000)}`.slice(0, 100))
-      .setDescription(`#${setup.id} · ${setup.status === 'roster_ready' ? 'Roster ready' : 'Accepting signups'}`)
+      .setDescription(setup.status === 'roster_ready' ? 'Roster ready' : 'Accepting signups')
       .setValue(`${setup.id}:${setup.version}`)));
   const components: (ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>)[] = [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)];
   if (pages > 1) components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -257,7 +257,7 @@ export async function handleScoutCancelButton(
       await interaction.editReply({
         content: error
           ? `This setup is cancelled, but its post still could not be repaired: ${error}`
-          : `Scout setup #${setup.id} was already cancelled; its signup post is now reconciled.`,
+          : 'That Scout was already cancelled; its signup post is now reconciled.',
       });
       return true;
     }
@@ -284,10 +284,10 @@ export async function handleScoutCancelButton(
 
     const postError = await reconcileCancelledScoutSignupPost(interaction.client, db, setup);
     if (!postError) {
-      await interaction.editReply({ content: `Scout setup #${setup.id} was cancelled.`, components: [] });
+      await interaction.editReply({ content: 'Scout setup cancelled.', components: [] });
     } else {
       await interaction.editReply({
-        content: `Scout setup #${setup.id} was cancelled, but its original post could not be updated: ${postError}. Ratatoskr will retry automatically after restart; you can also use this button to retry now.`,
+        content: `The Scout was cancelled, but its original post could not be updated: ${postError}. Ratatoskr will retry automatically after restart; you can also use this button to retry now.`,
         components: [scoutCancelButtonRow(setup.id, setup.version)],
       });
     }
