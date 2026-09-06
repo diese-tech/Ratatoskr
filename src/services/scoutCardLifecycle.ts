@@ -1,12 +1,14 @@
 import { RESTJSONErrorCodes, type Client, type Message, type TextBasedChannel } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard,
-  readScoutReadinessSnapshot, listScoutReadinessSetupIds, getScoutCompletion, type ScoutSetup } from '../db/index.js';
+  readScoutReadinessSnapshot, listScoutReadinessSetupIds, getScoutCompletion,
+  listScoutRosterSlots, listScoutSignups, withdrawnScoutRosterUserIds, type ScoutSetup } from '../db/index.js';
 import { renderScoutReadiness } from '../domain/scoutReadiness.js';
+import { SCOUT_ROLE_LABELS } from '../domain/index.js';
 import { captureScoutReadiness } from './scoutReadiness.js';
-import { scoutReviewButtonRow } from './scoutReview.js';
+import { buildScoutWorkingRosterView } from './scoutReview.js';
 import { scoutCancelButtonRow } from './scoutCancel.js';
-import { managementRow } from './scoutPublish.js';
+import { managementRow, scoutResultLinkRow } from './scoutPublish.js';
 import { scoutFinishButtonRow } from './scoutFinish.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 
@@ -24,9 +26,6 @@ async function withCardLock<T>(db: Database.Database, setupId: number, action: (
   finally { release(); if (entries.get(setupId) === tail) entries.delete(setupId); }
 }
 
-export function scoutCardMarker(setupId: number, kind: 'telemetry' | 'control'): string {
-  return kind === 'telemetry' ? `SCOUT-TELEMETRY-${setupId}` : `SCOUT-CONTROL-${setupId}`;
-}
 const missingMessage = (error: unknown) => Number((error as { code?: number })?.code) === 10008;
 // These API responses reject message creation. Transport errors and unknown
 // responses retain the attempt marker because delivery may still have occurred.
@@ -34,18 +33,21 @@ const rejectedSend = (error: unknown) => new Set<number>([
   RESTJSONErrorCodes.UnknownChannel, RESTJSONErrorCodes.MissingAccess,
   RESTJSONErrorCodes.MissingPermissions, RESTJSONErrorCodes.InvalidFormBodyOrContentType,
 ]).has(Number((error as { code?: number })?.code));
-const exactMarker = (content: string, marker: string) => content.split('\n').some((line) => line.trim() === `\`${marker}\`` || line.trim() === marker);
+function hasSetupScopedControl(message: Message, setupId: number): boolean {
+  const serialized = JSON.stringify(message.components);
+  return new RegExp(`scout:(?:[^\"\\\\:]+:){1,3}${setupId}(?::|\")`).test(serialized);
+}
 
 async function getMessage(channel: TextBasedChannel, messageId: string): Promise<Message | undefined> {
   try { return await channel.messages.fetch(messageId); }
   catch (error) { if (missingMessage(error)) return undefined; throw error; }
 }
 
-async function findCard(channel: TextBasedChannel, botId: string, marker: string): Promise<Message | undefined> {
+async function findCard(channel: TextBasedChannel, botId: string, setupId: number): Promise<Message | undefined> {
   let before: string | undefined;
   while (true) {
     const page = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
-    const found = page.find((message) => message.author.id === botId && exactMarker(message.content, marker));
+    const found = page.find((message) => message.author.id === botId && hasSetupScopedControl(message, setupId));
     if (found || page.size < 100) return found;
     before = page.last()?.id;
     if (!before) throw new Error('Could not finish Scout card history lookup.');
@@ -53,33 +55,71 @@ async function findCard(channel: TextBasedChannel, botId: string, marker: string
 }
 
 function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 'control', notify: boolean, unavailable?: string) {
-  const saved = readScoutReadinessSnapshot(ensureScoutReadinessCard(db, setup.id));
   const completion = getScoutCompletion(db, setup.id);
+  if (completion) {
+    return {
+      content: [
+        `**✓ ${setup.divisionDisplayName} Scout finished**`,
+        `<t:${setup.startAt}:t>`,
+        `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>.`,
+        completion.posts_reconciled ? '' : 'Discord post cleanup is pending. Retry after access is restored.',
+      ].filter(Boolean).join('\n'),
+      components: completion.posts_reconciled
+        ? [scoutResultLinkRow(setup, 'View final roster')]
+        : [scoutResultLinkRow(setup, 'View final roster'), scoutFinishButtonRow(setup.id, setup.version, true)],
+      allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
+    };
+  }
+  if (!getScoutCompletion(db, setup.id) && ['open', 'roster_ready'].includes(setup.status)) {
+    const unavailableUsers = new Set(withdrawnScoutRosterUserIds(db, setup.id));
+    const view = buildScoutWorkingRosterView(
+      setup,
+      listScoutRosterSlots(db, setup.id),
+      listScoutSignups(db, setup.id),
+      unavailableUsers,
+    );
+    return {
+      ...view,
+      content: [notify ? `<@${setup.createdBy}>` : '', unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '', view.content]
+        .filter(Boolean).join('\n'),
+      allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] },
+    };
+  }
+  if (!getScoutCompletion(db, setup.id) && setup.status === 'published' && setup.resultMessageId) {
+    const replacementSlots = listScoutRosterSlots(db, setup.id).filter((slot) => slot.replacementNeeded);
+    return {
+      content: replacementSlots.length
+        ? [
+          `**⚠️ ${setup.divisionDisplayName} Scout · replacement needed**`,
+          `<t:${setup.startAt}:t> · ${replacementSlots.map((slot) => `${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]}`).join(', ')}`,
+        ].join('\n')
+        : `**✓ ${setup.divisionDisplayName} Scout filled**\n<t:${setup.startAt}:t>`,
+      components: [scoutResultLinkRow(setup), scoutFinishButtonRow(setup.id, setup.version)],
+      allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
+    };
+  }
+  const saved = readScoutReadinessSnapshot(ensureScoutReadinessCard(db, setup.id));
   const terminal = ['published', 'cancelled'].includes(setup.status);
-  const status = completion ? 'finished' : setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
+  const status = setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
     : setup.status === 'published' ? 'published' : 'cancelled';
   const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
   return { content: [
     kind === 'control' ? `<@${setup.createdBy}>` : '',
-    `**${setup.divisionDisplayName} ${status} — setup #${setup.id}**`,
+    `**${setup.divisionDisplayName} Scout ${status}**`,
     `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
     setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
     unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
     readiness,
-    completion ? `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>. Roster edits are closed.` : '',
-    completion && !completion.posts_reconciled ? 'Discord post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
     setup.status === 'cancelled' && !setup.signupPostReconciled ? 'Cancelled in the records; public post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
     setup.status === 'roster_ready' ? 'Review and balance the roster here, then publish it to the signup channel.' : '',
     setup.status === 'published' && setup.resultMessageId
       ? `Roster: https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`
       : setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
-    `\`${scoutCardMarker(setup.id, kind)}\``,
   ].filter(Boolean).join('\n'),
-  components: completion ? (completion.posts_reconciled ? [] : [scoutFinishButtonRow(setup.id, setup.version, true)])
-    : setup.status === 'cancelled' && !setup.signupPostReconciled ? [scoutCancelButtonRow(setup.id, setup.version, true)]
+  components: setup.status === 'cancelled' && !setup.signupPostReconciled ? [scoutCancelButtonRow(setup.id, setup.version, true)]
     : setup.status === 'published' ? [managementRow(setup.id, setup.version), scoutFinishButtonRow(setup.id, setup.version)]
     : setup.status === 'open' ? [scoutCancelButtonRow(setup.id, setup.version)]
-    : setup.status === 'roster_ready' && kind === 'control' ? [scoutReviewButtonRow(setup.id, setup.version)] : [],
+    : [],
   allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] } };
 }
 
@@ -123,7 +163,7 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         if (setup.status !== previousStatus) continue;
       }
       let telemetry = state.telemetry_message_id ? await getMessage(channel, state.telemetry_message_id) : undefined;
-      if (!telemetry && !state.telemetry_message_id) telemetry = await findCard(channel, client.user.id, scoutCardMarker(setupId, 'telemetry'));
+      if (!telemetry && !state.telemetry_message_id) telemetry = await findCard(channel, client.user.id, setupId);
       if (telemetry && !state.telemetry_message_id) {
         patchScoutReadinessCard(db, setupId, { telemetry_message_id: telemetry.id, telemetry_attempted: 1 });
         state = ensureScoutReadinessCard(db, setupId);
@@ -131,7 +171,11 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
       if (setup.status !== 'open') {
         // A lost send response could still materialize a temporary message.
         if (!telemetry && state.telemetry_attempted && !state.telemetry_message_id) throw new Error('Scout telemetry send is uncertain; retain its marker before creating a ready panel.');
-        if (telemetry) {
+        if (telemetry && !setup.controlMessageId) {
+          db.prepare('UPDATE scout_setups SET control_message_id = ? WHERE id = ?').run(telemetry.id, setupId);
+          patchScoutReadinessCard(db, setupId, { telemetry_message_id: null, telemetry_attempted: 0 });
+          setup = getScoutSetupById(db, setupId)!;
+        } else if (telemetry && setup.controlMessageId !== telemetry.id) {
           if (setup.status === 'cancelled' && !setup.controlMessageId) {
             await editCard(telemetry, cardView(db, setup, 'telemetry', false));
             return outcome;
@@ -157,7 +201,7 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
       setup = getScoutSetupById(db, setupId)!;
       state = ensureScoutReadinessCard(db, setupId);
       let control = setup.controlMessageId ? await getMessage(channel, setup.controlMessageId) : undefined;
-      if (!control) control = await findCard(channel, client.user.id, scoutCardMarker(setupId, 'control'));
+      if (!control) control = await findCard(channel, client.user.id, setupId);
       if (!control) {
         if (state.control_attempted && !setup.controlMessageId) throw new Error('Scout ready-panel send is uncertain; waiting for marker recovery.');
         // An open setup cancelled before its first card has nothing to notify.

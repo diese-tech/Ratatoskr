@@ -12,7 +12,7 @@ import {
 } from '../db/repositories/scoutSetups.js';
 import type { ScoutSetup } from '../db/types.js';
 import { SCOUT_ROLES, SCOUT_TEAMS } from '../domain/index.js';
-import { renderScoutControlPanelPrompt, scoutControlPanelMarker } from './scoutControlPanel.js';
+import { renderScoutControlPanelPrompt } from './scoutControlPanel.js';
 import { ensureScoutControlPanel } from './scoutControlPanel.js';
 
 const setup = {
@@ -26,8 +26,8 @@ test('roster-ready control panel identifies the setup, pings its creator, and ex
   const view = renderScoutControlPanelPrompt(setup);
   assert.match(view.content, /<@captain-1>/);
   assert.match(view.content, /Vanaheim/);
-  assert.match(view.content, /setup #42/);
-  assert.match(view.content, new RegExp(scoutControlPanelMarker(42)));
+  assert.doesNotMatch(view.content, /#42/);
+  assert.doesNotMatch(view.content, /SCOUT-/);
   assert.deepEqual(view.allowedMentions, { parse: [], users: ['captain-1'], roles: [] });
   assert.deepEqual(
     view.components[0]?.toJSON().components.map((component) => 'custom_id' in component ? component.custom_id : undefined),

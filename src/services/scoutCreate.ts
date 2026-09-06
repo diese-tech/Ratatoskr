@@ -48,12 +48,18 @@ import { renderScoutSignupPost } from './scoutSignupPost.js';
 const DRAFT_TTL_MS = 15 * 60 * 1_000;
 const CUSTOM_ID_PREFIX = 'scout:create:';
 
-export function scoutSignupMarker(setupId: number): string {
-  return `SCOUT-SIGNUP-${setupId}`;
+export function renderPersistedScoutSignupPost(setup: ScoutSetup): string {
+  return renderScoutSignupPost(setup);
 }
 
-export function renderPersistedScoutSignupPost(setup: ScoutSetup): string {
-  return `${renderScoutSignupPost(setup)}\n\n\`${scoutSignupMarker(setup.id)}\``;
+function signupCorrelationRow(setupId: number) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`scout:signup:${setupId}`)
+      .setLabel('Scout signup')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
+  );
 }
 
 async function findRecoverableSignupMessage(
@@ -66,11 +72,11 @@ async function findRecoverableSignupMessage(
   setupId: number,
 ): Promise<Message | undefined> {
   if (!botUserId) return undefined;
-  const marker = scoutSignupMarker(setupId);
   let before: string | undefined;
   while (true) {
     const page = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
-    const found = page.find((message) => message.author.id === botUserId && message.content.includes(marker));
+    const found = page.find((message) => message.author.id === botUserId
+      && JSON.stringify(message.components).includes(`scout:signup:${setupId}`));
     if (found || page.size < 100) return found;
     before = page.last()?.id;
     if (!before) return undefined;
@@ -93,7 +99,7 @@ export async function ensurePostedScoutSetup(
   if (!message) {
     message = await channel.send({
       content: renderPersistedScoutSignupPost(setup),
-      components: [],
+      components: [signupCorrelationRow(setup.id)],
       allowedMentions: { parse: [], roles: [setup.divisionRoleId], users: [] },
     });
   }

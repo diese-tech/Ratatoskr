@@ -96,6 +96,37 @@ export function scheduleScoutNotification(
   return { created: result.changes === 1, notification };
 }
 
+export type ScheduleScoutNotificationWithCooldownInput = ScheduleScoutNotificationInput & {
+  cooldownSince: number;
+};
+
+export type ScheduleScoutNotificationWithCooldownResult =
+  | { status: 'created'; notification: ScoutNotification }
+  | { status: 'cooldown'; notification: ScoutNotification };
+
+export function scheduleScoutNotificationIfCooldownAvailable(
+  db: Database.Database,
+  input: ScheduleScoutNotificationWithCooldownInput,
+): ScheduleScoutNotificationWithCooldownResult {
+  return db.transaction((): ScheduleScoutNotificationWithCooldownResult => {
+    const row = db.prepare(
+      `SELECT * FROM scout_notifications
+       WHERE setup_id = ? AND kind = ? AND game_number IS ?
+         AND state IN ('scheduled', 'attempted', 'sent')
+         AND (due_at >= ? OR attempted_at >= ?)
+       ORDER BY id DESC LIMIT 1`,
+    ).get(
+      input.setupId, input.kind, input.gameNumber ?? null,
+      input.cooldownSince, input.cooldownSince,
+    ) as ScoutNotificationRow | undefined;
+    if (row) return { status: 'cooldown', notification: toScoutNotification(row) };
+    const result = scheduleScoutNotification(db, input);
+    return result.created
+      ? { status: 'created', notification: result.notification }
+      : { status: 'cooldown', notification: result.notification };
+  })();
+}
+
 export function listDueScoutNotifications(
   db: Database.Database,
   dueAt: number,

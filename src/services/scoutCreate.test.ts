@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { scoutSignupEmojiIds, scoutSignupMarker } from './scoutCreate.js';
+import { renderPersistedScoutSignupPost, scoutSignupEmojiIds } from './scoutCreate.js';
+import type { ScoutSetup } from '../db/index.js';
 
 const required = {
   solo: 'solo',
@@ -28,6 +29,14 @@ test('new signup posts seed optional Fill last and omit it when skipped', () => 
   ]);
 });
 
-test('signup posts have a setup-specific restart recovery marker', () => {
-  assert.equal(scoutSignupMarker(42), 'SCOUT-SIGNUP-42');
+test('signup post content does not expose its restart correlation identifier', () => {
+  const content = renderPersistedScoutSignupPost({
+    id: 42,
+    divisionDisplayName: 'Vanaheim',
+    divisionRoleId: 'division-role',
+    startAt: 2_000_000_000,
+    roleLimit: 2,
+    emojiByRole: required,
+  } as ScoutSetup);
+  assert.doesNotMatch(content, /SCOUT-|scout:signup/);
 });

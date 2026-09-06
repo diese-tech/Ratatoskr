@@ -18,23 +18,25 @@ import {
 import type Database from 'better-sqlite3';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
 import {
-  claimScoutPublish,
+  prepareScoutPublication,
   getDivisionByKey,
   getScoutConfig,
   getScoutSetupById,
   listScoutPublishesNeedingReconciliation,
   listScoutRosterSlots,
+  listScoutSignups,
+  listScoutGameHosts,
   markPublishedScoutSignupPostReconciled,
-  releaseScoutPublishClaim,
   getScoutRosterUpdate,
   getScoutCompletion,
   listScoutRosterUpdates,
   markScoutRosterUpdateEdited,
   markScoutRosterNoticeAttempted,
   completeScoutRosterUpdate,
-  replacePublishedScoutRosterSlotIfVersion,
+  replacePublishedScoutRosterCandidateIfVersion,
   setScoutPendingResultMessage,
   swapPublishedScoutRosterSlotsIfVersion,
+  type ScoutGameHost,
   type ScoutSetup,
 } from '../db/index.js';
 import {
@@ -45,20 +47,57 @@ import {
 import { renderScoutResult } from './scoutResults.js';
 import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
-import { isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
-import { renderPersistedScoutSignupPost } from './scoutCreate.js';
+import { eligibleScoutSignups, isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
 import { withFinalScoutReadiness } from './scoutReadiness.js';
+import { rankScoutReplacementCandidates } from './scoutReplacementCandidates.js';
 
-export function scoutResultMarker(setupId: number): string {
-  return `SCOUT-RESULT-${setupId}`;
+export function renderPersistedScoutResult(
+  setup: ScoutSetup,
+  slots: ReturnType<typeof listScoutRosterSlots>,
+  hosts: readonly ScoutGameHost[] = [],
+): string {
+  return renderScoutResult({ ...setup, hosts }, slots);
 }
 
-export function hasExactScoutMarker(content: string, marker: string): boolean {
-  return content.split('\n').some((line) => line.trim() === marker || line.trim() === `\`${marker}\``);
+function resultHasSetupControls(message: { components: unknown }, setupId: number): boolean {
+  return new RegExp(`scout:(?:published[^\"\\\\:]*|cantplay|pingorganizer):${setupId}(?::|\")`)
+    .test(JSON.stringify(message.components));
 }
 
-export function renderPersistedScoutResult(setup: ScoutSetup, slots: ReturnType<typeof listScoutRosterSlots>): string {
-  return `${renderScoutResult(setup, slots)}\n\n\`${scoutResultMarker(setup.id)}\``;
+export function scoutRosterLinkRow(setup: ScoutSetup, label = 'View original signup') {
+  if (!setup.signupMessageId) return new ActionRowBuilder<ButtonBuilder>();
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setLabel(label)
+      .setStyle(ButtonStyle.Link)
+      .setURL(`https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}`),
+  );
+}
+
+export function scoutResultLinkRow(setup: ScoutSetup, label = 'View roster') {
+  if (!setup.resultMessageId) return new ActionRowBuilder<ButtonBuilder>();
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setLabel(label)
+      .setStyle(ButtonStyle.Link)
+      .setURL(`https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`),
+  );
+}
+
+export function publishedRosterRows(setup: ScoutSetup) {
+  const publicRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`scout:cantplay:${setup.id}:${setup.version}`)
+      .setLabel("Can't play").setStyle(ButtonStyle.Danger),
+    ...Array.from({ length: setup.gameCount }, (_, index) => new ButtonBuilder()
+      .setCustomId(`scout:pingorganizer:${setup.id}:${setup.version}:${index + 1}`)
+      .setLabel(setup.gameCount === 1 ? 'Ping organizer' : `Ping organizer · Game ${index + 1}`)
+      .setStyle(ButtonStyle.Secondary)),
+    ...(setup.signupMessageId ? [new ButtonBuilder()
+      .setLabel('View original signup')
+      .setStyle(ButtonStyle.Link)
+      .setURL(`https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}`)] : []),
+  );
+  return [managementRow(setup.id, setup.version), publicRow];
 }
 
 async function findRecoverableResultMessage(client: Client, setup: ScoutSetup) {
@@ -71,7 +110,7 @@ async function findRecoverableResultMessage(client: Client, setup: ScoutSetup) {
   while (true) {
     const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     const found = messages.find((message) =>
-      message.author.id === client.user?.id && hasExactScoutMarker(message.content, scoutResultMarker(setup.id)));
+      message.author.id === client.user?.id && resultHasSetupControls(message, setup.id));
     if (found || messages.size < 100) return found;
     before = messages.last()?.id;
     if (!before) return undefined;
@@ -91,9 +130,20 @@ async function attachRecoveredScoutResult(
   const signupChannel = await client.channels.fetch(setup.signupChannelId);
   if (!signupChannel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
   const signupMessage = await signupChannel.messages.fetch(setup.signupMessageId);
+  const current = getScoutSetupById(db, setup.id) ?? setup;
+  const currentHosts = listScoutGameHosts(db, setup.id);
+  if ('edit' in resultMessage && typeof resultMessage.edit === 'function') {
+    await resultMessage.edit({
+      content: renderScoutResult({ ...current, hosts: currentHosts }, listScoutRosterSlots(db, setup.id)),
+      components: publishedRosterRows(current),
+      allowedMentions: { parse: [] },
+    });
+  }
   await signupMessage.edit({
     content: `${renderScoutSignupPost(setup)}\n\n✅ Roster published: ${resultMessage.url}`,
-    components: [],
+    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setLabel('View roster').setStyle(ButtonStyle.Link).setURL(resultMessage.url),
+    )],
     allowedMentions: { parse: [] },
   });
   if (!setup.signupPostReconciled && !markPublishedScoutSignupPostReconciled(db, setup.id, resultMessage.id)) {
@@ -107,10 +157,7 @@ export async function reconcilePendingScoutPublishes(client: Client, db: Databas
     try {
       const resultMessage = await findRecoverableResultMessage(client, setup);
       if (!resultMessage) {
-        if (!releaseScoutPublishClaim(db, setup.id)) {
-          throw new Error('No result post was found and the publish claim could not be released.');
-        }
-        continue;
+        throw new Error('Publication is claimed but the result send is delivery-uncertain; no automatic resend was attempted.');
       }
       await attachRecoveredScoutResult(client, db, setup, resultMessage);
     } catch (error) {
@@ -129,6 +176,12 @@ export function managementRow(setupId: number, version: number) {
       .setCustomId(`scout:publishedreplace:${setupId}:${version}`)
       .setLabel('Replace player')
       .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`scout:pingroster:${setupId}:${version}`)
+      .setLabel('Ping roster').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`scout:changehost:${setupId}:${version}`)
+      .setLabel('Change host').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`scout:changeorganizer:${setupId}:${version}`)
+      .setLabel('Change organizer').setStyle(ButtonStyle.Secondary),
   );
 }
 
@@ -154,12 +207,17 @@ async function authorized(
 
 export async function handleScoutPublishButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
   const parts = interaction.customId.split(':');
-  if (parts[0] !== 'scout' || !['publish', 'publishconfirm', 'publishback', 'publishedreplace', 'publishedswap'].includes(parts[1] ?? '')) return false;
+  if (parts[0] !== 'scout' || ![
+    'publish', 'publishconfirm', 'publishback', 'publishedreplace', 'publishedswap',
+    'publishedcandidateconfirm', 'publishedcandidateback',
+  ].includes(parts[1] ?? '')) return false;
   const setupId = Number(parts[2]);
   const expectedVersion = Number(parts[3]);
   if (!Number.isInteger(setupId) || !Number.isInteger(expectedVersion)) return false;
-  const publishedAction = ['publishedreplace', 'publishedswap'].includes(parts[1] ?? '');
-  if (publishedAction) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const publishedAction = [
+    'publishedreplace', 'publishedswap', 'publishedcandidateconfirm', 'publishedcandidateback',
+  ].includes(parts[1] ?? '');
+  if (publishedAction || parts[1] === 'publish') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   else await interaction.deferUpdate();
   return withPublishedDivisionGuard(interaction, db, setupId, async () => {
     let setup = await authorized(interaction, db, setupId, publishedAction ? 'published' : 'roster_ready');
@@ -180,6 +238,38 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     if (parts[1] === 'publishback') {
       const { buildScoutRosterReviewView } = await import('./scoutReview.js');
       await interaction.editReply(buildScoutRosterReviewView(db, setup.id, setup.version, listScoutRosterSlots(db, setup.id)));
+      return true;
+    }
+    if (parts[1] === 'publishedcandidateback') {
+      await interaction.editReply({ content: 'Replacement cancelled.', components: [] });
+      return true;
+    }
+    if (parts[1] === 'publishedcandidateconfirm') {
+      const slotId = Number(parts[4]);
+      const userId = parts[5];
+      if (!Number.isInteger(slotId) || !userId) return false;
+      const slots = listScoutRosterSlots(db, setupId);
+      const target = slots.find((slot) => slot.id === slotId);
+      const member = await interaction.guild!.members.fetch(userId).catch(() => undefined);
+      const eligibleSignups = await eligibleScoutSignups(
+        interaction.guild!, listScoutSignups(db, setupId), setup.eligibilityRoleId,
+      );
+      const candidate = target && rankScoutReplacementCandidates(
+        eligibleSignups, new Set(slots.map((slot) => slot.userId)), target.role,
+      ).find((item) => item.userId === userId);
+      if (!target || !member || !isScoutUserEligible(member.roles.cache.keys(), setup.eligibilityRoleId) || !candidate) {
+        await interaction.editReply({ content: 'That replacement candidate is no longer eligible or unseated.', components: [] });
+        return true;
+      }
+      const outcome = replacePublishedScoutRosterCandidateIfVersion(db, {
+        setupId, expectedVersion, slotId, userId, actorUserId: interaction.user.id,
+        allowExplicitMember: false, now: Math.floor(Date.now() / 1_000),
+      });
+      if (outcome !== 'updated') {
+        await interaction.editReply({ content: `No replacement was made (${outcome}).`, components: [] });
+        return true;
+      }
+      await finishPublishedUpdate(interaction, db, setupId);
       return true;
     }
     if (parts[1] === 'publish') {
@@ -241,10 +331,12 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       return true;
     }
     const claim = await withFinalScoutReadiness(interaction.client, db, setupId,
-      () => claimScoutPublish(db, setupId, expectedVersion));
-    if (claim !== 'claimed') {
+      () => prepareScoutPublication(db, {
+        setupId, expectedVersion, now: Math.floor(Date.now() / 1000),
+      }));
+    if (claim.status !== 'claimed') {
       await interaction.editReply({
-        content: claim === 'withdrawals' ? 'Publishing is blocked by one or more withdrawn signups.' : 'That publish confirmation is stale or already completed.',
+        content: claim.status === 'withdrawals' ? 'Publishing is blocked by one or more withdrawn signups.' : 'That publish confirmation is stale or already completed.',
         components: [],
       });
       return true;
@@ -255,16 +347,12 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     setup = getScoutSetupById(db, setupId)!;
     const slots = listScoutRosterSlots(db, setupId);
     let resultMessage;
-    let signupMessage;
-    let signupPostUpdated = false;
-    let resultSendAttempted = false;
     try {
       const channel = await interaction.client.channels.fetch(setup.resultsChannelId);
       if (!channel?.isSendable()) throw new Error('The snapshotted results channel is not sendable.');
-      resultSendAttempted = true;
       resultMessage = await channel.send({
-        content: renderPersistedScoutResult(setup, slots),
-        components: [managementRow(setupId, setup.version)],
+        content: renderScoutResult({ ...setup, hosts: listScoutGameHosts(db, setupId) }, slots),
+        components: publishedRosterRows(setup),
         allowedMentions: { parse: [], users: slots.map((slot) => slot.userId), roles: [] },
       });
       if (!setScoutPendingResultMessage(db, setupId, resultMessage.id)) {
@@ -273,35 +361,21 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
 
       const signupChannel = await interaction.client.channels.fetch(setup.signupChannelId);
       if (!signupChannel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
-      signupMessage = await signupChannel.messages.fetch(setup.signupMessageId);
+      const signupMessage = await signupChannel.messages.fetch(setup.signupMessageId);
       await signupMessage.edit({
         content: `${renderScoutSignupPost(setup)}\n\n✅ Roster published: ${resultMessage.url}`,
-        components: [],
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setLabel('View roster').setStyle(ButtonStyle.Link).setURL(resultMessage.url),
+        )],
         allowedMentions: { parse: [] },
       });
-      signupPostUpdated = true;
       if (!markPublishedScoutSignupPostReconciled(db, setupId, resultMessage.id)) {
         throw new Error('Could not record the updated signup post.');
       }
     } catch (error) {
       const report = await reportOperationalError(interaction.client, db, { guildId: setup.guildId, setupId, action: 'Scout publication' }, error);
-      const resultDeleted = resultMessage
-        ? await resultMessage.delete().then(() => true, () => false)
-        : !resultSendAttempted;
-      const released = resultDeleted
-        ? releaseScoutPublishClaim(db, setupId, resultMessage?.id)
-        : false;
-      if (signupPostUpdated && signupMessage) {
-        await signupMessage.edit({
-          content: renderPersistedScoutSignupPost(setup),
-          components: [],
-          allowedMentions: { parse: [] },
-        }).catch(() => undefined);
-      }
       await interaction.editReply({
-        content: released
-          ? `Publishing failed and is ready to retry: ${operationalErrorGuidance(report)}`
-          : `Publishing was interrupted after the result post was created. Ratatoskr kept the publish claim and will reconcile it on restart: ${operationalErrorGuidance(report)}`,
+        content: `Publishing was interrupted after the database claim. Ratatoskr kept the authoritative publish state for safe recovery: ${operationalErrorGuidance(report)}`,
         components: [],
       });
       return true;
@@ -317,6 +391,57 @@ export async function handleScoutPublishedSlotSelect(
   db: Database.Database,
 ): Promise<boolean> {
   const parts = interaction.customId.split(':');
+  if (parts[0] === 'scout' && parts[1] === 'publishedcandidate') {
+    const setupId = Number(parts[2]);
+    const version = Number(parts[3]);
+    const slotId = Number(parts[4]);
+    const userId = interaction.values[0];
+    if (![setupId, version, slotId].every(Number.isInteger) || !userId) return false;
+    await interaction.deferUpdate();
+    return withPublishedDivisionGuard(interaction, db, setupId, async () => {
+      const setup = await authorized(interaction, db, setupId, 'published');
+      if (!setup || setup.version !== version || await rejectFinishedScout(interaction, db, setupId)) {
+        if (!setup || setup.version !== version) await interaction.editReply({ content: 'This roster view is stale.', components: [] });
+        return true;
+      }
+      const slots = listScoutRosterSlots(db, setupId);
+      const target = slots.find((slot) => slot.id === slotId);
+      const member = await interaction.guild!.members.fetch(userId).catch(() => undefined);
+      const eligibleSignups = await eligibleScoutSignups(
+        interaction.guild!, listScoutSignups(db, setupId), setup.eligibilityRoleId,
+      );
+      const candidate = target && rankScoutReplacementCandidates(
+        eligibleSignups, new Set(slots.map((slot) => slot.userId)), target.role,
+      ).find((item) => item.userId === userId);
+      if (!target || !member || !isScoutUserEligible(member.roles.cache.keys(), setup.eligibilityRoleId) || !candidate) {
+        await interaction.editReply({ content: 'That replacement candidate is no longer eligible or unseated.', components: [] });
+        return true;
+      }
+      if (candidate.offRole) {
+        await interaction.editReply({
+          content: `⚠️ ${formatScoutSlotLabel(target)} is outside <@${userId}>'s declared roles.`,
+          components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(`scout:publishedcandidateconfirm:${setupId}:${version}:${slotId}:${userId}`)
+              .setLabel('Replace anyway').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`scout:publishedcandidateback:${setupId}:${version}`)
+              .setLabel('Cancel').setStyle(ButtonStyle.Secondary),
+          )],
+          allowedMentions: { parse: [] },
+        });
+        return true;
+      }
+      const outcome = replacePublishedScoutRosterCandidateIfVersion(db, {
+        setupId, expectedVersion: version, slotId, userId, actorUserId: interaction.user.id,
+        allowExplicitMember: false, now: Math.floor(Date.now() / 1_000),
+      });
+      if (outcome !== 'updated') {
+        await interaction.editReply({ content: `No replacement was made (${outcome}).`, components: [] });
+        return true;
+      }
+      await finishPublishedUpdate(interaction, db, setupId);
+      return true;
+    });
+  }
   if (parts[0] !== 'scout' || !['publishedpick', 'publishedswapfirst', 'publishedswapsecond'].includes(parts[1] ?? '')) return false;
   const setupId = Number(parts[2]);
   const version = Number(parts[3]);
@@ -372,19 +497,49 @@ export async function handleScoutPublishedSlotSelect(
         await interaction.editReply({ content: 'The published result message is unavailable; no swap was made.', components: [] });
         return true;
       }
-      if (!swapPublishedScoutRosterSlotsIfVersion(db, setupId, version, firstSlotId, slotId)) {
+      if (!swapPublishedScoutRosterSlotsIfVersion(
+        db, setupId, version, firstSlotId, slotId, interaction.user.id,
+      )) {
         await interaction.editReply({ content: 'That result view was stale; no swap was made.', components: [] });
         return true;
       }
       await finishPublishedUpdate(interaction, db, setupId);
       return true;
     }
-    const menu = new UserSelectMenuBuilder()
-      .setCustomId(`scout:publisheduser:${setupId}:${version}:${slotId}`)
-      .setPlaceholder('Choose a non-rostered replacement');
+    const slots = listScoutRosterSlots(db, setupId);
+    const target = slots.find((slot) => slot.id === slotId);
+    if (!target) {
+      await interaction.editReply({ content: 'That roster slot is no longer available.', components: [] });
+      return true;
+    }
+    const eligibleSignups = await eligibleScoutSignups(
+      interaction.guild!, listScoutSignups(db, setupId), setup.eligibilityRoleId,
+    );
+    const candidates = rankScoutReplacementCandidates(
+      eligibleSignups, new Set(slots.map((slot) => slot.userId)), target.role,
+    );
+    const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+    if (candidates.length) {
+      const shown = candidates.slice(0, 25);
+      const names = await resolveScoutPlayerNames(interaction.guild!, shown.map((candidate) => candidate.userId));
+      rows.push(new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`scout:publishedcandidate:${setupId}:${version}:${slotId}`)
+          .setPlaceholder('Signup replacement')
+          .addOptions(shown.map((candidate) => new StringSelectMenuOptionBuilder()
+            .setLabel(`${names.get(candidate.userId) ?? candidate.userId}${candidate.offRole ? ' (off-role)' : ''}`.slice(0, 100))
+            .setDescription(candidate.roles.map((role) => role === 'fill' ? 'Fill' : role).join(', ').slice(0, 100))
+            .setValue(candidate.userId))),
+      ));
+    }
+    rows.push(new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId(`scout:publisheduser:${setupId}:${version}:${slotId}`)
+        .setPlaceholder('Or choose an explicit eligible member'),
+    ));
     await interaction.editReply({
-      content: 'Choose the replacement. Existing roster members will be rejected.',
-      components: [new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(menu)],
+      content: `Choose the replacement for ${formatScoutSlotLabel(target)}.${candidates.length > 25 ? ` Showing the first 25 of ${candidates.length} signup candidates; the explicit member picker remains available.` : ''}`,
+      components: rows,
   });
   return true;
   });
@@ -441,7 +596,10 @@ export async function handleScoutPublishedUserSelect(
       await interaction.editReply({ content: 'The published result message was deleted or cannot be accessed; no replacement was made.', components: [] });
       return true;
     }
-    const outcome = replacePublishedScoutRosterSlotIfVersion(db, setupId, version, slotId, userId);
+    const outcome = replacePublishedScoutRosterCandidateIfVersion(db, {
+      setupId, expectedVersion: version, slotId, userId, actorUserId: interaction.user.id,
+      allowExplicitMember: true, now: Math.floor(Date.now() / 1_000),
+    });
     if (outcome !== 'updated' || !oldSlot) {
       await interaction.editReply({ content: `No replacement was made (${outcome}).`, components: [] });
       return true;
@@ -465,10 +623,6 @@ async function withPublishedDivisionGuard(
   try { return await work(); } finally { release(); }
 }
 
-export function scoutRosterUpdateMarker(setupId: number, version: number): string {
-  return `SCOUT-UPDATE-${setupId}-${version}`;
-}
-
 // Must run under the same division guard as live published edits.
 async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Database, setupId: number): Promise<void> {
   const pending = getScoutRosterUpdate(db, setupId);
@@ -481,31 +635,33 @@ async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Dat
   if (!channel?.isTextBased()) throw new Error('The roster channel is unavailable.');
   if (!pending.message_reconciled) {
     const message = await channel.messages.fetch(setup.resultMessageId);
-    await message.edit({ content: renderPersistedScoutResult(setup, listScoutRosterSlots(db, setupId)),
-      components: [managementRow(setupId, setup.version)], allowedMentions: { parse: [] } });
+    await message.edit({
+      content: renderPersistedScoutResult(
+        setup, listScoutRosterSlots(db, setupId), listScoutGameHosts(db, setupId),
+      ),
+      components: publishedRosterRows(setup), allowedMentions: { parse: [] },
+    });
     markScoutRosterUpdateEdited(db, setupId, pending.version);
   }
-  const marker = scoutRosterUpdateMarker(setupId, pending.version);
+  if (!pending.notice.trim()) {
+    completeScoutRosterUpdate(db, setupId, pending.version);
+    return;
+  }
   if (pending.notice_attempted) {
-    let before: string | undefined;
-    while (true) {
-      const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
-      if (messages.some((message) => message.author.id === client.user?.id && hasExactScoutMarker(message.content, marker))) {
-        completeScoutRosterUpdate(db, setupId, pending.version);
-        return;
-      }
-      if (messages.size < 100) break;
-      const next = messages.last()?.id;
-      if (!next || next === before) break;
-      before = next;
-    }
-    // A send could still have been applied: absence does not permit a resend.
     throw new Error('Roster is updated; notice delivery is uncertain. Inspect the channel and pending update before manual reconciliation.');
   }
   if (!channel.isSendable()) throw new Error('Roster is updated; the notice channel is not sendable.');
   markScoutRosterNoticeAttempted(db, setupId, pending.version);
-  await channel.send({ content: pending.notice + '\n\n' + marker, allowedMentions: { parse: [] } });
+  await channel.send({ content: pending.notice, allowedMentions: { parse: [] } });
   completeScoutRosterUpdate(db, setupId, pending.version);
+}
+
+export async function reconcileScoutPublishedPresentation(
+  client: Client,
+  db: Database.Database,
+  setupId: number,
+): Promise<void> {
+  await reconcileScoutRosterUpdateLocked(client, db, setupId);
 }
 
 async function finishPublishedUpdate(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {

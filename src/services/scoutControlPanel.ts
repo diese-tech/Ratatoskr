@@ -4,18 +4,13 @@ import { getScoutSetupById, type ScoutSetup } from '../db/index.js';
 import { scoutReviewButtonRow } from './scoutReview.js';
 import { refreshScoutStatusCard, reconcileScoutStatusCards } from './scoutCardLifecycle.js';
 
-export function scoutControlPanelMarker(setupId: number): string {
-  return `SCOUT-CONTROL-${setupId}`;
-}
-
 export function renderScoutControlPanelPrompt(setup: ScoutSetup, notifyCreator = true) {
   return {
     content: [
       `<@${setup.createdBy}>`,
-      `**${setup.divisionDisplayName} roster ready — setup #${setup.id}**`,
+      `**${setup.divisionDisplayName} Scout roster ready**`,
       `Start: <t:${setup.startAt}:F>`,
       'Review and balance the roster here, then publish it to the division signup channel.',
-      `\`${scoutControlPanelMarker(setup.id)}\``,
     ].join('\n'),
     components: [scoutReviewButtonRow(setup.id)],
     allowedMentions: { parse: [] as never[], users: notifyCreator ? [setup.createdBy] : [], roles: [] as string[] },
