@@ -14,6 +14,7 @@ import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
 import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } from './services/scoutPublish.js';
 import { reportOperationalError } from './services/operationalErrors.js';
 import { handleInteractionError } from './services/interactionErrors.js';
+import { startScoutNotificationWorker } from './services/scoutNotifications.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -32,7 +33,10 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 });
 
+let stopScoutNotificationWorker: (() => void) | undefined;
+
 async function shutdown() {
+  stopScoutNotificationWorker?.();
   await client.destroy();
   closeDatabase(db);
   process.exit(0);
@@ -81,6 +85,8 @@ client.once('clientReady', async () => {
   console.log('Finished scout posts reconciled.');
   await reconcileScoutControlPanels(client, db);
   console.log('Scout control panels reconciled.');
+  stopScoutNotificationWorker = await startScoutNotificationWorker(client, db);
+  console.log('Scout notification worker started.');
 });
 
 client.on('interactionCreate', async (interaction) => {

@@ -37,6 +37,8 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   }
 
   if (interaction.isStringSelectMenu()) {
+    const { handleScoutCoordinationStringSelect } = await import('../services/scoutCoordination.js');
+    if (await handleScoutCoordinationStringSelect(interaction, db)) return;
     const { handleScoutCancelSelect } = await import('../services/scoutCancel.js');
     if (await handleScoutCancelSelect(interaction, db)) return;
     const { handleScoutReviewStringSelect } = await import('../services/scoutReview.js');
@@ -46,6 +48,8 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   }
 
   if (interaction.isUserSelectMenu()) {
+    const { handleScoutCoordinationUserSelect } = await import('../services/scoutCoordination.js');
+    if (await handleScoutCoordinationUserSelect(interaction, db)) return;
     const { handleScoutReviewUserSelect } = await import('../services/scoutReview.js');
     if (await handleScoutReviewUserSelect(interaction, db)) return;
     const { handleScoutPublishedUserSelect } = await import('../services/scoutPublish.js');
@@ -53,6 +57,8 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   }
 
   if (interaction.isButton()) {
+    const { handleScoutCoordinationButton } = await import('../services/scoutCoordination.js');
+    if (await handleScoutCoordinationButton(interaction, db)) return;
     const { handleScoutAvailabilityButton } = await import('../services/scoutAvailability.js');
     if (await handleScoutAvailabilityButton(interaction, db)) return;
     const { handleScoutFillSkipButton } = await import('../services/scoutEmojiBinding.js');

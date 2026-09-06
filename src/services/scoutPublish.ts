@@ -97,6 +97,10 @@ export function publishedRosterRows(setup: ScoutSetup) {
   const publicRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(`scout:cantplay:${setup.id}:${setup.version}`)
       .setLabel("Can't play").setStyle(ButtonStyle.Danger),
+    ...Array.from({ length: setup.gameCount }, (_, index) => new ButtonBuilder()
+      .setCustomId(`scout:pingorganizer:${setup.id}:${setup.version}:${index + 1}`)
+      .setLabel(setup.gameCount === 1 ? 'Ping organizer' : `Ping organizer · Game ${index + 1}`)
+      .setStyle(ButtonStyle.Secondary)),
     ...(setup.signupMessageId ? [new ButtonBuilder()
       .setLabel('View original signup')
       .setStyle(ButtonStyle.Link)
@@ -181,6 +185,12 @@ export function managementRow(setupId: number, version: number) {
       .setCustomId(`scout:publishedreplace:${setupId}:${version}`)
       .setLabel('Replace player')
       .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`scout:pingroster:${setupId}:${version}`)
+      .setLabel('Ping roster').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`scout:changehost:${setupId}:${version}`)
+      .setLabel('Change host').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`scout:changeorganizer:${setupId}:${version}`)
+      .setLabel('Change organizer').setStyle(ButtonStyle.Secondary),
   );
 }
 
