@@ -1006,6 +1006,182 @@ export function swapPublishedScoutRosterSlotsIfVersion(
   })();
 }
 
+export type MarkScoutPlayerUnavailableInput = {
+  setupId: number;
+  expectedVersion: number;
+  userId: string;
+  now: number;
+  random?: () => number;
+};
+
+export type MarkScoutPlayerUnavailableOutcome =
+  | { status: 'updated' | 'unchanged'; slot: ScoutRosterSlotRecord; newHostUserId?: string }
+  | { status: 'stale' | 'not_rostered' };
+
+export function markScoutPlayerUnavailableIfVersion(
+  db: Database.Database,
+  input: MarkScoutPlayerUnavailableInput,
+): MarkScoutPlayerUnavailableOutcome {
+  return db.transaction((): MarkScoutPlayerUnavailableOutcome => {
+    const setup = getScoutSetupById(db, input.setupId);
+    if (!setup || setup.status !== 'published' || !setup.operationsChannelId ||
+        !setup.resultMessageId || !setup.signupPostReconciled ||
+        db.prepare('SELECT 1 FROM scout_completions WHERE setup_id = ?').get(input.setupId) ||
+        db.prepare('SELECT 1 FROM scout_roster_updates WHERE setup_id = ?').get(input.setupId)) {
+      return { status: 'stale' };
+    }
+    const slot = listScoutRosterSlots(db, input.setupId).find((candidate) => candidate.userId === input.userId);
+    if (!slot) return { status: 'not_rostered' };
+    if (slot.replacementNeeded) return { status: 'unchanged', slot };
+    if (setup.version !== input.expectedVersion) return { status: 'stale' };
+    const claimed = db.prepare(
+      `UPDATE scout_setups SET version = version + 1,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND version = ? AND status = 'published'
+         AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)
+         AND NOT EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)`,
+    ).run(input.setupId, input.expectedVersion);
+    if (claimed.changes !== 1) return { status: 'stale' };
+    const requestedAt = new Date(input.now * 1_000).toISOString();
+    db.prepare(
+      `UPDATE scout_roster_slots SET replacement_needed = 1, replacement_requested_at = ?,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
+    ).run(requestedAt, slot.id);
+
+    const currentHost = db.prepare(
+      'SELECT lobby_host_user_id FROM scout_game_hosts WHERE setup_id = ? AND game_number = ?',
+    ).get(input.setupId, slot.gameNumber) as { lobby_host_user_id: string } | undefined;
+    let newHostUserId: string | undefined;
+    if (currentHost?.lobby_host_user_id === input.userId) {
+      const candidates = db.prepare(
+        `SELECT user_id FROM scout_roster_slots
+         WHERE setup_id = ? AND game_number = ? AND user_id <> ? AND replacement_needed = 0 ORDER BY id`,
+      ).all(input.setupId, slot.gameNumber, input.userId) as { user_id: string }[];
+      if (candidates.length) {
+        const random = input.random ?? Math.random;
+        newHostUserId = candidates[Math.min(candidates.length - 1, Math.max(0, Math.floor(random() * candidates.length)))]!.user_id;
+        db.prepare(
+          `UPDATE scout_game_hosts SET lobby_host_user_id = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE setup_id = ? AND game_number = ?`,
+        ).run(newHostUserId, input.setupId, slot.gameNumber);
+      }
+    }
+    scheduleScoutNotification(db, {
+      setupId: input.setupId,
+      gameNumber: slot.gameNumber as 1 | 2,
+      kind: 'availability_alert',
+      dedupeKey: `availability:${input.setupId}:${slot.id}`,
+      nonce: `a${input.setupId}-${slot.id}`,
+      channelId: setup.operationsChannelId,
+      dueAt: input.now,
+    });
+    appendScoutEvent(db, {
+      setupId: input.setupId,
+      setupVersion: input.expectedVersion + 1,
+      eventType: 'replacement_requested',
+      actorUserId: input.userId,
+      payload: { slotId: slot.id, gameNumber: slot.gameNumber, team: slot.team, role: slot.role, newHostUserId },
+    });
+    if (newHostUserId) appendScoutEvent(db, {
+      setupId: input.setupId,
+      setupVersion: input.expectedVersion + 1,
+      eventType: 'lobby_host_reassigned',
+      actorUserId: input.userId,
+      payload: { gameNumber: slot.gameNumber, previousUserId: input.userId, lobbyHostUserId: newHostUserId },
+    });
+    return {
+      status: 'updated',
+      slot: { ...slot, replacementNeeded: true, replacementRequestedAt: requestedAt },
+      ...(newHostUserId ? { newHostUserId } : {}),
+    };
+  })();
+}
+
+export type ReplacePublishedScoutRosterCandidateInput = {
+  setupId: number;
+  expectedVersion: number;
+  slotId: number;
+  userId: string;
+  actorUserId: string;
+  allowExplicitMember: boolean;
+  now: number;
+  random?: () => number;
+};
+
+export function replacePublishedScoutRosterCandidateIfVersion(
+  db: Database.Database,
+  input: ReplacePublishedScoutRosterCandidateInput,
+): ReplaceScoutRosterSlotOutcome | 'ineligible' {
+  return db.transaction((): ReplaceScoutRosterSlotOutcome | 'ineligible' => {
+    const setup = getScoutSetupById(db, input.setupId);
+    const slot = listScoutRosterSlots(db, input.setupId).find((candidate) => candidate.id === input.slotId);
+    if (!setup || setup.status !== 'published' || setup.version !== input.expectedVersion ||
+        !setup.resultMessageId || !setup.signupPostReconciled || !slot ||
+        db.prepare('SELECT 1 FROM scout_completions WHERE setup_id = ?').get(input.setupId) ||
+        db.prepare('SELECT 1 FROM scout_roster_updates WHERE setup_id = ?').get(input.setupId)) return 'stale';
+    if (db.prepare('SELECT 1 FROM scout_roster_slots WHERE setup_id = ? AND user_id = ?')
+      .get(input.setupId, input.userId)) return 'duplicate';
+    const signups = db.prepare('SELECT role FROM scout_signups WHERE setup_id = ? AND user_id = ?')
+      .all(input.setupId, input.userId) as { role: ScoutSignupRole }[];
+    if (signups.length === 0 && !input.allowExplicitMember) return 'ineligible';
+    const offRole = !signups.some((signup) => signup.role === slot.role || signup.role === 'fill');
+    const claimed = db.prepare(
+      `UPDATE scout_setups SET version = version + 1,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND version = ? AND status = 'published'
+         AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)
+         AND NOT EXISTS (SELECT 1 FROM scout_roster_updates WHERE setup_id = scout_setups.id)`,
+    ).run(input.setupId, input.expectedVersion);
+    if (claimed.changes !== 1) return 'stale';
+    db.prepare(
+      `UPDATE scout_roster_slots SET user_id = ?, staff_assigned = 1, off_role = ?,
+       assigned_by_user_id = ?, replacement_needed = 0, replacement_requested_at = NULL,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
+    ).run(input.userId, offRole ? 1 : 0, input.actorUserId, input.slotId);
+
+    const currentHost = db.prepare(
+      'SELECT lobby_host_user_id FROM scout_game_hosts WHERE setup_id = ? AND game_number = ?',
+    ).get(input.setupId, slot.gameNumber) as { lobby_host_user_id: string } | undefined;
+    let newHostUserId: string | undefined;
+    if (currentHost?.lobby_host_user_id === slot.userId) {
+      const candidates = db.prepare(
+        `SELECT user_id FROM scout_roster_slots
+         WHERE setup_id = ? AND game_number = ? AND replacement_needed = 0 ORDER BY id`,
+      ).all(input.setupId, slot.gameNumber) as { user_id: string }[];
+      const random = input.random ?? Math.random;
+      newHostUserId = candidates[Math.min(candidates.length - 1, Math.max(0, Math.floor(random() * candidates.length)))]!.user_id;
+      db.prepare(
+        `UPDATE scout_game_hosts SET lobby_host_user_id = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE setup_id = ? AND game_number = ?`,
+      ).run(newHostUserId, input.setupId, slot.gameNumber);
+    }
+    db.prepare("INSERT INTO scout_roster_updates (setup_id, version, notice) VALUES (?, ?, '')")
+      .run(input.setupId, input.expectedVersion + 1);
+    scheduleScoutNotification(db, {
+      setupId: input.setupId,
+      gameNumber: slot.gameNumber as 1 | 2,
+      kind: 'replacement_notice',
+      dedupeKey: `replacement:${input.setupId}:${input.expectedVersion + 1}`,
+      nonce: `r${input.setupId}-${input.expectedVersion + 1}`,
+      channelId: setup.resultsChannelId,
+      dueAt: input.now,
+    });
+    appendScoutEvent(db, {
+      setupId: input.setupId,
+      setupVersion: input.expectedVersion + 1,
+      eventType: 'player_replaced',
+      actorUserId: input.actorUserId,
+      payload: {
+        slotId: slot.id, gameNumber: slot.gameNumber, team: slot.team, role: slot.role,
+        outgoingUserId: slot.userId, incomingUserId: input.userId, offRole, newHostUserId,
+      },
+    });
+    return 'updated';
+  })();
+}
+
 export type PrepareScoutPublicationInput = {
   setupId: number;
   expectedVersion: number;

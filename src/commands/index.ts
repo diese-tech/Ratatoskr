@@ -53,6 +53,8 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   }
 
   if (interaction.isButton()) {
+    const { handleScoutAvailabilityButton } = await import('../services/scoutAvailability.js');
+    if (await handleScoutAvailabilityButton(interaction, db)) return;
     const { handleScoutFillSkipButton } = await import('../services/scoutEmojiBinding.js');
     if (await handleScoutFillSkipButton(interaction, db)) return;
     const { handleScoutCreateButton } = await import('../services/scoutCreate.js');
