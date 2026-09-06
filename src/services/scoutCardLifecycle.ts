@@ -4,10 +4,11 @@ import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard,
   readScoutReadinessSnapshot, listScoutReadinessSetupIds, getScoutCompletion,
   listScoutRosterSlots, listScoutSignups, withdrawnScoutRosterUserIds, type ScoutSetup } from '../db/index.js';
 import { renderScoutReadiness } from '../domain/scoutReadiness.js';
+import { SCOUT_ROLE_LABELS } from '../domain/index.js';
 import { captureScoutReadiness } from './scoutReadiness.js';
 import { buildScoutWorkingRosterView } from './scoutReview.js';
 import { scoutCancelButtonRow } from './scoutCancel.js';
-import { managementRow } from './scoutPublish.js';
+import { managementRow, scoutResultLinkRow } from './scoutPublish.js';
 import { scoutFinishButtonRow } from './scoutFinish.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 
@@ -70,6 +71,19 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
       content: [notify ? `<@${setup.createdBy}>` : '', unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '', view.content]
         .filter(Boolean).join('\n'),
       allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] },
+    };
+  }
+  if (!getScoutCompletion(db, setup.id) && setup.status === 'published' && setup.resultMessageId) {
+    const replacementSlots = listScoutRosterSlots(db, setup.id).filter((slot) => slot.replacementNeeded);
+    return {
+      content: replacementSlots.length
+        ? [
+          `**⚠️ ${setup.divisionDisplayName} Scout · replacement needed**`,
+          `<t:${setup.startAt}:t> · ${replacementSlots.map((slot) => `${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]}`).join(', ')}`,
+        ].join('\n')
+        : `**✓ ${setup.divisionDisplayName} Scout filled**\n<t:${setup.startAt}:t>`,
+      components: [scoutResultLinkRow(setup)],
+      allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
     };
   }
   const saved = readScoutReadinessSnapshot(ensureScoutReadinessCard(db, setup.id));

@@ -18,14 +18,14 @@ import {
 import type Database from 'better-sqlite3';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
 import {
-  claimScoutPublish,
+  prepareScoutPublication,
   getDivisionByKey,
   getScoutConfig,
   getScoutSetupById,
   listScoutPublishesNeedingReconciliation,
   listScoutRosterSlots,
+  listScoutGameHosts,
   markPublishedScoutSignupPostReconciled,
-  releaseScoutPublishClaim,
   getScoutRosterUpdate,
   getScoutCompletion,
   listScoutRosterUpdates,
@@ -35,6 +35,7 @@ import {
   replacePublishedScoutRosterSlotIfVersion,
   setScoutPendingResultMessage,
   swapPublishedScoutRosterSlotsIfVersion,
+  type ScoutGameHost,
   type ScoutSetup,
 } from '../db/index.js';
 import {
@@ -46,7 +47,6 @@ import { renderScoutResult } from './scoutResults.js';
 import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
-import { renderPersistedScoutSignupPost } from './scoutCreate.js';
 import { withFinalScoutReadiness } from './scoutReadiness.js';
 
 export function scoutResultMarker(setupId: number): string {
@@ -57,8 +57,41 @@ export function hasExactScoutMarker(content: string, marker: string): boolean {
   return content.split('\n').some((line) => line.trim() === marker || line.trim() === `\`${marker}\``);
 }
 
-export function renderPersistedScoutResult(setup: ScoutSetup, slots: ReturnType<typeof listScoutRosterSlots>): string {
-  return `${renderScoutResult(setup, slots)}\n\n\`${scoutResultMarker(setup.id)}\``;
+export function renderPersistedScoutResult(
+  setup: ScoutSetup,
+  slots: ReturnType<typeof listScoutRosterSlots>,
+  hosts: readonly ScoutGameHost[] = [],
+): string {
+  return renderScoutResult({ ...setup, hosts }, slots);
+}
+
+function resultHasSetupControls(message: { components: unknown }, setupId: number): boolean {
+  return new RegExp(`scout:(?:published[^\"\\\\:]*|cantplay|pingorganizer):${setupId}(?::|\")`)
+    .test(JSON.stringify(message.components));
+}
+
+export function scoutRosterLinkRow(setup: ScoutSetup, label = 'View original signup') {
+  if (!setup.signupMessageId) return new ActionRowBuilder<ButtonBuilder>();
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setLabel(label)
+      .setStyle(ButtonStyle.Link)
+      .setURL(`https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}`),
+  );
+}
+
+export function scoutResultLinkRow(setup: ScoutSetup, label = 'View roster') {
+  if (!setup.resultMessageId) return new ActionRowBuilder<ButtonBuilder>();
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setLabel(label)
+      .setStyle(ButtonStyle.Link)
+      .setURL(`https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`),
+  );
+}
+
+export function publishedRosterRows(setup: ScoutSetup) {
+  return [managementRow(setup.id, setup.version), scoutRosterLinkRow(setup)];
 }
 
 async function findRecoverableResultMessage(client: Client, setup: ScoutSetup) {
@@ -71,7 +104,7 @@ async function findRecoverableResultMessage(client: Client, setup: ScoutSetup) {
   while (true) {
     const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     const found = messages.find((message) =>
-      message.author.id === client.user?.id && hasExactScoutMarker(message.content, scoutResultMarker(setup.id)));
+      message.author.id === client.user?.id && resultHasSetupControls(message, setup.id));
     if (found || messages.size < 100) return found;
     before = messages.last()?.id;
     if (!before) return undefined;
@@ -91,9 +124,20 @@ async function attachRecoveredScoutResult(
   const signupChannel = await client.channels.fetch(setup.signupChannelId);
   if (!signupChannel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
   const signupMessage = await signupChannel.messages.fetch(setup.signupMessageId);
+  const current = getScoutSetupById(db, setup.id) ?? setup;
+  const currentHosts = listScoutGameHosts(db, setup.id);
+  if ('edit' in resultMessage && typeof resultMessage.edit === 'function') {
+    await resultMessage.edit({
+      content: renderScoutResult({ ...current, hosts: currentHosts }, listScoutRosterSlots(db, setup.id)),
+      components: publishedRosterRows(current),
+      allowedMentions: { parse: [] },
+    });
+  }
   await signupMessage.edit({
     content: `${renderScoutSignupPost(setup)}\n\n✅ Roster published: ${resultMessage.url}`,
-    components: [],
+    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setLabel('View roster').setStyle(ButtonStyle.Link).setURL(resultMessage.url),
+    )],
     allowedMentions: { parse: [] },
   });
   if (!setup.signupPostReconciled && !markPublishedScoutSignupPostReconciled(db, setup.id, resultMessage.id)) {
@@ -107,10 +151,7 @@ export async function reconcilePendingScoutPublishes(client: Client, db: Databas
     try {
       const resultMessage = await findRecoverableResultMessage(client, setup);
       if (!resultMessage) {
-        if (!releaseScoutPublishClaim(db, setup.id)) {
-          throw new Error('No result post was found and the publish claim could not be released.');
-        }
-        continue;
+        throw new Error('Publication is claimed but the result send is delivery-uncertain; no automatic resend was attempted.');
       }
       await attachRecoveredScoutResult(client, db, setup, resultMessage);
     } catch (error) {
@@ -159,7 +200,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
   const expectedVersion = Number(parts[3]);
   if (!Number.isInteger(setupId) || !Number.isInteger(expectedVersion)) return false;
   const publishedAction = ['publishedreplace', 'publishedswap'].includes(parts[1] ?? '');
-  if (publishedAction) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  if (publishedAction || parts[1] === 'publish') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   else await interaction.deferUpdate();
   return withPublishedDivisionGuard(interaction, db, setupId, async () => {
     let setup = await authorized(interaction, db, setupId, publishedAction ? 'published' : 'roster_ready');
@@ -241,10 +282,12 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       return true;
     }
     const claim = await withFinalScoutReadiness(interaction.client, db, setupId,
-      () => claimScoutPublish(db, setupId, expectedVersion));
-    if (claim !== 'claimed') {
+      () => prepareScoutPublication(db, {
+        setupId, expectedVersion, now: Math.floor(Date.now() / 1000),
+      }));
+    if (claim.status !== 'claimed') {
       await interaction.editReply({
-        content: claim === 'withdrawals' ? 'Publishing is blocked by one or more withdrawn signups.' : 'That publish confirmation is stale or already completed.',
+        content: claim.status === 'withdrawals' ? 'Publishing is blocked by one or more withdrawn signups.' : 'That publish confirmation is stale or already completed.',
         components: [],
       });
       return true;
@@ -255,16 +298,12 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     setup = getScoutSetupById(db, setupId)!;
     const slots = listScoutRosterSlots(db, setupId);
     let resultMessage;
-    let signupMessage;
-    let signupPostUpdated = false;
-    let resultSendAttempted = false;
     try {
       const channel = await interaction.client.channels.fetch(setup.resultsChannelId);
       if (!channel?.isSendable()) throw new Error('The snapshotted results channel is not sendable.');
-      resultSendAttempted = true;
       resultMessage = await channel.send({
-        content: renderPersistedScoutResult(setup, slots),
-        components: [managementRow(setupId, setup.version)],
+        content: renderScoutResult({ ...setup, hosts: listScoutGameHosts(db, setupId) }, slots),
+        components: publishedRosterRows(setup),
         allowedMentions: { parse: [], users: slots.map((slot) => slot.userId), roles: [] },
       });
       if (!setScoutPendingResultMessage(db, setupId, resultMessage.id)) {
@@ -273,35 +312,21 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
 
       const signupChannel = await interaction.client.channels.fetch(setup.signupChannelId);
       if (!signupChannel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
-      signupMessage = await signupChannel.messages.fetch(setup.signupMessageId);
+      const signupMessage = await signupChannel.messages.fetch(setup.signupMessageId);
       await signupMessage.edit({
         content: `${renderScoutSignupPost(setup)}\n\n✅ Roster published: ${resultMessage.url}`,
-        components: [],
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setLabel('View roster').setStyle(ButtonStyle.Link).setURL(resultMessage.url),
+        )],
         allowedMentions: { parse: [] },
       });
-      signupPostUpdated = true;
       if (!markPublishedScoutSignupPostReconciled(db, setupId, resultMessage.id)) {
         throw new Error('Could not record the updated signup post.');
       }
     } catch (error) {
       const report = await reportOperationalError(interaction.client, db, { guildId: setup.guildId, setupId, action: 'Scout publication' }, error);
-      const resultDeleted = resultMessage
-        ? await resultMessage.delete().then(() => true, () => false)
-        : !resultSendAttempted;
-      const released = resultDeleted
-        ? releaseScoutPublishClaim(db, setupId, resultMessage?.id)
-        : false;
-      if (signupPostUpdated && signupMessage) {
-        await signupMessage.edit({
-          content: renderPersistedScoutSignupPost(setup),
-          components: [],
-          allowedMentions: { parse: [] },
-        }).catch(() => undefined);
-      }
       await interaction.editReply({
-        content: released
-          ? `Publishing failed and is ready to retry: ${operationalErrorGuidance(report)}`
-          : `Publishing was interrupted after the result post was created. Ratatoskr kept the publish claim and will reconcile it on restart: ${operationalErrorGuidance(report)}`,
+        content: `Publishing was interrupted after the database claim. Ratatoskr kept the authoritative publish state for safe recovery: ${operationalErrorGuidance(report)}`,
         components: [],
       });
       return true;
@@ -481,8 +506,12 @@ async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Dat
   if (!channel?.isTextBased()) throw new Error('The roster channel is unavailable.');
   if (!pending.message_reconciled) {
     const message = await channel.messages.fetch(setup.resultMessageId);
-    await message.edit({ content: renderPersistedScoutResult(setup, listScoutRosterSlots(db, setupId)),
-      components: [managementRow(setupId, setup.version)], allowedMentions: { parse: [] } });
+    await message.edit({
+      content: renderPersistedScoutResult(
+        setup, listScoutRosterSlots(db, setupId), listScoutGameHosts(db, setupId),
+      ),
+      components: publishedRosterRows(setup), allowedMentions: { parse: [] },
+    });
     markScoutRosterUpdateEdited(db, setupId, pending.version);
   }
   const marker = scoutRosterUpdateMarker(setupId, pending.version);

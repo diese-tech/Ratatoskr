@@ -3,6 +3,8 @@ import { SCOUT_ROLE_LABELS, type ScoutRole, type ScoutSignupRole } from '../../d
 import type { ScoutRosterSlot, ScoutTeam } from '../../domain/scoutRoster.js';
 import type { ScoutRosterSlotRecord, ScoutSetup, ScoutSetupStatus, ScoutSignup } from '../types.js';
 import { appendScoutEvent } from './scoutEvents.js';
+import { initializeScoutGameHosts } from './scoutGameHosts.js';
+import { scheduleScoutNotification, skipScheduledScoutNotification } from './scoutNotifications.js';
 
 type ScoutSetupRow = {
   id: number;
@@ -1001,6 +1003,68 @@ export function swapPublishedScoutRosterSlotsIfVersion(
       payload: { firstSlotId, secondSlotId, published: true },
     });
     return true;
+  })();
+}
+
+export type PrepareScoutPublicationInput = {
+  setupId: number;
+  expectedVersion: number;
+  now: number;
+  random?: () => number;
+};
+
+export type PrepareScoutPublicationOutcome =
+  | { status: 'claimed'; hosts: { gameNumber: 1 | 2; userId: string }[] }
+  | { status: 'stale' | 'withdrawals' };
+
+export function prepareScoutPublication(
+  db: Database.Database,
+  input: PrepareScoutPublicationInput,
+): PrepareScoutPublicationOutcome {
+  return db.transaction((): PrepareScoutPublicationOutcome => {
+    const claim = claimScoutPublish(db, input.setupId, input.expectedVersion);
+    if (claim !== 'claimed') return { status: claim };
+    const setup = db.prepare('SELECT game_count, start_at, signup_channel_id FROM scout_setups WHERE id = ?')
+      .get(input.setupId) as { game_count: 1 | 2; start_at: number; signup_channel_id: string };
+    const slots = listScoutRosterSlots(db, input.setupId);
+    const random = input.random ?? Math.random;
+    const hosts = Array.from({ length: setup.game_count }, (_, index) => {
+      const gameNumber = (index + 1) as 1 | 2;
+      const candidates = slots.filter((slot) => slot.gameNumber === gameNumber);
+      if (candidates.length !== 10) throw new Error(`Game ${gameNumber} is not complete at publication.`);
+      const selected = candidates[Math.min(candidates.length - 1, Math.max(0, Math.floor(random() * candidates.length)))]!;
+      return { gameNumber, userId: selected.userId };
+    });
+    if (!initializeScoutGameHosts(db, input.setupId, hosts)) {
+      throw new Error('Initial Lobby Hosts could not be persisted.');
+    }
+
+    const cutoff = setup.start_at - 30 * 60;
+    const scheduled = scheduleScoutNotification(db, {
+      setupId: input.setupId,
+      gameNumber: null,
+      kind: 't30',
+      dedupeKey: `t30:${input.setupId}`,
+      nonce: `t30-${input.setupId}`,
+      channelId: setup.signup_channel_id,
+      dueAt: cutoff,
+    });
+    if (input.now >= cutoff && scheduled.notification.state === 'scheduled') {
+      skipScheduledScoutNotification(db, scheduled.notification.id, 'late_publication');
+    }
+    appendScoutEvent(db, {
+      setupId: input.setupId,
+      setupVersion: input.expectedVersion,
+      eventType: 'roster_published',
+      payload: { hosts, t30: input.now < cutoff ? 'scheduled' : 'late_publication' },
+    });
+    for (const host of hosts) appendScoutEvent(db, {
+      setupId: input.setupId,
+      setupVersion: input.expectedVersion,
+      eventType: 'lobby_host_assigned',
+      payload: host,
+    });
+    return { status: 'claimed', hosts };
   })();
 }
 

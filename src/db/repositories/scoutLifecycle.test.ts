@@ -11,6 +11,7 @@ import {
   reassignScoutGameHostIfVersion,
 } from './scoutGameHosts.js';
 import {
+  getScoutNotificationByDedupeKey,
   listDueScoutNotifications,
   scheduleScoutNotificationIfCooldownAvailable,
 } from './scoutNotifications.js';
@@ -18,6 +19,7 @@ import {
   createScoutSetup,
   getScoutSetupById,
   listScoutRosterSlots,
+  prepareScoutPublication,
   reconcileScoutWorkingRoster,
   replaceScoutRosterSlotIfVersion,
   seatScoutRosterSlotIfVersion,
@@ -224,6 +226,34 @@ test('notification cooldown insertion is atomic across scheduled and attempted r
     assert.equal(first.status, 'created');
     assert.equal(concurrent.status, 'cooldown');
     assert.equal(listDueScoutNotifications(db, 1_001).length, 1);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('publication atomically assigns one Host per game and persists one setup-level T-30 reminder', () => {
+  const { db, setup } = setupDatabase();
+  try {
+    db.prepare('UPDATE scout_setups SET game_count = 2, start_at = 2000 WHERE id = ?').run(setup.id);
+    const slots = [1, 2].flatMap((gameNumber) =>
+      completeSlots(`g${gameNumber}`).map((slot) => ({ ...slot, gameNumber })),
+    );
+    const addSignup = db.prepare('INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, ?)');
+    for (const slot of slots) addSignup.run(setup.id, slot.userId, slot.role);
+    assert.equal(reconcileScoutWorkingRoster(db, {
+      setupId: setup.id, expectedVersion: 0, slots, source: 'signup',
+    }), 'updated');
+
+    const outcome = prepareScoutPublication(db, {
+      setupId: setup.id, expectedVersion: 1, now: 0, random: () => 0,
+    });
+    assert.equal(outcome.status, 'claimed');
+    assert.deepEqual(listScoutGameHosts(db, setup.id).map((host) => host.gameNumber), [1, 2]);
+    const t30 = getScoutNotificationByDedupeKey(db, `t30:${setup.id}`);
+    assert.equal(t30?.gameNumber, null);
+    assert.equal(t30?.dueAt, 200);
+    assert.equal(t30?.state, 'scheduled');
+    assert.equal(getScoutSetupById(db, setup.id)?.status, 'published');
   } finally {
     closeDatabase(db);
   }

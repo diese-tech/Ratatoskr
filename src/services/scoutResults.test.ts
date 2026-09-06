@@ -18,8 +18,16 @@ test('a two-game setup publishes both games in one result', () => {
   const slots = [1, 2].flatMap((gameNumber) => SCOUT_ROLES.flatMap((role) =>
     SCOUT_TEAMS.map((team, index) => ({ gameNumber, team, role, userId: `g${gameNumber}-${role}-${index}` })),
   ));
-  const result = renderScoutResult({ divisionDisplayName: 'Vanaheim', startAt: 2_000_000_000, gameCount: 2 }, slots);
+  const result = renderScoutResult({
+    divisionDisplayName: 'Vanaheim', startAt: 2_000_000_000, gameCount: 2,
+    hosts: [
+      { gameNumber: 1, lobbyHostUserId: 'g1-solo-0' },
+      { gameNumber: 2, lobbyHostUserId: 'g2-solo-0' },
+    ],
+  }, slots);
   assert.match(result, /Game 1/);
   assert.match(result, /Game 2/);
+  assert.match(result, /Game 1[\s\S]*Lobby Host:\*\* <@g1-solo-0>/);
+  assert.match(result, /Game 2[\s\S]*Lobby Host:\*\* <@g2-solo-0>/);
   for (const slot of slots) assert.match(result, new RegExp(`<@${slot.userId}>`));
 });
