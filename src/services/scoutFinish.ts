@@ -16,6 +16,12 @@ export function scoutFinishButtonRow(setupId: number, version: number, retry = f
     .setLabel(retry ? 'Retry post cleanup' : 'Finish scout').setStyle(ButtonStyle.Secondary));
 }
 
+function privateScoutFinishRetryButtonRow(setupId: number, version: number) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder()
+    .setCustomId(`scout:finishretry:${setupId}:${version}`)
+    .setLabel('Retry post cleanup').setStyle(ButtonStyle.Secondary));
+}
+
 async function finishPost(
   client: Client,
   setup: ScoutSetup,
@@ -76,7 +82,7 @@ export async function reconcileFinishedScoutPosts(client: Client, db: Database.D
 }
 
 export async function handleScoutFinishButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {
-  const match = /^scout:(finish|finishconfirm|finishkeep):(\d+):(\d+)$/.exec(interaction.customId);
+  const match = /^scout:(finish|finishconfirm|finishkeep|finishretry):(\d+):(\d+)$/.exec(interaction.customId);
   if (!match) return false;
   const [, action, id, version] = match;
   if (action === 'finish') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -99,6 +105,11 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
       return true;
     }
     const existing = getScoutCompletion(db, setup.id);
+    if (action === 'finishretry' && (!existing || setup.version !== Number(version))) {
+      await refreshScoutStatusCardSafely(interaction.client, db, setup.id);
+      await interaction.editReply({ content: 'This cleanup retry is stale. Use the current Scout Ops card.', components: [] });
+      return true;
+    }
     if (!existing && setup.version !== Number(version)) {
       await refreshScoutStatusCardSafely(interaction.client, db, setup.id);
       await interaction.editReply({ content: 'This roster view is stale. Use the current Scout Ops card.', components: [] });
@@ -116,6 +127,12 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
         )], allowedMentions: { parse: [] } });
       return true;
     }
+    if (action === 'finishretry') {
+      const error = await reconcileFinishedScoutPost(interaction.client, db, setup.id);
+      await interaction.editReply({ content: error ? `Scout finished in the records. Discord post cleanup is pending. ${error}` : 'Scout finished. The roster and signup history are retained; player edits are closed.',
+        components: error ? [privateScoutFinishRetryButtonRow(setup.id, setup.version)] : [] });
+      return true;
+    }
     const outcome = finishScoutSetupIfVersion(db, setup.id, Number(version), interaction.user.id);
     if (outcome !== 'finished' && outcome !== 'already_finished') {
       await interaction.editReply({ content: outcome === 'pending'
@@ -125,7 +142,7 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
     }
     const error = await reconcileFinishedScoutPost(interaction.client, db, setup.id);
     await interaction.editReply({ content: error ? `Scout finished in the records. Discord post cleanup is pending. ${error}` : 'Scout finished. The roster and signup history are retained; player edits are closed.',
-      components: error ? [scoutFinishButtonRow(setup.id, getScoutSetupById(db, setup.id)!.version, true)] : [] });
+      components: error ? [privateScoutFinishRetryButtonRow(setup.id, getScoutSetupById(db, setup.id)!.version)] : [] });
     return true;
   } finally { release(); }
 }
