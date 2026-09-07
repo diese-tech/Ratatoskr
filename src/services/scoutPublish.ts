@@ -185,11 +185,22 @@ export function managementRow(setupId: number, version: number) {
   );
 }
 
+type PublishedManagementOrigin = 'canonical-entry' | 'private-continuation';
+
+function isCanonicalPublishedManagementMessage(
+  interaction: MessageComponentInteraction,
+  setup: ScoutSetup,
+) {
+  return (isScoutResultsChannel(setup, interaction.channelId) && interaction.message.id === setup.resultMessageId) ||
+    (isScoutOperationsChannel(setup, interaction.channelId) && interaction.message.id === setup.controlMessageId);
+}
+
 async function authorized(
   interaction: MessageComponentInteraction,
   db: Database.Database,
   setupId: number,
   status: 'roster_ready' | 'published',
+  origin: PublishedManagementOrigin,
 ): Promise<ScoutSetup | undefined> {
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || setup.status !== status || !interaction.guild) return undefined;
@@ -197,6 +208,8 @@ async function authorized(
     ? isScoutOperationsChannel(setup, interaction.channelId)
     : isScoutResultsChannel(setup, interaction.channelId) || isScoutOperationsChannel(setup, interaction.channelId);
   if (!correctChannel) return undefined;
+  if (status === 'published' && origin === 'canonical-entry' &&
+      !isCanonicalPublishedManagementMessage(interaction, setup)) return undefined;
   const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
   if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
   const member = await interaction.guild.members.fetch(interaction.user.id);
@@ -220,7 +233,16 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
   if (publishedAction || parts[1] === 'publish') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   else await interaction.deferUpdate();
   return withPublishedDivisionGuard(interaction, db, setupId, async () => {
-    let setup = await authorized(interaction, db, setupId, publishedAction ? 'published' : 'roster_ready');
+    const publishedOrigin: PublishedManagementOrigin = ['publishedreplace', 'publishedswap'].includes(parts[1]!)
+      ? 'canonical-entry'
+      : 'private-continuation';
+    let setup = await authorized(
+      interaction,
+      db,
+      setupId,
+      publishedAction ? 'published' : 'roster_ready',
+      publishedOrigin,
+    );
     if (!setup) {
       await interaction.editReply({ content: 'You do not have permission to manage this scout result.' });
       return true;
@@ -399,7 +421,7 @@ export async function handleScoutPublishedSlotSelect(
     if (![setupId, version, slotId].every(Number.isInteger) || !userId) return false;
     await interaction.deferUpdate();
     return withPublishedDivisionGuard(interaction, db, setupId, async () => {
-      const setup = await authorized(interaction, db, setupId, 'published');
+      const setup = await authorized(interaction, db, setupId, 'published', 'private-continuation');
       if (!setup || setup.version !== version || await rejectFinishedScout(interaction, db, setupId)) {
         if (!setup || setup.version !== version) await interaction.editReply({ content: 'This roster view is stale.', components: [] });
         return true;
@@ -449,7 +471,7 @@ export async function handleScoutPublishedSlotSelect(
   if (![setupId, version, slotId].every(Number.isInteger)) return false;
   await interaction.deferUpdate();
   return withPublishedDivisionGuard(interaction, db, setupId, async () => {
-    const setup = await authorized(interaction, db, setupId, 'published');
+    const setup = await authorized(interaction, db, setupId, 'published', 'private-continuation');
     if (!setup) {
       await interaction.editReply({ content: 'You do not have permission to manage this result.' });
       return true;
@@ -557,7 +579,7 @@ export async function handleScoutPublishedUserSelect(
   if (![setupId, version, slotId].every(Number.isInteger)) return false;
   await interaction.deferUpdate();
   return withPublishedDivisionGuard(interaction, db, setupId, async () => {
-    const setup = await authorized(interaction, db, setupId, 'published');
+    const setup = await authorized(interaction, db, setupId, 'published', 'private-continuation');
     if (!setup) {
       await interaction.editReply({ content: 'You do not have permission to replace this player.' });
       return true;

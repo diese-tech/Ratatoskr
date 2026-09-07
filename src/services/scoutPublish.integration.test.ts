@@ -58,8 +58,13 @@ export function publishedFixture(path = ':memory:', gameCount = 1, published = t
       return message;
     } };
   const client = { user: { id: 'bot' }, channels: { fetch: async (id: string) => id === 'ops' ? opsChannel : channel } } as unknown as Client;
-  const guild: any = { id: 'guild', roles: { cache: new Collection() }, members: { fetch: async (id: string) => ({
-    id, guild, displayName: `Player ${id}`, user: { id, bot: false }, roles: { cache: new Collection(id === 'staff' ? [['manager', {}]] : []) },
+  const ineligible = new Set<string>();
+  const roleCache = new Collection<string, any>([['eligible', { id: 'eligible' }]]);
+  const guild: any = { id: 'guild', roles: { cache: roleCache, fetch: async (id: string) => roleCache.get(id) }, members: { fetch: async (id: string) => ({
+    id, guild, displayName: `Player ${id}`, user: { id, bot: false }, roles: { cache: new Collection([
+      ...(id === 'staff' ? [['manager', {}] as const] : []),
+      ...(!ineligible.has(id) ? [['eligible', {}] as const] : []),
+    ]) },
   }) } };
   function interaction(customId: string, values: string[] = []) {
     let acknowledged = false;
@@ -72,7 +77,14 @@ export function publishedFixture(path = ':memory:', gameCount = 1, published = t
       editReply: async (payload: any) => { assert.equal(acknowledged, true, 'must acknowledge before work'); replies.push(payload); },
     };
   }
-  return { db, setup, division, replies, messages, roster, client, interaction,
+  let privateInteractionCount = 0;
+  function privateInteraction(customId: string, values: string[] = []) {
+    const next = interaction(customId, values);
+    next.message = { id: `ephemeral-${++privateInteractionCount}` };
+    return next;
+  }
+  return { db, setup, division, replies, messages, roster, client, interaction, privateInteraction,
+    setIneligible: (userId: string) => { ineligible.add(userId); },
     failEdit: (value: boolean) => { editFailure = value; }, failNotice: (value: boolean) => { noticeFailure = value; } };
 }
 
@@ -117,7 +129,7 @@ test('ambiguous published edit retains canonical replacement for recovery', asyn
   try {
     const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
     f.failEdit(true);
-    await handleScoutPublishedUserSelect(f.interaction(`scout:publisheduser:${f.setup.id}:0:${slot.id}`, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
+    await handleScoutPublishedUserSelect(f.privateInteraction(`scout:publisheduser:${f.setup.id}:0:${slot.id}`, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
     assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((s) => s.id === slot.id)?.userId, 'replacement');
     assert.match(f.replies.at(-1).content, /saved.*pending|pending.*saved/i);
   } finally { f.db.close(); }
@@ -148,7 +160,7 @@ test('lost canonical edit response converges without undoing state or emitting a
   try {
     const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
     f.failEdit(true);
-    await handleScoutPublishedUserSelect(f.interaction(`scout:publisheduser:${f.setup.id}:0:${slot.id}`, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
+    await handleScoutPublishedUserSelect(f.privateInteraction(`scout:publisheduser:${f.setup.id}:0:${slot.id}`, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
     assert.equal(getScoutRosterUpdate(f.db, f.setup.id)?.message_reconciled, 0);
     f.failEdit(false);
     await reconcilePendingScoutRosterUpdates(f.client, f.db);
@@ -177,7 +189,7 @@ test('missing messages, wrong channel, unauthorized members and stale selections
   try {
     const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
     const call = (changes: Record<string, unknown>, version = 0) => handleScoutPublishedUserSelect({
-      ...f.interaction(`scout:publisheduser:${f.setup.id}:${version}:${slot.id}`, ['replacement']), ...changes,
+      ...f.privateInteraction(`scout:publisheduser:${f.setup.id}:${version}:${slot.id}`, ['replacement']), ...changes,
     } as unknown as UserSelectMenuInteraction, f.db);
     await call({ channelId: 'other-division' });
     await call({ user: { id: 'outsider' } });
@@ -203,9 +215,9 @@ for (const gameCount of [1, 2]) {
       assert.equal(new Set(menu.options.map((o: any) => o.value)).size, gameCount * 10);
       const option = menu.options.find((o: any) => o.value === String(selected.id));
       assert.match(option.label, new RegExp(`^G${gameCount} • Chaos • Carry — Player`));
-      await handleScoutPublishedSlotSelect(f.interaction(menu.custom_id, [option.value]) as unknown as StringSelectMenuInteraction, f.db);
+      await handleScoutPublishedSlotSelect(f.privateInteraction(menu.custom_id, [option.value]) as unknown as StringSelectMenuInteraction, f.db);
       const userMenu = f.replies.at(-1).components[0].toJSON().components[0];
-      await handleScoutPublishedUserSelect(f.interaction(userMenu.custom_id, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
+      await handleScoutPublishedUserSelect(f.privateInteraction(userMenu.custom_id, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
       const after = listScoutRosterSlots(f.db, f.setup.id);
       assert.equal(after.find((s) => s.id === selected.id)?.userId, 'replacement');
       assert.deepEqual(after.filter((s) => s.id !== selected.id).map((s) => [s.id, s.userId]), before.filter((s) => s.id !== selected.id).map((s) => [s.id, s.userId]));
@@ -216,14 +228,21 @@ for (const gameCount of [1, 2]) {
       const first = after.find((s) => s.id !== selected.id)!;
       await handleScoutPublishButton(f.interaction(`scout:publishedswap:${f.setup.id}:${version + 1}`) as unknown as ButtonInteraction, f.db);
       const firstMenu = f.replies.at(-1).components[0].toJSON().components[0];
-      await handleScoutPublishedSlotSelect(f.interaction(firstMenu.custom_id, [String(first.id)]) as unknown as StringSelectMenuInteraction, f.db);
+      await handleScoutPublishedSlotSelect(f.privateInteraction(firstMenu.custom_id, [String(first.id)]) as unknown as StringSelectMenuInteraction, f.db);
       const secondMenu = f.replies.at(-1).components[0].toJSON().components[0];
       assert.equal(secondMenu.options.length, gameCount * 10 - 1);
-      await handleScoutPublishedSlotSelect(f.interaction(secondMenu.custom_id, [String(selected.id)]) as unknown as StringSelectMenuInteraction, f.db);
+      await handleScoutPublishedSlotSelect(f.privateInteraction(secondMenu.custom_id, [String(selected.id)]) as unknown as StringSelectMenuInteraction, f.db);
       const swapped = listScoutRosterSlots(f.db, f.setup.id);
       assert.equal(swapped.find((s) => s.id === first.id)?.userId, 'replacement');
       assert.equal(swapped.find((s) => s.id === selected.id)?.userId, first.userId);
       assert.equal(getScoutRosterUpdate(f.db, f.setup.id), undefined);
+      const swappedVersion = getScoutSetupById(f.db, f.setup.id)!.version;
+      await handleScoutPublishedSlotSelect(
+        f.privateInteraction(secondMenu.custom_id, [String(selected.id)]) as unknown as StringSelectMenuInteraction, f.db,
+      );
+      assert.match(f.replies.at(-1).content, /stale/);
+      assert.equal(getScoutSetupById(f.db, f.setup.id)!.version, swappedVersion);
+      assert.deepEqual(listScoutRosterSlots(f.db, f.setup.id), swapped);
     } finally { f.db.close(); }
   });
 
@@ -248,6 +267,87 @@ for (const gameCount of [1, 2]) {
     } finally { f.db.close(); }
   });
 }
+
+test('published off-role replacement keeps private warning, cancel, confirm, and replay safe', async () => {
+  const f = publishedFixture();
+  try {
+    const candidate = 'off-role-candidate';
+    f.db.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, 'jungle')")
+      .run(f.setup.id, candidate);
+    const target = listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.role === 'carry')!;
+    await handleScoutPublishButton(
+      f.interaction(`scout:publishedreplace:${f.setup.id}:0`) as unknown as ButtonInteraction, f.db,
+    );
+    const slotMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutPublishedSlotSelect(
+      f.privateInteraction(slotMenu.custom_id, [String(target.id)]) as unknown as StringSelectMenuInteraction, f.db,
+    );
+    const candidateMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    const option = candidateMenu.options.find((item: any) => item.value === candidate);
+    assert.match(option.label, /off-role/);
+    await handleScoutPublishedSlotSelect(
+      f.privateInteraction(candidateMenu.custom_id, [candidate]) as unknown as StringSelectMenuInteraction, f.db,
+    );
+    let warningControls = f.replies.at(-1).components[0].toJSON().components;
+    const back = warningControls.find((component: any) => component.label === 'Cancel').custom_id;
+    await handleScoutPublishButton(f.privateInteraction(back) as unknown as ButtonInteraction, f.db);
+    assert.match(f.replies.at(-1).content, /cancelled/);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.version, 0);
+
+    await handleScoutPublishedSlotSelect(
+      f.privateInteraction(candidateMenu.custom_id, [candidate]) as unknown as StringSelectMenuInteraction, f.db,
+    );
+    warningControls = f.replies.at(-1).components[0].toJSON().components;
+    const confirm = warningControls.find((component: any) => component.label === 'Replace anyway').custom_id;
+    await handleScoutPublishButton(f.privateInteraction(confirm) as unknown as ButtonInteraction, f.db);
+    assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.id === target.id)?.userId, candidate);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.version, 1);
+    assert.equal(listDueScoutNotifications(f.db, Number.MAX_SAFE_INTEGER)
+      .filter((notification) => notification.kind === 'replacement_notice').length, 1);
+
+    await handleScoutPublishButton(f.privateInteraction(confirm) as unknown as ButtonInteraction, f.db);
+    assert.match(f.replies.at(-1).content, /stale/);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.version, 1);
+    assert.equal(listDueScoutNotifications(f.db, Number.MAX_SAFE_INTEGER)
+      .filter((notification) => notification.kind === 'replacement_notice').length, 1);
+  } finally {
+    f.db.close();
+  }
+});
+
+test('published off-role confirmation rechecks eligibility after its private warning', async () => {
+  const f = publishedFixture();
+  try {
+    const candidate = 'eligibility-lost';
+    f.db.prepare("UPDATE scout_setups SET eligibility_role_id = 'eligible' WHERE id = ?").run(f.setup.id);
+    f.db.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, 'jungle')")
+      .run(f.setup.id, candidate);
+    const target = listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.role === 'carry')!;
+    await handleScoutPublishButton(
+      f.interaction(`scout:publishedreplace:${f.setup.id}:0`) as unknown as ButtonInteraction, f.db,
+    );
+    const slotMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutPublishedSlotSelect(
+      f.privateInteraction(slotMenu.custom_id, [String(target.id)]) as unknown as StringSelectMenuInteraction, f.db,
+    );
+    const candidateMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutPublishedSlotSelect(
+      f.privateInteraction(candidateMenu.custom_id, [candidate]) as unknown as StringSelectMenuInteraction, f.db,
+    );
+    const confirm = f.replies.at(-1).components[0].toJSON().components
+      .find((component: any) => component.label === 'Replace anyway').custom_id;
+    f.setIneligible(candidate);
+    await handleScoutPublishButton(f.privateInteraction(confirm) as unknown as ButtonInteraction, f.db);
+
+    assert.match(f.replies.at(-1).content, /no longer eligible/);
+    assert.notEqual(listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.id === target.id)?.userId, candidate);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.version, 0);
+    assert.equal(listDueScoutNotifications(f.db, Number.MAX_SAFE_INTEGER)
+      .filter((notification) => notification.kind === 'replacement_notice').length, 0);
+  } finally {
+    f.db.close();
+  }
+});
 
 test('Ping roster uses the final canonical controls after a published replacement and swap', async () => {
   const f = publishedFixture();
@@ -293,5 +393,22 @@ test('Ping roster uses the final canonical controls after a published replacemen
       .filter((notification) => notification.kind === 'manual_roster').length, 1);
   } finally {
     f.db.close();
+  }
+});
+
+test('published management entry buttons reject copied noncanonical controls', async () => {
+  for (const action of ['publishedreplace', 'publishedswap']) {
+    const f = publishedFixture();
+    try {
+      const copied = f.interaction(`scout:${action}:${f.setup.id}:0`);
+      copied.message = { id: 'copied-management-control' };
+      await handleScoutPublishButton(copied as unknown as ButtonInteraction, f.db);
+
+      assert.match(f.replies.at(-1).content, /permission/);
+      assert.equal(getScoutSetupById(f.db, f.setup.id)?.version, 0);
+      assert.equal(getScoutRosterUpdate(f.db, f.setup.id), undefined);
+    } finally {
+      f.db.close();
+    }
   }
 });

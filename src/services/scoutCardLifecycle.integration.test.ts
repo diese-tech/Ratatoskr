@@ -7,7 +7,7 @@ import { Collection, type Client, type ButtonInteraction } from 'discord.js';
 import { openDatabase, upsertDivision, createScoutSetup, getScoutSetupById, listScoutSignups,
   ensureScoutReadinessCard, readScoutReadinessSnapshot, cancelScoutSetupIfVersion,
   listScoutRosterSlots, swapPublishedScoutRosterSlotsIfVersion, replacePublishedScoutRosterSlotIfVersion,
-  listDivisionScoutLifecycleBlockers, listOverlappingScoutSetups } from '../db/index.js';
+  listDivisionScoutLifecycleBlockers, listOverlappingScoutSetups, listScoutEvents } from '../db/index.js';
 import { getScoutCompletion, finishScoutSetupIfVersion } from '../db/repositories/scoutCompletions.js';
 import { SCOUT_ROLES } from '../domain/index.js';
 import { ensurePostedScoutSetup } from './scoutCreate.js';
@@ -92,6 +92,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
     for (const role of SCOUT_ROLES) for (let i = 0; i < perRole; i++) await react(`${role}-${i}`, role);
   };
   const interaction = (customId: string): any => ({ customId, guild, guildId: 'guild', channelId: 'ops', client, user: { id: 'staff' },
+    message: ops.all.first() ?? { id: 'missing-ops-card' },
     deferUpdate: async () => undefined, deferReply: async () => undefined, editReply: async () => undefined });
   return { db, setup, client: client as Client, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction, channel,
     rejectSend: (code = 50013) => { rejectSend = code; },
@@ -217,12 +218,24 @@ test('recovered published cards expose player edits and finishing durably closes
     edit.editReply = async (payload: any) => replies.push(payload);
     await handleScoutPublishButton(edit, f.db);
     assert.match(replies.at(-1).content, /first published player/i, 'existing private roster editor opens directly from Scout Ops');
+    const replace = f.interaction(manage[1].custom_id);
+    replace.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutPublishButton(replace, f.db);
+    assert.match(replies.at(-1).content, /slot to replace/i, 'published replacement opens from the canonical Scout Ops card');
+    const copiedFinish = f.interaction(finish[0].custom_id);
+    copiedFinish.message = { id: 'copied-finish-control' };
+    copiedFinish.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutFinishButton(copiedFinish, f.db);
+    assert.match(replies.at(-1).content, /permission/);
+    assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
     const press = f.interaction(finish[0].custom_id);
     press.editReply = async (payload: any) => replies.push(payload);
     await handleScoutFinishButton(press, f.db);
     assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
     const confirm = replies.at(-1).components[0].toJSON().components[0].custom_id;
-    await handleScoutFinishButton(f.interaction(confirm), f.db);
+    const confirmInteraction = f.interaction(confirm);
+    confirmInteraction.message = { id: 'ephemeral-finish-confirm' };
+    await handleScoutFinishButton(confirmInteraction, f.db);
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.finished_by, 'staff');
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, 1);
     assert.match(card.content, /finished/);
@@ -338,6 +351,50 @@ for (const code of [10008, 50013]) test(`finished post cleanup handles Discord $
     assert.equal(f.ops.all.size, 1); assert.equal(f.ops.all.first()!.components[0].toJSON().components[0].label, 'View final roster');
     assert.equal(finishScoutSetupIfVersion(reopened, f.setup.id, 0, 'staff'), 'already_finished');
   } finally { reopened.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('private Finish cleanup retry reconciles posts without finishing the Scout twice', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill();
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`), f.db);
+
+    const publicFinish = f.ops.all.first()!.components.flatMap((row: any) => row.toJSON().components)
+      .find((component: any) => component.custom_id?.startsWith('scout:finish:'));
+    const confirmationReplies: any[] = [];
+    const publicEntry = f.interaction(publicFinish.custom_id);
+    publicEntry.editReply = async (payload: any) => confirmationReplies.push(payload);
+    await handleScoutFinishButton(publicEntry, f.db);
+
+    const confirmId = confirmationReplies.at(-1).components[0].toJSON().components[0].custom_id;
+    const originalSignupFetch = f.signups.messages.fetch;
+    f.signups.messages.fetch = async () => { throw { code: 50013 }; };
+    const failureReplies: any[] = [];
+    const confirm = f.interaction(confirmId);
+    confirm.message = { id: 'private-finish-confirmation' };
+    confirm.editReply = async (payload: any) => failureReplies.push(payload);
+    await handleScoutFinishButton(confirm, f.db);
+
+    const firstCompletion = getScoutCompletion(f.db, f.setup.id)!;
+    const finishedVersion = getScoutSetupById(f.db, f.setup.id)!.version;
+    assert.equal(firstCompletion.posts_reconciled, 0);
+    assert.equal(listScoutEvents(f.db, f.setup.id).filter((event) => event.eventType === 'scout_finished').length, 1);
+
+    const retryId = failureReplies.at(-1).components[0].toJSON().components[0].custom_id;
+    f.signups.messages.fetch = originalSignupFetch;
+    const retryReplies: any[] = [];
+    const retry = f.interaction(retryId);
+    retry.message = { id: 'private-finish-cleanup-retry' };
+    retry.editReply = async (payload: any) => retryReplies.push(payload);
+    await handleScoutFinishButton(retry, f.db);
+
+    assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, 1);
+    assert.equal(getScoutCompletion(f.db, f.setup.id)?.finished_at, firstCompletion.finished_at);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.version, finishedVersion);
+    assert.equal(listScoutEvents(f.db, f.setup.id).filter((event) => event.eventType === 'scout_finished').length, 1);
+    assert.match(retryReplies.at(-1).content, /Scout finished/);
+  } finally { f.db.close(); }
 });
 
 test('lost temporary send response survives disk restart and concurrent refreshes without duplicate cards', async (t) => {

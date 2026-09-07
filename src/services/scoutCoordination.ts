@@ -32,16 +32,27 @@ import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerName
 import { reconcileScoutPublishedPresentation } from './scoutPublish.js';
 import { reportOperationalError } from './operationalErrors.js';
 
+type PublishedInteractionOrigin = 'canonical-entry' | 'private-continuation';
+
+function isCanonicalPublishedMessage(
+  interaction: MessageComponentInteraction,
+  setup: NonNullable<ReturnType<typeof getScoutSetupById>>,
+) {
+  return (interaction.channelId === setup.resultsChannelId && interaction.message.id === setup.resultMessageId) ||
+    (interaction.channelId === setup.operationsChannelId && interaction.message.id === setup.controlMessageId);
+}
+
 async function activePublishedSetup(
   interaction: MessageComponentInteraction,
   db: Database.Database,
   setupId: number,
-  requireCanonicalMessage = true,
+  origin: PublishedInteractionOrigin,
 ) {
   const setup = getScoutSetupById(db, setupId);
-  if (!setup || setup.guildId !== interaction.guildId || setup.resultsChannelId !== interaction.channelId ||
+  if (!setup || setup.guildId !== interaction.guildId ||
+      ![setup.resultsChannelId, setup.operationsChannelId].includes(interaction.channelId) ||
       setup.status !== 'published' || !setup.resultMessageId ||
-      (requireCanonicalMessage && interaction.message.id !== setup.resultMessageId) ||
+      (origin === 'canonical-entry' && !isCanonicalPublishedMessage(interaction, setup)) ||
       !setup.signupPostReconciled ||
       getScoutCompletion(db, setupId) || !interaction.guild) return undefined;
   return setup;
@@ -51,9 +62,9 @@ async function managerCanAct(
   interaction: MessageComponentInteraction,
   db: Database.Database,
   setupId: number,
-  requireCanonicalMessage = true,
+  origin: PublishedInteractionOrigin,
 ) {
-  const setup = await activePublishedSetup(interaction, db, setupId, requireCanonicalMessage);
+  const setup = await activePublishedSetup(interaction, db, setupId, origin);
   if (!setup) return undefined;
   const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
   if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
@@ -97,7 +108,7 @@ export async function handleScoutCoordinationButton(
   } else await interaction.deferUpdate();
 
   if (parts[1] === 'pingorganizer') {
-    const setup = await activePublishedSetup(interaction, db, setupId);
+    const setup = await activePublishedSetup(interaction, db, setupId, 'canonical-entry');
     const gameNumber = Number(parts[4]) as 1 | 2;
     const host = setup && listScoutGameHosts(db, setupId)
       .find((candidate) => candidate.gameNumber === gameNumber);
@@ -128,7 +139,9 @@ export async function handleScoutCoordinationButton(
     interaction,
     db,
     setupId,
-    !['pingrosterconfirm', 'pingrosterback'].includes(parts[1]!),
+    ['pingrosterconfirm', 'pingrosterback'].includes(parts[1]!)
+      ? 'private-continuation'
+      : 'canonical-entry',
   );
   if (!setup || setup.version !== expectedVersion) {
     await interaction.editReply({ content: 'You are not authorized or that roster view is stale.', components: [] });
@@ -201,7 +214,7 @@ export async function handleScoutCoordinationStringSelect(
   const expectedVersion = Number(parts[3]);
   if (!Number.isInteger(setupId) || !Number.isInteger(expectedVersion)) return false;
   await interaction.deferUpdate();
-  const setup = await managerCanAct(interaction, db, setupId);
+  const setup = await managerCanAct(interaction, db, setupId, 'private-continuation');
   const [rawGame, userId] = (interaction.values[0] ?? '').split('|');
   const gameNumber = Number(rawGame) as 1 | 2;
   if (!setup || setup.version !== expectedVersion || !userId || ![1, 2].includes(gameNumber)) {
@@ -238,9 +251,12 @@ export async function handleScoutCoordinationUserSelect(
   const expectedVersion = Number(parts[3]);
   if (!Number.isInteger(setupId) || !Number.isInteger(expectedVersion)) return false;
   await interaction.deferUpdate();
-  const setup = await managerCanAct(interaction, db, setupId);
+  const setup = await managerCanAct(interaction, db, setupId, 'private-continuation');
   const userId = interaction.values[0];
-  if (!setup || setup.version !== expectedVersion || !userId || interaction.users.get(userId)?.bot) {
+  const member = setup && userId
+    ? await interaction.guild!.members.fetch(userId).catch(() => undefined)
+    : undefined;
+  if (!setup || setup.version !== expectedVersion || !userId || !member || member.user.bot) {
     await interaction.editReply({ content: 'That Organizer selection is stale or invalid.', components: [] });
     return true;
   }
