@@ -84,7 +84,7 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
   // Settled published history can outlive an archived division. Current staff
   // authorization and the original division/channel identity still apply.
   const setup = await canManageScoutOperationsSetup(interaction, db, Number(id), false);
-  if (!setup) {
+  if (!setup || (action === 'finish' && interaction.message.id !== setup.controlMessageId)) {
     await interaction.editReply({ content: 'You do not have permission to finish this scout from this channel.', components: [] });
     return true;
   }

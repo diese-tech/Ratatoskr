@@ -92,6 +92,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
     for (const role of SCOUT_ROLES) for (let i = 0; i < perRole; i++) await react(`${role}-${i}`, role);
   };
   const interaction = (customId: string): any => ({ customId, guild, guildId: 'guild', channelId: 'ops', client, user: { id: 'staff' },
+    message: ops.all.first() ?? { id: 'missing-ops-card' },
     deferUpdate: async () => undefined, deferReply: async () => undefined, editReply: async () => undefined });
   return { db, setup, client: client as Client, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction, channel,
     rejectSend: (code = 50013) => { rejectSend = code; },
@@ -217,12 +218,24 @@ test('recovered published cards expose player edits and finishing durably closes
     edit.editReply = async (payload: any) => replies.push(payload);
     await handleScoutPublishButton(edit, f.db);
     assert.match(replies.at(-1).content, /first published player/i, 'existing private roster editor opens directly from Scout Ops');
+    const replace = f.interaction(manage[1].custom_id);
+    replace.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutPublishButton(replace, f.db);
+    assert.match(replies.at(-1).content, /slot to replace/i, 'published replacement opens from the canonical Scout Ops card');
+    const copiedFinish = f.interaction(finish[0].custom_id);
+    copiedFinish.message = { id: 'copied-finish-control' };
+    copiedFinish.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutFinishButton(copiedFinish, f.db);
+    assert.match(replies.at(-1).content, /permission/);
+    assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
     const press = f.interaction(finish[0].custom_id);
     press.editReply = async (payload: any) => replies.push(payload);
     await handleScoutFinishButton(press, f.db);
     assert.equal(getScoutCompletion(f.db, f.setup.id), undefined);
     const confirm = replies.at(-1).components[0].toJSON().components[0].custom_id;
-    await handleScoutFinishButton(f.interaction(confirm), f.db);
+    const confirmInteraction = f.interaction(confirm);
+    confirmInteraction.message = { id: 'ephemeral-finish-confirm' };
+    await handleScoutFinishButton(confirmInteraction, f.db);
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.finished_by, 'staff');
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, 1);
     assert.match(card.content, /finished/);
