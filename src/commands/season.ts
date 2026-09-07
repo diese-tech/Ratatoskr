@@ -24,6 +24,23 @@ import { STAFF_ROLES } from '../services/divisions.js';
 import { classifyMatch, resolveChannelPermissionOverwrites, type CandidateResource } from '../services/serverBootstrap.js';
 import { evaluateSeasonCreateEligibility, seasonChannelLogicalKey, SEASON_CHANNELS } from '../services/seasonBootstrap.js';
 
+type SeasonResourceState = 'present' | 'missing' | 'stale';
+
+function seasonCategoryState(guild: NonNullable<ChatInputCommandInteraction['guild']>, season: Season): SeasonResourceState {
+  if (!season.discordCategoryId) return 'missing';
+  return guild.channels.cache.get(season.discordCategoryId)?.type === ChannelType.GuildCategory ? 'present' : 'stale';
+}
+
+function seasonChannelState(
+  guild: NonNullable<ChatInputCommandInteraction['guild']>,
+  discordResourceId: string | undefined,
+  categoryId: string | null,
+): SeasonResourceState {
+  if (!discordResourceId) return 'missing';
+  const channel = guild.channels.cache.get(discordResourceId);
+  return channel?.type === ChannelType.GuildText && channel.parentId === categoryId ? 'present' : 'stale';
+}
+
 export const seasonCommand = new SlashCommandBuilder()
   .setName('season')
   .setDescription('Create and manage season channels.')
@@ -48,6 +65,14 @@ export const seasonCommand = new SlashCommandBuilder()
           // any name supplied after the first attempt.
           .setMaxLength(100),
       ),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('status')
+      .setDescription('Check whether a season category and its channels are present.')
+      .addIntegerOption((option) =>
+        option.setName('number').setDescription('Season number to check; defaults to the active season.').setMinValue(1),
+      ),
   );
 
 export async function handleSeasonCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
@@ -59,9 +84,48 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   const member = await interaction.guild.members.fetch(interaction.user.id);
   if (!(await requireAccess(interaction, member, 'ADMIN'))) return;
 
-  if (interaction.options.getSubcommand() !== 'create') return;
-
   const guild = interaction.guild;
+  const subcommand = interaction.options.getSubcommand();
+  if (subcommand === 'status') {
+    const requestedNumber = interaction.options.getInteger('number');
+    const season = requestedNumber === null
+      ? getActiveSeason(db, guild.id)
+      : getSeasonByNumber(db, guild.id, requestedNumber);
+
+    if (!season) {
+      await interaction.reply({
+        content: requestedNumber === null
+          ? 'No season is currently active.'
+          : `Season ${requestedNumber} does not exist.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await guild.channels.fetch();
+    const channelStates = SEASON_CHANNELS.map((spec) => {
+      const managed = getActiveManagedResourceByLogicalKey(
+        db,
+        guild.id,
+        seasonChannelLogicalKey(season.seasonNumber, spec.key),
+      );
+      return `- ${spec.name}: ${seasonChannelState(guild, managed?.discordResourceId, season.discordCategoryId)}`;
+    });
+    await interaction.reply({
+      content: [
+        `**Season ${season.seasonNumber} status**`,
+        `Lifecycle status: ${season.status}`,
+        `Category: ${seasonCategoryState(guild, season)}`,
+        'Channels:',
+        ...channelStates,
+      ].join('\n'),
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (subcommand !== 'create') return;
+
   const seasonNumber = interaction.options.getInteger('number', true);
   const displayName = interaction.options.getString('name');
 
