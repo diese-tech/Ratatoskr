@@ -40,17 +40,42 @@ import {
   SCOUT_TEAMS,
 } from '../domain/index.js';
 import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
-import { eligibleScoutSignups, isScoutUserEligible } from './scoutEligibility.js';
+import {
+  classifyScoutSignups,
+  eligibleScoutSignups,
+  isScoutUserEligible,
+  type ScoutIneligibilityReason,
+} from './scoutEligibility.js';
 import { scoutCancelButton } from './scoutCancel.js';
 import { reconcileWorkingScoutRoster } from './scoutSignups.js';
 
 const TEAM_LABELS = { team_one: 'Order', team_two: 'Chaos' } as const;
+
+function ineligibleSignupLines(
+  ineligibleSignups: ReadonlyArray<{ signup: ScoutSignup; reason: ScoutIneligibilityReason }>,
+  seated: ReadonlySet<string>,
+): string[] {
+  const byUser = new Map<string, { roles: ScoutSignup['role'][]; reason: ScoutIneligibilityReason }>();
+  for (const { signup, reason } of ineligibleSignups) {
+    if (seated.has(signup.userId)) continue;
+    const current = byUser.get(signup.userId) ?? { roles: [], reason };
+    if (!current.roles.includes(signup.role)) current.roles.push(signup.role);
+    byUser.set(signup.userId, current);
+  }
+  return [...byUser].map(([userId, entry]) => {
+    const roles = entry.roles.map((role) => role === 'fill' ? 'Fill' : SCOUT_ROLE_LABELS[role]).join(', ');
+    const reason = entry.reason.kind === 'missing_role' ? `missing <@&${entry.reason.roleId}>`
+      : entry.reason.kind === 'not_in_server' ? 'not currently in this server' : 'bot accounts cannot be seated';
+    return `<@${userId}> · ${roles} — ${reason}`;
+  });
+}
 
 export function buildScoutWorkingRosterView(
   setup: ScoutSetup,
   slots: readonly ScoutRosterSlotRecord[],
   eligibleSignups: readonly ScoutSignup[],
   unavailableUserIds: ReadonlySet<string> = new Set(),
+  ineligibleSignups: ReadonlyArray<{ signup: ScoutSignup; reason: ScoutIneligibilityReason }> = [],
 ) {
   const lines = [
     `**${setup.divisionDisplayName} Scout · <t:${setup.startAt}:t>**`,
@@ -97,6 +122,16 @@ export function buildScoutWorkingRosterView(
       else hidden += 1;
     }
     if (hidden) lines.push(`_${hidden} additional signup(s) are available through Seat player._`);
+  }
+  const ineligibleLines = ineligibleSignupLines(ineligibleSignups, seated);
+  if (ineligibleLines.length) {
+    lines.push('', `**Ineligible signups (${ineligibleLines.length})**`);
+    let hidden = 0;
+    for (const line of ineligibleLines) {
+      if ([...lines, line].join('\n').length <= 1_850) lines.push(line);
+      else hidden += 1;
+    }
+    if (hidden) lines.push(`_${hidden} additional ineligible signup(s) omitted._`);
   }
   if (unavailableUserIds.size) {
     lines.push('', `⚠️ ${unavailableUserIds.size} current assignment(s) need staff attention before publication.`);
@@ -232,15 +267,24 @@ async function showSeatPlayerPicker(
     await interaction.editReply({ content: 'That working roster changed. Use the current Scout Ops controls.' });
     return;
   }
-  const eligible = await eligibleScoutSignups(
+  const eligibility = await classifyScoutSignups(
     interaction.guild!, listScoutSignups(db, setupId), setup.eligibilityRoleId,
   );
+  const eligible = eligibility.eligibleSignups;
   const rostered = new Set(listScoutRosterSlots(db, setupId).map((slot) => slot.userId));
   const userIds = [...new Set(eligible.map((signup) => signup.userId))].filter((userId) => !rostered.has(userId));
   const start = Math.max(0, page) * 25;
   const shown = userIds.slice(start, start + 25);
   if (shown.length === 0) {
-    await interaction.editReply({ content: 'There are no eligible unseated signups on that page.', components: [] });
+    const excluded = userIds.length === 0 ? ineligibleSignupLines(eligibility.ineligibleSignups, rostered) : [];
+    await interaction.editReply({
+      content: [
+        'There are no eligible unseated signups on that page.',
+        excluded.length ? `**Ineligible signups (${excluded.length})**\n${excluded.join('\n')}` : '',
+      ].filter(Boolean).join('\n\n'),
+      components: [],
+      allowedMentions: { parse: [] },
+    });
     return;
   }
   const names = await resolveScoutPlayerNames(interaction.guild!, shown);
@@ -339,15 +383,22 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
       await interaction.editReply({ content: 'That working roster changed. Use the current Scout Ops controls.' });
       return true;
     }
-    const signups = await eligibleScoutSignups(
+    const eligibility = await classifyScoutSignups(
       interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId,
     );
     const outcome = reconcileWorkingScoutRoster(
-      db, setup.id, signups, 'refresh', interaction.user.id, expectedVersion,
+      db, setup.id, eligibility.eligibleSignups, 'refresh', interaction.user.id, expectedVersion,
     );
-    await interaction.editReply({ content: outcome === 'stale'
+    const rostered = new Set(listScoutRosterSlots(db, setup.id).map((slot) => slot.userId));
+    const excluded = ineligibleSignupLines(eligibility.ineligibleSignups, rostered);
+    const result = outcome === 'stale'
       ? 'The working roster changed during refresh. No stale update was applied.'
-      : outcome === 'unchanged' ? 'The working roster is already current.' : 'Working roster refreshed.' });
+      : outcome === 'unchanged' ? 'The working roster is already current.' : 'Working roster refreshed.';
+    await interaction.editReply({
+      content: [result, excluded.length ? `**Ineligible signups excluded (${excluded.length})**\n${excluded.join('\n')}` : '']
+        .filter(Boolean).join('\n\n'),
+      allowedMentions: { parse: [] },
+    });
     return true;
   }
 

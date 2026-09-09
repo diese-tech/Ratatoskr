@@ -412,3 +412,126 @@ test('published management entry buttons reject copied noncanonical controls', a
     }
   }
 });
+
+test('a partial working roster can swap its two Junglers between teams', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = publishedFixture(':memory:', 1, false);
+  try {
+    const support = listScoutRosterSlots(f.db, f.setup.id)
+      .find((slot) => slot.team === 'team_two' && slot.role === 'support')!;
+    f.db.prepare('DELETE FROM scout_roster_slots WHERE id = ?').run(support.id);
+    f.db.prepare('DELETE FROM scout_signups WHERE setup_id = ? AND user_id = ?').run(f.setup.id, support.userId);
+    f.db.prepare("UPDATE scout_setups SET status = 'open', version = version + 1 WHERE id = ?").run(f.setup.id);
+    const version = getScoutSetupById(f.db, f.setup.id)!.version;
+    const draft = (customId: string, values: string[] = []) => ({
+      ...f.privateInteraction(customId, values), channelId: 'ops',
+    });
+
+    await handleScoutReviewButton(
+      draft(`scout:review:${f.setup.id}`) as unknown as ButtonInteraction,
+      f.db,
+    );
+    const reviewControls = f.replies.at(-1).components[0].toJSON().components;
+    const swapTeamsId = reviewControls.find((component: any) => component.label === 'Swap teams').custom_id;
+    assert.match(swapTeamsId, new RegExp(`:${version}$`));
+    await handleScoutReviewButton(draft(swapTeamsId) as unknown as ButtonInteraction, f.db);
+    const roleMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    const before = listScoutRosterSlots(f.db, f.setup.id).filter((slot) => slot.role === 'jungle');
+
+    await handleScoutReviewStringSelect(
+      draft(roleMenu.custom_id, ['jungle']) as unknown as StringSelectMenuInteraction,
+      f.db,
+    );
+
+    const after = listScoutRosterSlots(f.db, f.setup.id).filter((slot) => slot.role === 'jungle');
+    assert.match(f.replies.at(-1).content, /Players swapped between teams/);
+    assert.deepEqual(after.map((slot) => slot.userId), before.map((slot) => slot.userId).reverse());
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.status, 'open');
+  } finally {
+    f.db.close();
+  }
+});
+
+test('a partial working roster can replace an occupied slot', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = publishedFixture(':memory:', 1, false);
+  try {
+    const support = listScoutRosterSlots(f.db, f.setup.id)
+      .find((slot) => slot.team === 'team_two' && slot.role === 'support')!;
+    f.db.prepare('DELETE FROM scout_roster_slots WHERE id = ?').run(support.id);
+    f.db.prepare('DELETE FROM scout_signups WHERE setup_id = ? AND user_id = ?').run(f.setup.id, support.userId);
+    f.db.prepare("UPDATE scout_setups SET status = 'open', version = version + 1 WHERE id = ?").run(f.setup.id);
+    addScoutSignup(f.db, f.setup.id, 'replacement-jungle', 'jungle');
+    const version = getScoutSetupById(f.db, f.setup.id)!.version;
+    const draft = (customId: string, values: string[] = []) => ({
+      ...f.privateInteraction(customId, values), channelId: 'ops',
+    });
+    const target = listScoutRosterSlots(f.db, f.setup.id)
+      .find((slot) => slot.team === 'team_one' && slot.role === 'jungle')!;
+
+    await handleScoutReviewButton(
+      draft(`scout:edit:replace:${f.setup.id}:${version}`) as unknown as ButtonInteraction,
+      f.db,
+    );
+    const slotMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutReviewStringSelect(
+      draft(slotMenu.custom_id, [String(target.id)]) as unknown as StringSelectMenuInteraction,
+      f.db,
+    );
+    const candidateMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    assert.ok(candidateMenu.options.some((option: any) => option.value === 'replacement-jungle'));
+
+    await handleScoutReviewStringSelect(
+      draft(candidateMenu.custom_id, ['replacement-jungle']) as unknown as StringSelectMenuInteraction,
+      f.db,
+    );
+
+    assert.match(f.replies.at(-1).content, /Eligible signup seated/);
+    assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.id === target.id)?.userId, 'replacement-jungle');
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.status, 'open');
+  } finally {
+    f.db.close();
+  }
+});
+
+test('a partial working roster can exchange any two occupied slots', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = publishedFixture(':memory:', 1, false);
+  try {
+    const support = listScoutRosterSlots(f.db, f.setup.id)
+      .find((slot) => slot.team === 'team_two' && slot.role === 'support')!;
+    f.db.prepare('DELETE FROM scout_roster_slots WHERE id = ?').run(support.id);
+    f.db.prepare('DELETE FROM scout_signups WHERE setup_id = ? AND user_id = ?').run(f.setup.id, support.userId);
+    f.db.prepare("UPDATE scout_setups SET status = 'open', version = version + 1 WHERE id = ?").run(f.setup.id);
+    const version = getScoutSetupById(f.db, f.setup.id)!.version;
+    const draft = (customId: string, values: string[] = []) => ({
+      ...f.privateInteraction(customId, values), channelId: 'ops',
+    });
+    const before = listScoutRosterSlots(f.db, f.setup.id);
+    const first = before.find((slot) => slot.team === 'team_one' && slot.role === 'jungle')!;
+    const second = before.find((slot) => slot.team === 'team_two' && slot.role === 'jungle')!;
+
+    await handleScoutReviewButton(
+      draft(`scout:edit:role:${f.setup.id}:${version}`) as unknown as ButtonInteraction,
+      f.db,
+    );
+    const firstMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutReviewStringSelect(
+      draft(firstMenu.custom_id, [String(first.id)]) as unknown as StringSelectMenuInteraction,
+      f.db,
+    );
+    const secondMenu = f.replies.at(-1).components[0].toJSON().components[0];
+    await handleScoutReviewStringSelect(
+      draft(secondMenu.custom_id, [String(second.id)]) as unknown as StringSelectMenuInteraction,
+      f.db,
+    );
+
+    const after = listScoutRosterSlots(f.db, f.setup.id);
+    assert.match(f.replies.at(-1).content, /Role assignments exchanged/);
+    assert.equal(after.find((slot) => slot.id === first.id)?.userId, second.userId);
+    assert.equal(after.find((slot) => slot.id === second.id)?.userId, first.userId);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.status, 'open');
+  } finally {
+    f.db.close();
+  }
+});

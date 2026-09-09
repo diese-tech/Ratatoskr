@@ -182,6 +182,43 @@ test('eligibility loss gain and departure refresh existing cards without deletin
   } finally { f.db.close(); }
 });
 
+test('working card explains why an unseated signup is ineligible', async () => {
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    f.addMember('support-player', []);
+    await f.react('support-player', 'support');
+
+    const card = f.ops.all.first()!;
+    assert.match(card.content, /Unseated signups \(0\)/);
+    assert.match(card.content, /Ineligible signups \(1\)/);
+    assert.match(card.content, /<@support-player> · Support — missing <@&eligible>/);
+  } finally { f.db.close(); }
+});
+
+test('Seat player and Refresh draft explain excluded ineligible signups', async () => {
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    f.addMember('support-player', []);
+    await f.react('support-player', 'support');
+    const version = getScoutSetupById(f.db, f.setup.id)!.version;
+    const replies: any[] = [];
+    const seat = f.interaction(`scout:seat:${f.setup.id}:${version}:0`);
+    seat.editReply = async (payload: any) => replies.push(payload);
+
+    await handleScoutReviewButton(seat as ButtonInteraction, f.db);
+    assert.match(replies.at(-1).content, /no eligible unseated signups/i);
+    assert.match(replies.at(-1).content, /<@support-player> · Support — missing <@&eligible>/);
+
+    const refresh = f.interaction(`scout:refresh:${f.setup.id}:${version}`);
+    refresh.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutReviewButton(refresh as ButtonInteraction, f.db);
+    assert.match(replies.at(-1).content, /working roster is already current/i);
+    assert.match(replies.at(-1).content, /<@support-player> · Support — missing <@&eligible>/);
+  } finally { f.db.close(); }
+});
+
 test('two-game draft renders both complete games and publication collapses Ops to stable navigation', async () => {
   const f = fixture();
   try {
