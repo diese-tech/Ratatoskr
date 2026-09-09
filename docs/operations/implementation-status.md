@@ -22,9 +22,9 @@ active season, omitted/false confirmation, confirmed archival, preserved categor
 identity, injected stale targeting and a complete close-to-next-create flow. No live
 Discord interaction was performed.
 
-Next: commit and open the focused #21 PR, then require automated review on the final
-head plus green Ubuntu/Windows CI. Do not merge, deploy, claim live verification or
-begin B5 without the corresponding gate or explicit disposition.
+Next: PR #99 is open for the focused #21 slice. Require automated review on the
+final head plus green Ubuntu/Windows CI. Do not merge, deploy, claim live verification
+or begin B5 without the corresponding gate or explicit disposition.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 

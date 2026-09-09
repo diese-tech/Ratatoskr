@@ -459,7 +459,7 @@ The publication-routing change is an updated product contract, not proof of an u
 | B3 | Covered for sequencing by explicit user direction | #36/#45/#62 remain open | Partial live Discord evidence plus #91/#92 defect fixes; no claim of a completed historical checklist | Resume only when the user brings back issues or explicitly requests the live matrix |
 | Scout partial-roster correction | Merged; main CI green | [PR #98](https://github.com/diese-tech/Ratatoskr/pull/98), 479359a | 253 tests; Ubuntu/Windows PR and main CI; final automated review clean | Recheck the reported swap and ineligibility explanation in live Discord |
 | B4a / #23 | Merged; issue closed; CI green | [PR #96](https://github.com/diese-tech/Ratatoskr/pull/96), 4b5089f; [PR #97](https://github.com/diese-tech/Ratatoskr/pull/97), 6b397e6 | Read-only active/specified season inspection; review findings resolved; Ubuntu/Windows CI | Live Discord smoke remains separate |
-| B4b / #21 | Code complete; local gates green; unmerged | `codex/issue-21-season-close` | 262 tests; both typechecks; build; dependency audit; diff check | Open PR, complete automated review and Ubuntu/Windows CI; live Discord verification remains separate |
+| B4b / #21 | Code complete; PR open; local gates green | [PR #99](https://github.com/diese-tech/Ratatoskr/pull/99), c51c952 | 262 tests; both typechecks; build; dependency audit; diff check | Complete automated review and Ubuntu/Windows CI; live Discord verification remains separate |
 | B5 | Planned | — | — | Migration rehearsal/cutover/recovery |
 | B6 | Planned; product details outstanding | — | — | Full scaffold reference and notification role list |
 | B7 | Design pending | — | — | Storage/privacy/export decisions |
@@ -467,7 +467,7 @@ The publication-routing change is an updated product contract, not proof of an u
 Before resuming implementation:
 
 1. Read this document and the user's latest instructions; recheck current GitHub main/issues/PRs.
-2. Finish B4b / #21 review and CI from `codex/issue-21-season-close`. Do not begin B5 until B4b is merged or explicitly dispositioned.
+2. Finish B4b / #21 review and CI in PR #99. Do not begin B5 until B4b is merged or explicitly dispositioned.
 3. Define the slice's invariants and tests before edits. Use isolated branches/worktrees as appropriate; do not assume the audit checkout is still authoritative.
 4. Keep a reviewable link between the slice, issue, PR, exact commit and validation evidence. Update this progress table rather than relying on chat recollection.
 5. Complete the acceptance gate or record a precise unresolved blocker; never report merged/deployed/live-verified as interchangeable states.
