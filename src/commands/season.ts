@@ -15,6 +15,7 @@ import {
   getActiveSeason,
   getSeasonByNumber,
   insertManagedResource,
+  listManagedResourcesByDomain,
   markManagedResourceObsolete,
   SeasonAlreadyActiveError,
   setSeasonDiscordCategoryId,
@@ -260,6 +261,12 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   const created: string[] = [];
   const adopted: string[] = [];
   const ambiguous: string[] = [];
+  const currentSeasonLogicalPrefix = `season:${season.seasonNumber}:`;
+  const otherSeasonChannelIds = new Set(
+    listManagedResourcesByDomain(db, guild.id, 'season', 'active')
+      .filter((resource) => !resource.logicalKey.startsWith(currentSeasonLogicalPrefix))
+      .map((resource) => resource.discordResourceId),
+  );
 
   for (const spec of SEASON_CHANNELS) {
     const logicalKey = seasonChannelLogicalKey(season.seasonNumber, spec.key);
@@ -292,7 +299,11 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
     }
 
     const candidates: CandidateResource[] = guild.channels.cache
-      .filter((channel) => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice)
+      .filter(
+        (channel) =>
+          !otherSeasonChannelIds.has(channel.id) &&
+          (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice),
+      )
       .map((channel) => ({
         discordId: channel.id,
         name: channel.name,

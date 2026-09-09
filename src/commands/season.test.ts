@@ -57,14 +57,15 @@ function statusInteraction(number: number | null = null, channels = new Collecti
   return { interaction, replies, events };
 }
 
-function closeInteraction(confirm: boolean | null = null) {
+function closeInteraction(confirm: boolean | null = null, guildOverride?: object) {
   const replies: InteractionReplyOptions[] = [];
   const member = { roles: { cache: new Collection([[process.env.ROLE_ALLFATHER_ID!, {}]]) } };
+  const guild = guildOverride ?? {
+    id: 'guild',
+    members: { fetch: async () => member },
+  };
   const interaction = {
-    guild: {
-      id: 'guild',
-      members: { fetch: async () => member },
-    },
+    guild,
     user: { id: 'admin' },
     options: {
       getSubcommand: () => 'close',
@@ -78,12 +79,12 @@ function closeInteraction(confirm: boolean | null = null) {
   return { interaction, replies };
 }
 
-function createInteraction(seasonNumber: number) {
+function createInteraction(seasonNumber: number, guildOverride?: object) {
   const replies: unknown[] = [];
   const channels = new Collection<string, object>();
   const member = { roles: { cache: new Collection([[process.env.ROLE_ALLFATHER_ID!, {}]]) } };
   let nextChannelId = 0;
-  const guild = {
+  const guild = guildOverride ?? {
     id: 'guild',
     members: { fetch: async () => member },
     channels: {
@@ -124,7 +125,7 @@ function createInteraction(seasonNumber: number) {
     },
   } as unknown as ChatInputCommandInteraction;
 
-  return { interaction, replies };
+  return { interaction, replies, guild };
 }
 
 test('/season status without a number reports when there is no active season', async () => {
@@ -222,18 +223,21 @@ test('/season close confirm:true archives the active season without touching Dis
   }
 });
 
-test('/season create can provision and activate the next season after the active season closes', async () => {
+test('/season create can provision and activate the next season while retaining the archived season channels', async () => {
   const db = openDatabase(':memory:');
-  const firstSeason = createSeason(db, { guildId: 'guild', seasonNumber: 1 });
-  setActiveSeason(db, 'guild', firstSeason.id);
-  const close = closeInteraction(true);
-  const create = createInteraction(2);
+  const firstCreate = createInteraction(1);
+  const close = closeInteraction(true, firstCreate.guild);
+  const nextCreate = createInteraction(2, firstCreate.guild);
 
   try {
-    await handleSeasonCommand(close.interaction, db);
-    await handleSeasonCommand(create.interaction, db);
+    await handleSeasonCommand(firstCreate.interaction, db);
+    assert.equal(getActiveSeason(db, 'guild')?.seasonNumber, 1);
+    assert.match(String(firstCreate.replies[0]), /Season 1 \(YSL Season 1\) is provisioned and now active\./);
 
-    assert.match(String(create.replies[0]), /Season 2 \(YSL Season 2\) is provisioned and now active\./);
+    await handleSeasonCommand(close.interaction, db);
+    await handleSeasonCommand(nextCreate.interaction, db);
+
+    assert.match(String(nextCreate.replies[0]), /Season 2 \(YSL Season 2\) is provisioned and now active\./);
     assert.equal(getSeasonByNumber(db, 'guild', 1)?.status, 'archived');
     assert.equal(getActiveSeason(db, 'guild')?.seasonNumber, 2);
   } finally {
