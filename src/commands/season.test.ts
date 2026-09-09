@@ -151,7 +151,7 @@ test('/season status reports present, missing, and stale resources for a numbere
         'Channels:',
         '- banned-content: present',
         '- schedule: stale',
-        '- standings: stale',
+        '- standings: misparented',
         '- rosters: missing',
         '- transactions: missing',
       ].join('\n'),

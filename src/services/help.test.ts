@@ -54,3 +54,11 @@ test('scout help explains the complete current workflow in plain language', () =
     assert.ok(rendered.includes(expected), `scout help should explain ${expected}`);
   }
 });
+
+test('admin help documents the read-only season status command', () => {
+  const admin = HELP_SECTIONS.find((section) => section.title.includes('Admin Setup'));
+  assert.ok(admin);
+  const status = admin.entries.find((entry) => entry.usage.startsWith('/season status'));
+  assert.ok(status);
+  assert.match(status.description, /without changing|read-only/i);
+});
