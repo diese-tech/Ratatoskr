@@ -70,6 +70,22 @@ function ineligibleSignupLines(
   });
 }
 
+function replyWithIneligibleSummary(base: string, heading: string, lines: readonly string[]): string {
+  if (lines.length === 0) return base;
+  const render = (shown: readonly string[], hidden: number) => `${base}\n\n${[
+    `**${heading} (${lines.length})**`,
+    ...shown,
+    hidden ? `_${hidden} additional ineligible signup(s) omitted; see the working roster card._` : '',
+  ].filter(Boolean).join('\n')}`;
+  const shown: string[] = [];
+  for (const line of lines) {
+    const candidate = [...shown, line];
+    if (render(candidate, lines.length - candidate.length).length > 2_000) break;
+    shown.push(line);
+  }
+  return render(shown, lines.length - shown.length);
+}
+
 export function buildScoutWorkingRosterView(
   setup: ScoutSetup,
   slots: readonly ScoutRosterSlotRecord[],
@@ -278,10 +294,9 @@ async function showSeatPlayerPicker(
   if (shown.length === 0) {
     const excluded = userIds.length === 0 ? ineligibleSignupLines(eligibility.ineligibleSignups, rostered) : [];
     await interaction.editReply({
-      content: [
-        'There are no eligible unseated signups on that page.',
-        excluded.length ? `**Ineligible signups (${excluded.length})**\n${excluded.join('\n')}` : '',
-      ].filter(Boolean).join('\n\n'),
+      content: replyWithIneligibleSummary(
+        'There are no eligible unseated signups on that page.', 'Ineligible signups', excluded,
+      ),
       components: [],
       allowedMentions: { parse: [] },
     });
@@ -395,8 +410,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
       ? 'The working roster changed during refresh. No stale update was applied.'
       : outcome === 'unchanged' ? 'The working roster is already current.' : 'Working roster refreshed.';
     await interaction.editReply({
-      content: [result, excluded.length ? `**Ineligible signups excluded (${excluded.length})**\n${excluded.join('\n')}` : '']
-        .filter(Boolean).join('\n\n'),
+      content: replyWithIneligibleSummary(result, 'Ineligible signups excluded', excluded),
       allowedMentions: { parse: [] },
     });
     return true;

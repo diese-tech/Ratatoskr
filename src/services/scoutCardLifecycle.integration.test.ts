@@ -219,6 +219,27 @@ test('Seat player and Refresh draft explain excluded ineligible signups', async 
   } finally { f.db.close(); }
 });
 
+test('ineligible explanations stay within Discord reply limits', async () => {
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    for (let index = 0; index < 30; index++) {
+      const userId = `ineligible-player-${String(index).padStart(18, '0')}`;
+      f.addMember(userId, []);
+      f.db.prepare('INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, ?)')
+        .run(f.setup.id, userId, SCOUT_ROLES[index % SCOUT_ROLES.length]);
+    }
+    const replies: any[] = [];
+    for (const action of ['seat', 'refresh']) {
+      const interaction = f.interaction(`scout:${action}:${f.setup.id}:0${action === 'seat' ? ':0' : ''}`);
+      interaction.editReply = async (payload: any) => replies.push(payload);
+      await handleScoutReviewButton(interaction as ButtonInteraction, f.db);
+      assert.ok(replies.at(-1).content.length <= 2_000);
+      assert.match(replies.at(-1).content, /additional ineligible signup/);
+    }
+  } finally { f.db.close(); }
+});
+
 test('two-game draft renders both complete games and publication collapses Ops to stable navigation', async () => {
   const f = fixture();
   try {
