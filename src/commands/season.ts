@@ -102,6 +102,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
       return;
     }
 
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await guild.channels.fetch();
     const channelStates = SEASON_CHANNELS.map((spec) => {
       const managed = getActiveManagedResourceByLogicalKey(
@@ -111,7 +112,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
       );
       return `- ${spec.name}: ${seasonChannelState(guild, managed?.discordResourceId, season.discordCategoryId)}`;
     });
-    await interaction.reply({
+    await interaction.editReply({
       content: [
         `**Season ${season.seasonNumber} status**`,
         `Lifecycle status: ${season.status}`,
@@ -119,7 +120,6 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
         'Channels:',
         ...channelStates,
       ].join('\n'),
-      flags: MessageFlags.Ephemeral,
     });
     return;
   }

@@ -19,11 +19,12 @@ const [
 
 function statusInteraction(number: number | null = null, channels = new Collection<string, object>()) {
   const replies: InteractionReplyOptions[] = [];
+  const events: string[] = [];
   const member = { roles: { cache: new Collection([[process.env.ROLE_ALLFATHER_ID!, {}]]) } };
   const guild = {
     id: 'guild',
     members: { fetch: async () => member },
-    channels: { cache: channels, fetch: async () => undefined },
+    channels: { cache: channels, fetch: async () => { events.push('fetch-channels'); } },
   };
   const interaction = {
     guild,
@@ -33,11 +34,19 @@ function statusInteraction(number: number | null = null, channels = new Collecti
       getInteger: () => number,
     },
     reply: async (payload: InteractionReplyOptions) => {
+      events.push('reply');
+      replies.push(payload);
+    },
+    deferReply: async (payload: InteractionReplyOptions) => {
+      events.push(payload.flags === MessageFlags.Ephemeral ? 'defer-ephemeral' : 'defer');
+    },
+    editReply: async (payload: InteractionReplyOptions) => {
+      events.push('edit-reply');
       replies.push(payload);
     },
   } as unknown as ChatInputCommandInteraction;
 
-  return { interaction, replies };
+  return { interaction, replies, events };
 }
 
 test('/season status without a number reports when there is no active season', async () => {
@@ -126,13 +135,13 @@ test('/season status reports present, missing, and stale resources for a numbere
     ['banned-channel', { id: 'banned-channel', type: ChannelType.GuildText, parentId: 'season-category' }],
     ['standings-channel', { id: 'standings-channel', type: ChannelType.GuildText, parentId: 'wrong-category' }],
   ]);
-  const { interaction, replies } = statusInteraction(4, channels);
+  const { interaction, replies, events } = statusInteraction(4, channels);
   const before = db.serialize();
 
   try {
     await handleSeasonCommand(interaction, db);
     assert.equal(replies.length, 1);
-    assert.equal(replies[0]?.flags, MessageFlags.Ephemeral);
+    assert.equal(events[0], 'defer-ephemeral');
     assert.equal(
       replies[0]?.content,
       [
@@ -148,6 +157,19 @@ test('/season status reports present, missing, and stale resources for a numbere
       ].join('\n'),
     );
     assert.deepEqual(db.serialize(), before, 'status must not mutate season or managed-resource state');
+  } finally {
+    db.close();
+  }
+});
+
+test('/season status defers ephemerally before fetching Discord channels', async () => {
+  const db = openDatabase(':memory:');
+  createSeason(db, { guildId: 'guild', seasonNumber: 4 });
+  const { interaction, events } = statusInteraction(4);
+
+  try {
+    await handleSeasonCommand(interaction, db);
+    assert.deepEqual(events.slice(0, 2), ['defer-ephemeral', 'fetch-channels']);
   } finally {
     db.close();
   }
