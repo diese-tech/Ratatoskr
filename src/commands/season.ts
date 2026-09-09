@@ -24,7 +24,7 @@ import { STAFF_ROLES } from '../services/divisions.js';
 import { classifyMatch, resolveChannelPermissionOverwrites, type CandidateResource } from '../services/serverBootstrap.js';
 import { evaluateSeasonCreateEligibility, seasonChannelLogicalKey, SEASON_CHANNELS } from '../services/seasonBootstrap.js';
 
-type SeasonResourceState = 'present' | 'missing' | 'stale';
+type SeasonResourceState = 'present' | 'missing' | 'stale' | 'misparented';
 
 function seasonCategoryState(guild: NonNullable<ChatInputCommandInteraction['guild']>, season: Season): SeasonResourceState {
   if (!season.discordCategoryId) return 'missing';
@@ -38,7 +38,8 @@ function seasonChannelState(
 ): SeasonResourceState {
   if (!discordResourceId) return 'missing';
   const channel = guild.channels.cache.get(discordResourceId);
-  return channel?.type === ChannelType.GuildText && channel.parentId === categoryId ? 'present' : 'stale';
+  if (channel?.type !== ChannelType.GuildText) return 'stale';
+  return channel.parentId === categoryId ? 'present' : 'misparented';
 }
 
 export const seasonCommand = new SlashCommandBuilder()
