@@ -74,17 +74,22 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
   }
   if (!getScoutCompletion(db, setup.id) && ['open', 'roster_ready'].includes(setup.status)) {
     const unavailableUsers = new Set(withdrawnScoutRosterUserIds(db, setup.id));
+    const prefixes = [
+      notify ? `<@${setup.createdBy}>` : '',
+      unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '',
+    ].filter(Boolean);
+    const prefixLength = prefixes.join('\n').length + (prefixes.length ? 1 : 0);
     const view = buildScoutWorkingRosterView(
       setup,
       listScoutRosterSlots(db, setup.id),
       signupEligibility?.eligibleSignups ?? listScoutSignups(db, setup.id),
       unavailableUsers,
       signupEligibility?.ineligibleSignups,
+      2_000 - prefixLength,
     );
     return {
       ...view,
-      content: [notify ? `<@${setup.createdBy}>` : '', unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '', view.content]
-        .filter(Boolean).join('\n'),
+      content: [...prefixes, view.content].join('\n'),
       allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] },
     };
   }

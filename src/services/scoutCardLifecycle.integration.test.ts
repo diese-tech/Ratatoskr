@@ -523,6 +523,24 @@ test('eligibility gain can trigger readiness and a missing role shows an actiona
   } finally { f.db.close(); }
 });
 
+test('eligibility warning plus a large working roster stays within Discord limits', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    for (let index = 0; index < 100; index++) {
+      f.db.prepare('INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, ?)')
+        .run(f.setup.id, `51${String(index).padStart(16, '0')}`, SCOUT_ROLES[index % SCOUT_ROLES.length]);
+    }
+    f.roleCache.delete('eligible');
+    await refreshScoutMemberReadiness(f.client, f.db, 'guild', { eligibilityRoleId: 'eligible' });
+
+    const content = f.ops.all.first()!.content;
+    assert.match(content, /Live eligibility could not be verified/);
+    assert.ok(content.length <= 2_000);
+  } finally { f.db.close(); }
+});
+
 test('a rejected first working-card send retries and later readiness stays on that card', async (t) => {
   t.mock.method(console, 'error', () => undefined);
   const f = fixture();

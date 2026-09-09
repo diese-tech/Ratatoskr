@@ -93,6 +93,7 @@ function appendBoundedCardSection(
   empty: string,
   omitted: (count: number) => string,
   reservedTrailingLines: readonly string[],
+  contentLimit: number,
 ): void {
   lines.push('', heading);
   if (entries.length === 0) {
@@ -109,7 +110,7 @@ function appendBoundedCardSection(
       ...(hidden ? [omitted(hidden)] : []),
       ...reservedTrailingLines,
     ].join('\n');
-    if (candidate.length > 2_000) break;
+    if (candidate.length > contentLimit) break;
     lines.push(entry);
     shown = nextShown;
   }
@@ -122,6 +123,7 @@ export function buildScoutWorkingRosterView(
   eligibleSignups: readonly ScoutSignup[],
   unavailableUserIds: ReadonlySet<string> = new Set(),
   ineligibleSignups: ReadonlyArray<{ signup: ScoutSignup; reason: ScoutIneligibilityReason }> = [],
+  contentLimit = 2_000,
 ) {
   const lines = [
     `**${setup.divisionDisplayName} Scout · <t:${setup.startAt}:t>**`,
@@ -176,6 +178,7 @@ export function buildScoutWorkingRosterView(
     '_None_',
     (hidden) => `_${hidden} additional signup(s) are available through Seat player._`,
     [...ineligibleReserve, ...warningLines],
+    contentLimit,
   );
   if (ineligibleLines.length) {
     appendBoundedCardSection(
@@ -185,6 +188,7 @@ export function buildScoutWorkingRosterView(
       '_None_',
       (hidden) => `_${hidden} additional ineligible signup(s) omitted._`,
       warningLines,
+      contentLimit,
     );
   }
   lines.push(...warningLines);
