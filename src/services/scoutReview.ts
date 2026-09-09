@@ -86,6 +86,36 @@ function replyWithIneligibleSummary(base: string, heading: string, lines: readon
   return render(shown, lines.length - shown.length);
 }
 
+function appendBoundedCardSection(
+  lines: string[],
+  heading: string,
+  entries: readonly string[],
+  empty: string,
+  omitted: (count: number) => string,
+  reservedTrailingLines: readonly string[],
+): void {
+  lines.push('', heading);
+  if (entries.length === 0) {
+    lines.push(empty);
+    return;
+  }
+  let shown = 0;
+  for (const entry of entries) {
+    const nextShown = shown + 1;
+    const hidden = entries.length - nextShown;
+    const candidate = [
+      ...lines,
+      entry,
+      ...(hidden ? [omitted(hidden)] : []),
+      ...reservedTrailingLines,
+    ].join('\n');
+    if (candidate.length > 2_000) break;
+    lines.push(entry);
+    shown = nextShown;
+  }
+  if (shown < entries.length) lines.push(omitted(entries.length - shown));
+}
+
 export function buildScoutWorkingRosterView(
   setup: ScoutSetup,
   slots: readonly ScoutRosterSlotRecord[],
@@ -128,30 +158,36 @@ export function buildScoutWorkingRosterView(
     if (!roles.includes(signup.role)) roles.push(signup.role);
     rolesByUser.set(signup.userId, roles);
   }
-  lines.push('', `**Unseated signups (${rolesByUser.size})**`);
-  if (rolesByUser.size === 0) lines.push('_None_');
-  else {
-    let hidden = 0;
-    for (const [userId, roles] of rolesByUser) {
-      const line = `<@${userId}> · ${roles.map((role) => role === 'fill' ? 'Fill' : SCOUT_ROLE_LABELS[role]).join(', ')}`;
-      if ([...lines, line].join('\n').length <= 1_850) lines.push(line);
-      else hidden += 1;
-    }
-    if (hidden) lines.push(`_${hidden} additional signup(s) are available through Seat player._`);
-  }
+  const eligibleLines = [...rolesByUser].map(([userId, roles]) =>
+    `<@${userId}> · ${roles.map((role) => role === 'fill' ? 'Fill' : SCOUT_ROLE_LABELS[role]).join(', ')}`);
   const ineligibleLines = ineligibleSignupLines(ineligibleSignups, seated);
+  const warningLines = unavailableUserIds.size
+    ? ['', `⚠️ ${unavailableUserIds.size} current assignment(s) need staff attention before publication.`]
+    : [];
+  const ineligibleReserve = ineligibleLines.length ? [
+    '',
+    `**Ineligible signups (${ineligibleLines.length})**`,
+    `_${ineligibleLines.length} additional ineligible signup(s) omitted._`,
+  ] : [];
+  appendBoundedCardSection(
+    lines,
+    `**Unseated signups (${rolesByUser.size})**`,
+    eligibleLines,
+    '_None_',
+    (hidden) => `_${hidden} additional signup(s) are available through Seat player._`,
+    [...ineligibleReserve, ...warningLines],
+  );
   if (ineligibleLines.length) {
-    lines.push('', `**Ineligible signups (${ineligibleLines.length})**`);
-    let hidden = 0;
-    for (const line of ineligibleLines) {
-      if ([...lines, line].join('\n').length <= 1_850) lines.push(line);
-      else hidden += 1;
-    }
-    if (hidden) lines.push(`_${hidden} additional ineligible signup(s) omitted._`);
+    appendBoundedCardSection(
+      lines,
+      `**Ineligible signups (${ineligibleLines.length})**`,
+      ineligibleLines,
+      '_None_',
+      (hidden) => `_${hidden} additional ineligible signup(s) omitted._`,
+      warningLines,
+    );
   }
-  if (unavailableUserIds.size) {
-    lines.push('', `⚠️ ${unavailableUserIds.size} current assignment(s) need staff attention before publication.`);
-  }
+  lines.push(...warningLines);
 
   const complete = slots.length === setup.gameCount * 10 && unavailableUserIds.size === 0;
   const controls = new ActionRowBuilder<ButtonBuilder>().addComponents(
