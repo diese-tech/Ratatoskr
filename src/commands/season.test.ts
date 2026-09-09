@@ -14,7 +14,15 @@ process.env.ROLE_AESIR_ID ??= 'aesir-test-role';
 
 const [
   { handleSeasonCommand, seasonCommand },
-  { createSeason, insertManagedResource, openDatabase, setActiveSeason, setSeasonDiscordCategoryId },
+  {
+    createSeason,
+    getActiveSeason,
+    getSeasonByNumber,
+    insertManagedResource,
+    openDatabase,
+    setActiveSeason,
+    setSeasonDiscordCategoryId,
+  },
 ] = await Promise.all([import('./season.js'), import('../db/index.js')]);
 
 function statusInteraction(number: number | null = null, channels = new Collection<string, object>()) {
@@ -49,6 +57,76 @@ function statusInteraction(number: number | null = null, channels = new Collecti
   return { interaction, replies, events };
 }
 
+function closeInteraction(confirm: boolean | null = null) {
+  const replies: InteractionReplyOptions[] = [];
+  const member = { roles: { cache: new Collection([[process.env.ROLE_ALLFATHER_ID!, {}]]) } };
+  const interaction = {
+    guild: {
+      id: 'guild',
+      members: { fetch: async () => member },
+    },
+    user: { id: 'admin' },
+    options: {
+      getSubcommand: () => 'close',
+      getBoolean: () => confirm,
+    },
+    reply: async (payload: InteractionReplyOptions) => {
+      replies.push(payload);
+    },
+  } as unknown as ChatInputCommandInteraction;
+
+  return { interaction, replies };
+}
+
+function createInteraction(seasonNumber: number) {
+  const replies: unknown[] = [];
+  const channels = new Collection<string, object>();
+  const member = { roles: { cache: new Collection([[process.env.ROLE_ALLFATHER_ID!, {}]]) } };
+  let nextChannelId = 0;
+  const guild = {
+    id: 'guild',
+    members: { fetch: async () => member },
+    channels: {
+      cache: channels,
+      fetch: async () => undefined,
+      create: async (options: { name: string; type: ChannelType; parent?: string }) => {
+        const id = `created-channel-${++nextChannelId}`;
+        const channel = options.type === ChannelType.GuildCategory
+          ? { id, name: options.name, type: options.type, parentId: null }
+          : {
+              id,
+              name: options.name,
+              type: options.type,
+              parentId: options.parent ?? null,
+              permissionOverwrites: { set: async () => undefined },
+            };
+        channels.set(id, channel);
+        return channel;
+      },
+    },
+    roles: {
+      everyone: { id: 'everyone' },
+      cache: new Collection<string, { name: string }>(),
+      fetch: async () => undefined,
+    },
+  };
+  const interaction = {
+    guild,
+    user: { id: 'admin' },
+    options: {
+      getSubcommand: () => 'create',
+      getInteger: () => seasonNumber,
+      getString: () => null,
+    },
+    deferReply: async () => undefined,
+    editReply: async (payload: unknown) => {
+      replies.push(payload);
+    },
+  } as unknown as ChatInputCommandInteraction;
+
+  return { interaction, replies };
+}
+
 test('/season status without a number reports when there is no active season', async () => {
   const db = openDatabase(':memory:');
   const { interaction, replies } = statusInteraction();
@@ -68,6 +146,135 @@ test('/season exposes status with an optional season number', () => {
   if (status?.type !== ApplicationCommandOptionType.Subcommand) throw new Error('status must be a subcommand');
   assert.deepEqual(status.options?.map((option) => option.name), ['number']);
   assert.equal(status.options?.[0]?.required, false);
+});
+
+test('/season exposes close with an optional confirmation flag', () => {
+  const command = seasonCommand.toJSON();
+  const close = command.options?.find((option) => option.name === 'close');
+  assert.equal(close?.type, ApplicationCommandOptionType.Subcommand);
+  if (close?.type !== ApplicationCommandOptionType.Subcommand) throw new Error('close must be a subcommand');
+  assert.deepEqual(close.options?.map((option) => option.name), ['confirm']);
+  assert.equal(close.options?.[0]?.type, ApplicationCommandOptionType.Boolean);
+  assert.equal(close.options?.[0]?.required, false);
+});
+
+test('/season close reports no active season without mutating persistence', async () => {
+  const db = openDatabase(':memory:');
+  createSeason(db, { guildId: 'guild', seasonNumber: 1 });
+  const before = db.serialize();
+  const { interaction, replies } = closeInteraction(true);
+
+  try {
+    await handleSeasonCommand(interaction, db);
+    assert.deepEqual(replies, [{ content: 'No season is currently active.', flags: MessageFlags.Ephemeral }]);
+    assert.deepEqual(db.serialize(), before);
+  } finally {
+    db.close();
+  }
+});
+
+test('/season close previews the active season without mutating persistence when confirmation is omitted or false', async () => {
+  const db = openDatabase(':memory:');
+  const season = createSeason(db, { guildId: 'guild', seasonNumber: 5, displayName: 'Season of the Tree' });
+  setActiveSeason(db, 'guild', season.id);
+  const before = db.serialize();
+
+  try {
+    for (const confirm of [null, false]) {
+      const { interaction, replies } = closeInteraction(confirm);
+      await handleSeasonCommand(interaction, db);
+      assert.deepEqual(replies, [{
+        content: [
+          '**Close season 5?**',
+          'Category: Season of the Tree',
+          'This archives the season record and cannot be undone. Its Discord category and channels will remain unchanged.',
+          'Re-run `/season close confirm:true` to continue.',
+        ].join('\n'),
+        flags: MessageFlags.Ephemeral,
+      }]);
+    }
+    assert.deepEqual(db.serialize(), before);
+  } finally {
+    db.close();
+  }
+});
+
+test('/season close confirm:true archives the active season without touching Discord resources', async () => {
+  const db = openDatabase(':memory:');
+  const season = createSeason(db, { guildId: 'guild', seasonNumber: 5, displayName: 'Season of the Tree' });
+  setSeasonDiscordCategoryId(db, season.id, 'season-category');
+  setActiveSeason(db, 'guild', season.id);
+  const { interaction, replies } = closeInteraction(true);
+
+  try {
+    await handleSeasonCommand(interaction, db);
+    assert.deepEqual(replies, [{
+      content: 'Season 5 (Season of the Tree) is now archived. Its Discord category and channels were not changed.',
+      flags: MessageFlags.Ephemeral,
+    }]);
+    assert.equal(getActiveSeason(db, 'guild'), undefined);
+    const archived = getSeasonByNumber(db, 'guild', 5);
+    assert.equal(archived?.status, 'archived');
+    assert.ok(archived?.archivedAt);
+    assert.equal(archived?.discordCategoryId, 'season-category');
+  } finally {
+    db.close();
+  }
+});
+
+test('/season create can provision and activate the next season after the active season closes', async () => {
+  const db = openDatabase(':memory:');
+  const firstSeason = createSeason(db, { guildId: 'guild', seasonNumber: 1 });
+  setActiveSeason(db, 'guild', firstSeason.id);
+  const close = closeInteraction(true);
+  const create = createInteraction(2);
+
+  try {
+    await handleSeasonCommand(close.interaction, db);
+    await handleSeasonCommand(create.interaction, db);
+
+    assert.match(String(create.replies[0]), /Season 2 \(YSL Season 2\) is provisioned and now active\./);
+    assert.equal(getSeasonByNumber(db, 'guild', 1)?.status, 'archived');
+    assert.equal(getActiveSeason(db, 'guild')?.seasonNumber, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test('/season close fails closed if the targeted season stops being active before the archive write', async () => {
+  const db = openDatabase(':memory:');
+  const observed = createSeason(db, { guildId: 'guild', seasonNumber: 1 });
+  const replacement = createSeason(db, { guildId: 'guild', seasonNumber: 2 });
+  setActiveSeason(db, 'guild', observed.id);
+  let injectedRace = false;
+  const racingDb = new Proxy(db, {
+    get(target, property) {
+      if (property === 'prepare') {
+        return (source: string) => {
+          if (!injectedRace && source.includes("SET status = 'archived'")) {
+            injectedRace = true;
+            setActiveSeason(db, 'guild', replacement.id);
+          }
+          return db.prepare(source);
+        };
+      }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const { interaction, replies } = closeInteraction(true);
+
+  try {
+    await handleSeasonCommand(interaction, racingDb);
+    assert.deepEqual(replies, [{
+      content: 'The active season changed before it could be closed. No change was made; run `/season close` again.',
+      flags: MessageFlags.Ephemeral,
+    }]);
+    assert.equal(getSeasonByNumber(db, 'guild', 1)?.status, 'inactive');
+    assert.equal(getActiveSeason(db, 'guild')?.id, replacement.id);
+  } finally {
+    db.close();
+  }
 });
 
 test('/season status reports a requested season that does not exist', async () => {

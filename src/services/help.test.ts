@@ -62,3 +62,13 @@ test('admin help documents the read-only season status command', () => {
   assert.ok(status);
   assert.match(status.description, /without changing|read-only/i);
 });
+
+test('admin help explains the previewed season close lifecycle and preserved Discord channels', () => {
+  const admin = HELP_SECTIONS.find((section) => section.title.includes('Admin Setup'));
+  assert.ok(admin);
+  const close = admin.entries.find((entry) => entry.usage.startsWith('/season close'));
+  assert.ok(close);
+  assert.match(close.description, /preview/i);
+  assert.match(close.description, /archive/i);
+  assert.match(close.description, /channels.*unchanged|does not change.*channels/i);
+});

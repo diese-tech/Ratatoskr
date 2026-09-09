@@ -9,6 +9,7 @@ import {
 import type Database from 'better-sqlite3';
 import {
   activateSeasonIfNoneActive,
+  archiveSeason,
   createSeason,
   getActiveManagedResourceByLogicalKey,
   getActiveSeason,
@@ -74,6 +75,14 @@ export const seasonCommand = new SlashCommandBuilder()
       .addIntegerOption((option) =>
         option.setName('number').setDescription('Season number to check; defaults to the active season.').setMinValue(1),
       ),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('close')
+      .setDescription('Preview or close the active season without changing its channels.')
+      .addBooleanOption((option) =>
+        option.setName('confirm').setDescription('Choose true to archive the active season.').setRequired(false),
+      ),
   );
 
 export async function handleSeasonCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
@@ -121,6 +130,42 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
         'Channels:',
         ...channelStates,
       ].join('\n'),
+    });
+    return;
+  }
+
+  if (subcommand === 'close') {
+    const activeSeason = getActiveSeason(db, guild.id);
+    if (!activeSeason) {
+      await interaction.reply({ content: 'No season is currently active.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.options.getBoolean('confirm') !== true) {
+      await interaction.reply({
+        content: [
+          `**Close season ${activeSeason.seasonNumber}?**`,
+          `Category: ${activeSeason.categoryName}`,
+          'This archives the season record and cannot be undone. Its Discord category and channels will remain unchanged.',
+          'Re-run `/season close confirm:true` to continue.',
+        ].join('\n'),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const archivedSeason = archiveSeason(db, guild.id, activeSeason.id);
+    if (!archivedSeason) {
+      await interaction.reply({
+        content: 'The active season changed before it could be closed. No change was made; run `/season close` again.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.reply({
+      content: `Season ${archivedSeason.seasonNumber} (${archivedSeason.categoryName}) is now archived. Its Discord category and channels were not changed.`,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }

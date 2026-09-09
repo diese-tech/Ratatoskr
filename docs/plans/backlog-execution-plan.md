@@ -1,8 +1,8 @@
 # Ratatoskr backlog execution plan
 
-Version: 1.9 — Scout lifecycle shipped; B3 covered by user direction; B4 next
+Version: 2.0 — B4a shipped; B4b implementation ready for review
 Recorded: September 2, 2026
-Updated: September 7, 2026
+Updated: September 9, 2026
 Repository: [diese-tech/Ratatoskr](https://github.com/diese-tech/Ratatoskr)
 Baseline commit: [`866407f3bdca0e26a2ae3b21221d45a96cdc3056`](https://github.com/diese-tech/Ratatoskr/commit/866407f3bdca0e26a2ae3b21221d45a96cdc3056)
 
@@ -16,7 +16,7 @@ B2's Lucid-inspired telemetry adaptation is separately merged in [PR #77](https:
 
 Issue [#87](https://github.com/diese-tech/Ratatoskr/issues/87) subsequently expanded the Scout lifecycle beyond B2. Its migration-18 foundation and working-roster lifecycle shipped through [PR #88](https://github.com/diese-tech/Ratatoskr/pull/88) and [PR #89](https://github.com/diese-tech/Ratatoskr/pull/89). Live Discord feedback then drove the private-continuation hardening in [PR #91](https://github.com/diese-tech/Ratatoskr/pull/91) and [PR #92](https://github.com/diese-tech/Ratatoskr/pull/92). PR #92 merged as `4317bffa2b3e6796f125bca07e6dd462028cecfb` after 238 local tests, green Ubuntu/Windows CI, and a resolved Half-Shell follow-up. Issue #87 is closed.
 
-On September 7, the user directed that B3 be considered covered for sequencing until new live Discord issues are brought back. This is a product/acceptance disposition, not a claim that every historical #45/#62 checklist step was observed. Issues #36, #45, #62, #68, and #69 remain available as non-blocking trackers. B4 is now the first incomplete planned batch. The separate three-hour Scout cleanup proposal remains in [#90](https://github.com/diese-tech/Ratatoskr/issues/90) and does not silently enter B4.
+On September 7, the user directed that B3 be considered covered for sequencing until new live Discord issues are brought back. This is a product/acceptance disposition, not a claim that every historical #45/#62 checklist step was observed. Issues #36, #45, #62, #68, and #69 remain available as non-blocking trackers. B4a / #23 shipped through PRs #96 and #97. B4b / #21 is now the active implementation slice. The separate three-hour Scout cleanup proposal remains in [#90](https://github.com/diese-tech/Ratatoskr/issues/90) and does not silently enter B4.
 
 ## 2. Agreed changes since the original assessment
 
@@ -444,7 +444,7 @@ The publication-routing change is an updated product contract, not proof of an u
 | Item | Status | PR / commit | Verification evidence | Remaining live checks |
 | --- | --- | --- | --- | --- |
 | Original audit | Complete | Baseline 866407f | Sections 3 and 11 | #45/#62 remain open |
-| Plan v1.9 | Current implementation and sequencing evidence recorded | This document | B1/B2, #87, #91/#92, B3 disposition and B4 next step reconciled against current GitHub state | None for documentation |
+| Plan v2.0 | B4a merge and B4b implementation evidence recorded | This document | #23 closed by PR #96; corrective PR #97 merged; #21 implementation passes all local gates | PR review/CI and live Discord verification remain separate |
 | B1.1 | Merged; CI/startup verified | [PR #70](https://github.com/diese-tech/Ratatoskr/pull/70), 309b231 | Recursive discovery; Node 24.19.0 in Railway build; attached volume and startup verified | Full live acceptance |
 | B1.2 | Merged; review finding fixed; CI green | [PR #71](https://github.com/diese-tech/Ratatoskr/pull/71), 4734b15 | Pending blockers, managed identity, parent repair, concurrent shared-role regression | Fresh/upgrade resource validation |
 | B1.3 | Merged; CI/startup verified | [PR #72](https://github.com/diese-tech/Ratatoskr/pull/72), 48053e3 | Atomic routing, historical destinations, screenshot permissions; final cumulative first-publication check | Live channel IDs, new routing and historical controls |
@@ -457,7 +457,9 @@ The publication-routing change is an updated product contract, not proof of an u
 | Post-#87 private-flow hardening | Merged; Half-Shell finding resolved; CI green | [PR #91](https://github.com/diese-tech/Ratatoskr/pull/91), 6ddd9d9; [PR #92](https://github.com/diese-tech/Ratatoskr/pull/92), 4317bff | 238 tests; both typechecks; build/audit; Ubuntu/Windows CI; private finish-retry follow-up resolved | Remaining uncertainty is live Discord behavior, not a known code defect |
 | Three-hour Scout cleanup / #90 | Proposed separately; not implemented | [Issue #90](https://github.com/diese-tech/Ratatoskr/issues/90) | Scope recorded only | Timing, eligibility, restart behavior and exceptions require product decisions |
 | B3 | Covered for sequencing by explicit user direction | #36/#45/#62 remain open | Partial live Discord evidence plus #91/#92 defect fixes; no claim of a completed historical checklist | Resume only when the user brings back issues or explicitly requests the live matrix |
-| B4 | **Next planned batch** | [#23](https://github.com/diese-tech/Ratatoskr/issues/23), then [#21](https://github.com/diese-tech/Ratatoskr/issues/21) | Existing season persistence and authorization foundation | Implement and smoke-test season status, then confirmed close |
+| Scout partial-roster correction | Merged; main CI green | [PR #98](https://github.com/diese-tech/Ratatoskr/pull/98), 479359a | 253 tests; Ubuntu/Windows PR and main CI; final automated review clean | Recheck the reported swap and ineligibility explanation in live Discord |
+| B4a / #23 | Merged; issue closed; CI green | [PR #96](https://github.com/diese-tech/Ratatoskr/pull/96), 4b5089f; [PR #97](https://github.com/diese-tech/Ratatoskr/pull/97), 6b397e6 | Read-only active/specified season inspection; review findings resolved; Ubuntu/Windows CI | Live Discord smoke remains separate |
+| B4b / #21 | Code complete; local gates green; unmerged | `codex/issue-21-season-close` | 262 tests; both typechecks; build; dependency audit; diff check | Open PR, complete automated review and Ubuntu/Windows CI; live Discord verification remains separate |
 | B5 | Planned | — | — | Migration rehearsal/cutover/recovery |
 | B6 | Planned; product details outstanding | — | — | Full scaffold reference and notification role list |
 | B7 | Design pending | — | — | Storage/privacy/export decisions |
@@ -465,7 +467,7 @@ The publication-routing change is an updated product contract, not proof of an u
 Before resuming implementation:
 
 1. Read this document and the user's latest instructions; recheck current GitHub main/issues/PRs.
-2. Begin with B4a / #23 as the first incomplete planned slice. Re-read the issue and current code before changing it; proceed to B4b / #21 only after #23 is complete.
+2. Finish B4b / #21 review and CI from `codex/issue-21-season-close`. Do not begin B5 until B4b is merged or explicitly dispositioned.
 3. Define the slice's invariants and tests before edits. Use isolated branches/worktrees as appropriate; do not assume the audit checkout is still authoritative.
 4. Keep a reviewable link between the slice, issue, PR, exact commit and validation evidence. Update this progress table rather than relying on chat recollection.
 5. Complete the acceptance gate or record a precise unresolved blocker; never report merged/deployed/live-verified as interchangeable states.
@@ -489,5 +491,6 @@ Commit after each meaningful coherent chunk of work. Each commit body records **
 | 1.7 | Merge B1 #70–#76 in order and B2 #77 separately; record CI and Railway startup evidence; keep auto-deploy enabled | Explicit user merge authorization and subsequent direction to inspect each automatic deployment/log before continuing; live acceptance remains separate |
 | 1.8 | Add recovered-post cancellation/finish management before B3 and record PR #79 deployment/reconciliation evidence | User's live B2 feedback, scoped stale-post plan, PR #79 and Railway verification |
 | 1.9 | Record #87 foundation/lifecycle and #91/#92 private-flow hardening; disposition B3 as covered for sequencing without claiming missing live evidence; identify B4 as next and retain #90 separately | Current merged PR/issue state and the user's explicit September 7 direction |
+| 2.0 | Record B4a as shipped, the focused Scout partial-roster correction as merged, and B4b as locally complete with fail-closed season archival and preserved Discord resources | PRs #96-#98, Issue #21, 262-test local validation, and the user's instruction to continue from master tracker #95 |
 
 For later revisions, record what changed, the evidence or user decision, affected acceptance criteria, dependency/order effects, and authorization status. No change to this plan silently authorizes production actions or expands later product scope.

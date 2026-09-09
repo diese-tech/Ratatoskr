@@ -82,6 +82,31 @@ export function getActiveSeason(db: Database.Database, guildId: string): Season 
   return row ? toSeason(row) : undefined;
 }
 
+// Archives exactly the season the caller observed as active. The status
+// predicate makes a concurrent replacement or earlier close fail closed:
+// this function never archives whichever different season may now be active.
+// The transition and timestamp are one SQLite statement, so no intermediate
+// state is visible and the guild immediately has zero active seasons on
+// success.
+export function archiveSeason(
+  db: Database.Database,
+  guildId: string,
+  seasonId: number,
+): Season | undefined {
+  const row = db
+    .prepare(
+      `
+      UPDATE seasons
+      SET status = 'archived', archived_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND guild_id = ? AND status = 'active'
+      RETURNING *;
+      `,
+    )
+    .get(seasonId, guildId) as SeasonRow | undefined;
+
+  return row ? toSeason(row) : undefined;
+}
+
 export function listSeasons(db: Database.Database, guildId: string): Season[] {
   const rows = db
     .prepare('SELECT * FROM seasons WHERE guild_id = ? ORDER BY season_number ASC')
