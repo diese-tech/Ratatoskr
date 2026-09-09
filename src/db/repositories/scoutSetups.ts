@@ -750,7 +750,7 @@ export function swapScoutRosterSlotsIfVersion(
     const claimed = db
       .prepare(
         `UPDATE scout_setups SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE id = ? AND status = 'roster_ready' AND version = ?`,
+         WHERE id = ? AND status IN ('open', 'roster_ready') AND version = ?`,
       )
       .run(setupId, expectedVersion);
     if (claimed.changes !== 1) return false;
@@ -808,7 +808,7 @@ export function replaceScoutRosterSlotIfVersion(
     const claimed = db
       .prepare(
         `UPDATE scout_setups SET version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE id = ? AND status = 'roster_ready' AND version = ?`,
+         WHERE id = ? AND status IN ('open', 'roster_ready') AND version = ?`,
       )
       .run(setupId, expectedVersion);
     if (claimed.changes !== 1) return 'stale';

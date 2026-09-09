@@ -5,8 +5,9 @@ import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard,
   listScoutRosterSlots, listScoutSignups, withdrawnScoutRosterUserIds, type ScoutSetup } from '../db/index.js';
 import { renderScoutReadiness } from '../domain/scoutReadiness.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
-import { captureScoutReadiness } from './scoutReadiness.js';
+import { captureScoutReadinessDetails } from './scoutReadiness.js';
 import { buildScoutWorkingRosterView } from './scoutReview.js';
+import type { ScoutSignupEligibility } from './scoutEligibility.js';
 import { scoutCancelButtonRow } from './scoutCancel.js';
 import { managementRow, scoutResultLinkRow } from './scoutPublish.js';
 import { scoutFinishButtonRow } from './scoutFinish.js';
@@ -54,7 +55,8 @@ async function findCard(channel: TextBasedChannel, botId: string, setupId: numbe
   }
 }
 
-function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 'control', notify: boolean, unavailable?: string) {
+function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 'control', notify: boolean,
+  unavailable?: string, signupEligibility?: ScoutSignupEligibility) {
   const completion = getScoutCompletion(db, setup.id);
   if (completion) {
     return {
@@ -72,16 +74,22 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
   }
   if (!getScoutCompletion(db, setup.id) && ['open', 'roster_ready'].includes(setup.status)) {
     const unavailableUsers = new Set(withdrawnScoutRosterUserIds(db, setup.id));
+    const prefixes = [
+      notify ? `<@${setup.createdBy}>` : '',
+      unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '',
+    ].filter(Boolean);
+    const prefixLength = prefixes.join('\n').length + (prefixes.length ? 1 : 0);
     const view = buildScoutWorkingRosterView(
       setup,
       listScoutRosterSlots(db, setup.id),
-      listScoutSignups(db, setup.id),
+      signupEligibility?.eligibleSignups ?? listScoutSignups(db, setup.id),
       unavailableUsers,
+      signupEligibility?.ineligibleSignups,
+      2_000 - prefixLength,
     );
     return {
       ...view,
-      content: [notify ? `<@${setup.createdBy}>` : '', unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '', view.content]
-        .filter(Boolean).join('\n'),
+      content: [...prefixes, view.content].join('\n'),
       allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] },
     };
   }
@@ -144,9 +152,12 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
       }
       let state = ensureScoutReadinessCard(db, setupId);
       let unavailable: string | undefined;
+      let signupEligibility: ScoutSignupEligibility | undefined;
       if (['open', 'roster_ready'].includes(setup.status)) {
         try {
-          const currentSnapshot = await captureScoutReadiness(client, db, setup);
+          const readiness = await captureScoutReadinessDetails(client, db, setup);
+          signupEligibility = readiness;
+          const currentSnapshot = readiness.snapshot;
           const previousSnapshot = readScoutReadinessSnapshot(state);
           if (previousSnapshot && JSON.stringify({ ...currentSnapshot, recordedAt: 0 }) === JSON.stringify({ ...previousSnapshot, recordedAt: 0 })) {
             currentSnapshot.recordedAt = previousSnapshot.recordedAt;
@@ -187,14 +198,14 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         if (!telemetry) {
           if (state.telemetry_attempted && !state.telemetry_message_id) throw new Error('Scout telemetry send is uncertain; waiting for marker recovery.');
           patchScoutReadinessCard(db, setupId, { telemetry_attempted: 1, telemetry_message_id: null });
-          try { telemetry = await channel.send(cardView(db, setup, 'telemetry', false, unavailable)); }
+          try { telemetry = await channel.send(cardView(db, setup, 'telemetry', false, unavailable, signupEligibility)); }
           catch (error) {
             if (rejectedSend(error)) patchScoutReadinessCard(db, setupId, { telemetry_attempted: 0 });
             throw error;
           }
           patchScoutReadinessCard(db, setupId, { telemetry_message_id: telemetry.id });
           outcome = 'created';
-        } else await editCard(telemetry, cardView(db, setup, 'telemetry', false, unavailable));
+        } else await editCard(telemetry, cardView(db, setup, 'telemetry', false, unavailable, signupEligibility));
         if (getScoutSetupById(db, setupId)?.status !== setup.status) continue;
         return outcome;
       }
@@ -211,7 +222,7 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         if (setup.controlMessageId) db.prepare('UPDATE scout_setups SET control_message_id = NULL WHERE id = ?').run(setupId);
         patchScoutReadinessCard(db, setupId, { control_attempted: 1,
           creator_notification_attempted: notify ? 1 : state.creator_notification_attempted });
-        try { control = await channel.send(cardView(db, setup, 'control', notify, unavailable)); }
+        try { control = await channel.send(cardView(db, setup, 'control', notify, unavailable, signupEligibility)); }
         catch (error) {
           if (rejectedSend(error)) patchScoutReadinessCard(db, setupId, {
             control_attempted: 0, creator_notification_attempted: state.creator_notification_attempted,
@@ -221,7 +232,7 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         outcome = 'created';
       } else {
         outcome = setup.controlMessageId === control.id ? outcome : 'recovered';
-        await editCard(control, cardView(db, setup, 'control', false, unavailable));
+        await editCard(control, cardView(db, setup, 'control', false, unavailable, signupEligibility));
       }
       db.prepare('UPDATE scout_setups SET control_message_id = ? WHERE id = ?').run(control.id, setupId);
       patchScoutReadinessCard(db, setupId, { control_attempted: 1 });

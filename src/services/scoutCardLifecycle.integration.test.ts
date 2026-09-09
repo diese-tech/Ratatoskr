@@ -182,6 +182,64 @@ test('eligibility loss gain and departure refresh existing cards without deletin
   } finally { f.db.close(); }
 });
 
+test('working card explains why an unseated signup is ineligible', async () => {
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    f.addMember('support-player', []);
+    await f.react('support-player', 'support');
+
+    const card = f.ops.all.first()!;
+    assert.match(card.content, /Unseated signups \(0\)/);
+    assert.match(card.content, /Ineligible signups \(1\)/);
+    assert.match(card.content, /<@support-player> · Support — missing <@&eligible>/);
+  } finally { f.db.close(); }
+});
+
+test('Seat player and Refresh draft explain excluded ineligible signups', async () => {
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    f.addMember('support-player', []);
+    await f.react('support-player', 'support');
+    const version = getScoutSetupById(f.db, f.setup.id)!.version;
+    const replies: any[] = [];
+    const seat = f.interaction(`scout:seat:${f.setup.id}:${version}:0`);
+    seat.editReply = async (payload: any) => replies.push(payload);
+
+    await handleScoutReviewButton(seat as ButtonInteraction, f.db);
+    assert.match(replies.at(-1).content, /no eligible unseated signups/i);
+    assert.match(replies.at(-1).content, /<@support-player> · Support — missing <@&eligible>/);
+
+    const refresh = f.interaction(`scout:refresh:${f.setup.id}:${version}`);
+    refresh.editReply = async (payload: any) => replies.push(payload);
+    await handleScoutReviewButton(refresh as ButtonInteraction, f.db);
+    assert.match(replies.at(-1).content, /working roster is already current/i);
+    assert.match(replies.at(-1).content, /<@support-player> · Support — missing <@&eligible>/);
+  } finally { f.db.close(); }
+});
+
+test('ineligible explanations stay within Discord reply limits', async () => {
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    for (let index = 0; index < 30; index++) {
+      const userId = `ineligible-player-${String(index).padStart(18, '0')}`;
+      f.addMember(userId, []);
+      f.db.prepare('INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, ?)')
+        .run(f.setup.id, userId, SCOUT_ROLES[index % SCOUT_ROLES.length]);
+    }
+    const replies: any[] = [];
+    for (const action of ['seat', 'refresh']) {
+      const interaction = f.interaction(`scout:${action}:${f.setup.id}:0${action === 'seat' ? ':0' : ''}`);
+      interaction.editReply = async (payload: any) => replies.push(payload);
+      await handleScoutReviewButton(interaction as ButtonInteraction, f.db);
+      assert.ok(replies.at(-1).content.length <= 2_000);
+      assert.match(replies.at(-1).content, /additional ineligible signup/);
+    }
+  } finally { f.db.close(); }
+});
+
 test('two-game draft renders both complete games and publication collapses Ops to stable navigation', async () => {
   const f = fixture();
   try {
@@ -462,6 +520,24 @@ test('eligibility gain can trigger readiness and a missing role shows an actiona
     assert.match(f.ops.all.first()!.content, /Live eligibility could not be verified/);
     assert.ok(!f.ops.all.first()!.content.includes('A complete roster can be formed'));
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 10);
+  } finally { f.db.close(); }
+});
+
+test('eligibility warning plus a large working roster stays within Discord limits', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    for (let index = 0; index < 100; index++) {
+      f.db.prepare('INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, ?)')
+        .run(f.setup.id, `51${String(index).padStart(16, '0')}`, SCOUT_ROLES[index % SCOUT_ROLES.length]);
+    }
+    f.roleCache.delete('eligible');
+    await refreshScoutMemberReadiness(f.client, f.db, 'guild', { eligibilityRoleId: 'eligible' });
+
+    const content = f.ops.all.first()!.content;
+    assert.match(content, /Live eligibility could not be verified/);
+    assert.ok(content.length <= 2_000);
   } finally { f.db.close(); }
 });
 

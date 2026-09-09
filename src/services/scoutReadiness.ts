@@ -3,19 +3,35 @@ import type Database from 'better-sqlite3';
 import { getScoutSetupById, listScoutSignups, listScoutRosterSlots, withdrawnScoutRosterUserIds,
   ensureScoutReadinessCard, patchScoutReadinessCard, type ScoutSetup } from '../db/index.js';
 import { scoutReadinessSnapshot } from '../domain/scoutReadiness.js';
-import { resolveEligibleScoutUserIds } from './scoutEligibility.js';
+import { resolveScoutUserEligibility, type ScoutSignupEligibility } from './scoutEligibility.js';
 import { withScoutSetupLock } from './scoutSetupLock.js';
 import { reportOperationalError } from './operationalErrors.js';
 
-export async function captureScoutReadiness(client: Client, db: Database.Database, setup: ScoutSetup) {
+export async function captureScoutReadinessDetails(
+  client: Client,
+  db: Database.Database,
+  setup: ScoutSetup,
+): Promise<ScoutSignupEligibility & { snapshot: ReturnType<typeof scoutReadinessSnapshot> }> {
   const guild = await client.guilds.fetch(setup.guildId);
   const signups = listScoutSignups(db, setup.id);
   const slots = listScoutRosterSlots(db, setup.id);
-  const eligibleIds = await resolveEligibleScoutUserIds(guild,
+  const { eligibleUserIds, ineligibilityByUserId } = await resolveScoutUserEligibility(guild,
     [...signups.map((signup) => signup.userId), ...slots.map((slot) => slot.userId)], setup.eligibilityRoleId);
   const unavailable = new Set([...withdrawnScoutRosterUserIds(db, setup.id),
-    ...slots.filter((slot) => !eligibleIds.has(slot.userId)).map((slot) => slot.userId)]);
-  return scoutReadinessSnapshot(signups.filter((signup) => eligibleIds.has(signup.userId)), setup.gameCount, slots, unavailable.size);
+    ...slots.filter((slot) => !eligibleUserIds.has(slot.userId)).map((slot) => slot.userId)]);
+  const eligibleSignups = signups.filter((signup) => eligibleUserIds.has(signup.userId));
+  return {
+    snapshot: scoutReadinessSnapshot(eligibleSignups, setup.gameCount, slots, unavailable.size),
+    eligibleSignups,
+    ineligibleSignups: signups.flatMap((signup) => {
+      const reason = ineligibilityByUserId.get(signup.userId);
+      return reason ? [{ signup, reason }] : [];
+    }),
+  };
+}
+
+export async function captureScoutReadiness(client: Client, db: Database.Database, setup: ScoutSetup) {
+  return (await captureScoutReadinessDetails(client, db, setup)).snapshot;
 }
 
 /** Freeze current signup counts atomically with a successful terminal transition.

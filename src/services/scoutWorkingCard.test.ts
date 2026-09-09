@@ -45,3 +45,37 @@ test('working Scout Ops view shows partial assignments, OPEN seats, unseated rol
   ]);
   assert.equal('disabled' in controls[3]! && controls[3]!.disabled, true);
 });
+
+test('working Scout Ops view reserves room for summaries and warnings within Discord limits', () => {
+  const twoGameSetup = { ...setup, gameCount: 2 } as ScoutSetup;
+  const roles = ['solo', 'jungle', 'mid', 'support', 'carry'] as const;
+  const teams = ['team_one', 'team_two'] as const;
+  const slots = [1, 2].flatMap((gameNumber) => teams.flatMap((team) => roles.map((role, index) => ({
+    ...baseSlot,
+    id: gameNumber * 100 + (team === 'team_one' ? 0 : 10) + index,
+    gameNumber,
+    team,
+    role,
+    userId: `${gameNumber}${team === 'team_one' ? '1' : '2'}${String(index).padStart(16, '0')}`,
+  })))) as ScoutRosterSlotRecord[];
+  const eligible = Array.from({ length: 60 }, (_, index) => ({
+    id: 1_000 + index, setupId: setup.id, userId: `31${String(index).padStart(16, '0')}`,
+    role: roles[index % roles.length], createdAt: 'now',
+  })) as ScoutSignup[];
+  const ineligible = Array.from({ length: 30 }, (_, index) => ({
+    signup: {
+      id: 2_000 + index, setupId: setup.id, userId: `41${String(index).padStart(16, '0')}`,
+      role: roles[index % roles.length], createdAt: 'now',
+    } as ScoutSignup,
+    reason: { kind: 'missing_role' as const, roleId: '123456789012345678' },
+  }));
+
+  const view = buildScoutWorkingRosterView(
+    twoGameSetup, slots, eligible, new Set([slots[0]!.userId]), ineligible,
+  );
+
+  assert.ok(view.content.length <= 2_000);
+  assert.match(view.content, /additional signup/);
+  assert.match(view.content, /additional ineligible signup/);
+  assert.match(view.content, /need staff attention/);
+});
