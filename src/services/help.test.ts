@@ -69,6 +69,7 @@ test('admin help explains the previewed season close lifecycle and preserved Dis
   const close = admin.entries.find((entry) => entry.usage.startsWith('/season close'));
   assert.ok(close);
   assert.match(close.description, /preview/i);
+  assert.match(close.description, /season number/i);
   assert.match(close.description, /archive/i);
   assert.match(close.description, /channels.*unchanged|does not change.*channels/i);
 });

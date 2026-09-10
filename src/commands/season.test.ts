@@ -57,7 +57,7 @@ function statusInteraction(number: number | null = null, channels = new Collecti
   return { interaction, replies, events };
 }
 
-function closeInteraction(confirm: boolean | null = null, guildOverride?: object) {
+function closeInteraction(confirm: boolean | null = null, guildOverride?: object, seasonNumber: number | null = null) {
   const replies: InteractionReplyOptions[] = [];
   const member = { roles: { cache: new Collection([[process.env.ROLE_ALLFATHER_ID!, {}]]) } };
   const guild = guildOverride ?? {
@@ -70,6 +70,7 @@ function closeInteraction(confirm: boolean | null = null, guildOverride?: object
     options: {
       getSubcommand: () => 'close',
       getBoolean: () => confirm,
+      getInteger: () => seasonNumber,
     },
     reply: async (payload: InteractionReplyOptions) => {
       replies.push(payload);
@@ -79,7 +80,7 @@ function closeInteraction(confirm: boolean | null = null, guildOverride?: object
   return { interaction, replies };
 }
 
-function createInteraction(seasonNumber: number, guildOverride?: object) {
+function createInteraction(seasonNumber: number, guildOverride?: object, displayName: string | null = null) {
   const replies: unknown[] = [];
   const channels = new Collection<string, object>();
   const member = { roles: { cache: new Collection([[process.env.ROLE_ALLFATHER_ID!, {}]]) } };
@@ -117,7 +118,7 @@ function createInteraction(seasonNumber: number, guildOverride?: object) {
     options: {
       getSubcommand: () => 'create',
       getInteger: () => seasonNumber,
-      getString: () => null,
+      getString: () => displayName,
     },
     deferReply: async () => undefined,
     editReply: async (payload: unknown) => {
@@ -149,14 +150,16 @@ test('/season exposes status with an optional season number', () => {
   assert.equal(status.options?.[0]?.required, false);
 });
 
-test('/season exposes close with an optional confirmation flag', () => {
+test('/season exposes close with a preview-bound season number and optional confirmation flag', () => {
   const command = seasonCommand.toJSON();
   const close = command.options?.find((option) => option.name === 'close');
   assert.equal(close?.type, ApplicationCommandOptionType.Subcommand);
   if (close?.type !== ApplicationCommandOptionType.Subcommand) throw new Error('close must be a subcommand');
-  assert.deepEqual(close.options?.map((option) => option.name), ['confirm']);
-  assert.equal(close.options?.[0]?.type, ApplicationCommandOptionType.Boolean);
+  assert.deepEqual(close.options?.map((option) => option.name), ['number', 'confirm']);
+  assert.equal(close.options?.[0]?.type, ApplicationCommandOptionType.Integer);
   assert.equal(close.options?.[0]?.required, false);
+  assert.equal(close.options?.[1]?.type, ApplicationCommandOptionType.Boolean);
+  assert.equal(close.options?.[1]?.required, false);
 });
 
 test('/season close reports no active season without mutating persistence', async () => {
@@ -189,7 +192,7 @@ test('/season close previews the active season without mutating persistence when
           '**Close season 5?**',
           'Category: Season of the Tree',
           'This archives the season record and cannot be undone. Its Discord category and channels will remain unchanged.',
-          'Re-run `/season close confirm:true` to continue.',
+          'Re-run `/season close number:5 confirm:true` to continue.',
         ].join('\n'),
         flags: MessageFlags.Ephemeral,
       }]);
@@ -205,7 +208,7 @@ test('/season close confirm:true archives the active season without touching Dis
   const season = createSeason(db, { guildId: 'guild', seasonNumber: 5, displayName: 'Season of the Tree' });
   setSeasonDiscordCategoryId(db, season.id, 'season-category');
   setActiveSeason(db, 'guild', season.id);
-  const { interaction, replies } = closeInteraction(true);
+  const { interaction, replies } = closeInteraction(true, undefined, 5);
 
   try {
     await handleSeasonCommand(interaction, db);
@@ -226,7 +229,7 @@ test('/season close confirm:true archives the active season without touching Dis
 test('/season create can provision and activate the next season while retaining the archived season channels', async () => {
   const db = openDatabase(':memory:');
   const firstCreate = createInteraction(1);
-  const close = closeInteraction(true, firstCreate.guild);
+  const close = closeInteraction(true, firstCreate.guild, 1);
   const nextCreate = createInteraction(2, firstCreate.guild);
 
   try {
@@ -266,7 +269,7 @@ test('/season close fails closed if the targeted season stops being active befor
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  const { interaction, replies } = closeInteraction(true);
+  const { interaction, replies } = closeInteraction(true, undefined, 1);
 
   try {
     await handleSeasonCommand(interaction, racingDb);
@@ -276,6 +279,71 @@ test('/season close fails closed if the targeted season stops being active befor
     }]);
     assert.equal(getSeasonByNumber(db, 'guild', 1)?.status, 'inactive');
     assert.equal(getActiveSeason(db, 'guild')?.id, replacement.id);
+  } finally {
+    db.close();
+  }
+});
+
+test('/season close confirmation cannot archive a different season than the admin previewed', async () => {
+  const db = openDatabase(':memory:');
+  const previewed = createSeason(db, { guildId: 'guild', seasonNumber: 1 });
+  const replacement = createSeason(db, { guildId: 'guild', seasonNumber: 2 });
+  setActiveSeason(db, 'guild', previewed.id);
+  const preview = closeInteraction();
+
+  try {
+    await handleSeasonCommand(preview.interaction, db);
+    setActiveSeason(db, 'guild', replacement.id);
+
+    const staleConfirmation = closeInteraction(true, undefined, previewed.seasonNumber);
+    await handleSeasonCommand(staleConfirmation.interaction, db);
+
+    assert.deepEqual(staleConfirmation.replies, [{
+      content: 'Season 1 is no longer active, so it was not closed. Run `/season close` again to preview the current active season.',
+      flags: MessageFlags.Ephemeral,
+    }]);
+    assert.equal(getActiveSeason(db, 'guild')?.id, replacement.id);
+  } finally {
+    db.close();
+  }
+});
+
+test('/season close confirm:true requires the season number supplied by the preview', async () => {
+  const db = openDatabase(':memory:');
+  const active = createSeason(db, { guildId: 'guild', seasonNumber: 5 });
+  setActiveSeason(db, 'guild', active.id);
+  const confirmation = closeInteraction(true);
+
+  try {
+    await handleSeasonCommand(confirmation.interaction, db);
+    assert.deepEqual(confirmation.replies, [{
+      content: 'Confirmation must include the season number from the preview. Run `/season close` again and use the exact command it provides.',
+      flags: MessageFlags.Ephemeral,
+    }]);
+    assert.equal(getActiveSeason(db, 'guild')?.id, active.id);
+  } finally {
+    db.close();
+  }
+});
+
+test('/season create never reuses a retained category owned by an archived season with the same custom name', async () => {
+  const db = openDatabase(':memory:');
+  const firstCreate = createInteraction(1, undefined, 'Shared Season');
+  const close = closeInteraction(true, firstCreate.guild, 1);
+  const nextCreate = createInteraction(2, firstCreate.guild, 'Shared Season');
+
+  try {
+    await handleSeasonCommand(firstCreate.interaction, db);
+    const firstCategoryId = getSeasonByNumber(db, 'guild', 1)?.discordCategoryId;
+    assert.ok(firstCategoryId);
+
+    await handleSeasonCommand(close.interaction, db);
+    await handleSeasonCommand(nextCreate.interaction, db);
+
+    const secondCategoryId = getSeasonByNumber(db, 'guild', 2)?.discordCategoryId;
+    assert.ok(secondCategoryId);
+    assert.notEqual(secondCategoryId, firstCategoryId);
+    assert.equal(getActiveSeason(db, 'guild')?.seasonNumber, 2);
   } finally {
     db.close();
   }

@@ -66,9 +66,9 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
           'Checks the active or selected season category and channels without changing, creating, or repairing anything.',
       },
       {
-        usage: '/season close [confirm:true]',
+        usage: '/season close [number:<n>] [confirm:true]',
         description:
-          'Previews the active season by default. With confirm:true, archives its season record while leaving its Discord category and channels unchanged.',
+          'Previews the active season. Re-run with the season number and confirm:true to archive it. Discord channels stay unchanged.',
       },
       {
         usage: '/scout config [operations_channel:<#scout-ops>] [timezone:<IANA zone>] [bind_emoji:true]',

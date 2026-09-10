@@ -16,6 +16,7 @@ import {
   getSeasonByNumber,
   insertManagedResource,
   listManagedResourcesByDomain,
+  listSeasons,
   markManagedResourceObsolete,
   SeasonAlreadyActiveError,
   setSeasonDiscordCategoryId,
@@ -81,6 +82,13 @@ export const seasonCommand = new SlashCommandBuilder()
     subcommand
       .setName('close')
       .setDescription('Preview or close the active season without changing its channels.')
+      .addIntegerOption((option) =>
+        option
+          .setName('number')
+          .setDescription('Season number shown in the preview; required with confirm:true.')
+          .setMinValue(1)
+          .setRequired(false),
+      )
       .addBooleanOption((option) =>
         option.setName('confirm').setDescription('Choose true to archive the active season.').setRequired(false),
       ),
@@ -148,8 +156,25 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
           `**Close season ${activeSeason.seasonNumber}?**`,
           `Category: ${activeSeason.categoryName}`,
           'This archives the season record and cannot be undone. Its Discord category and channels will remain unchanged.',
-          'Re-run `/season close confirm:true` to continue.',
+          `Re-run \`/season close number:${activeSeason.seasonNumber} confirm:true\` to continue.`,
         ].join('\n'),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const confirmedSeasonNumber = interaction.options.getInteger('number');
+    if (confirmedSeasonNumber === null) {
+      await interaction.reply({
+        content: 'Confirmation must include the season number from the preview. Run `/season close` again and use the exact command it provides.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (confirmedSeasonNumber !== activeSeason.seasonNumber) {
+      await interaction.reply({
+        content: `Season ${confirmedSeasonNumber} is no longer active, so it was not closed. Run \`/season close\` again to preview the current active season.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -213,6 +238,11 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
 
   const categoryName = season.categoryName;
   const resolveRoleId = (roleName: string) => guild.roles.cache.find((role) => role.name === roleName)?.id;
+  const otherSeasonCategoryIds = new Set(
+    listSeasons(db, guild.id)
+      .filter((existingSeason) => existingSeason.id !== season.id && existingSeason.discordCategoryId)
+      .map((existingSeason) => existingSeason.discordCategoryId as string),
+  );
 
   // --- Category resolution: same exact/ambiguous/none discipline #16
   // establishes for server-scaffold resources. The category id lives on the
@@ -226,7 +256,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   let categoryAmbiguous = false;
   if (!category) {
     const candidates: CandidateResource[] = guild.channels.cache
-      .filter((channel) => channel.type === ChannelType.GuildCategory)
+      .filter((channel) => channel.type === ChannelType.GuildCategory && !otherSeasonCategoryIds.has(channel.id))
       .map((channel) => ({ discordId: channel.id, name: channel.name, kind: 'category', parentId: null }));
     const match = classifyMatch(candidates, { name: categoryName, kind: 'category', parentId: null });
 
