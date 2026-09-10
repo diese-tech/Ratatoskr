@@ -1,5 +1,8 @@
 import type Database from 'better-sqlite3';
 import type { DivisionRecord, DivisionStatus } from '../types.js';
+import type { UpsertDivisionInput } from '../../storage/divisionWorkspaceStore.js';
+
+export type { UpsertDivisionInput } from '../../storage/divisionWorkspaceStore.js';
 
 type DivisionRow = {
   id: number;
@@ -32,17 +35,6 @@ function toDivisionRecord(row: DivisionRow): DivisionRecord {
     updatedAt: row.updated_at,
   };
 }
-
-export type UpsertDivisionInput = {
-  guildId: string;
-  divisionKey: string;
-  displayName: string;
-  seasonId?: number | null;
-  roleId?: string | null;
-  managerRoleId?: string | null;
-  captainRoleId?: string | null;
-  categoryId?: string | null;
-};
 
 // Insert-or-update on (guildId, divisionKey) -- the authored, stable key,
 // never the display name (#31 Defect 1/Defect 2). displayName is updated on

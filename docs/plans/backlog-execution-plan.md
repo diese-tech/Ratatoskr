@@ -1,6 +1,6 @@
 # Ratatoskr backlog execution plan
 
-Version: 2.2 — B5a shipped; B5b server storage boundary in progress
+Version: 2.3 — B5a/B5b shipped; B5c division storage boundary in progress
 Recorded: September 2, 2026
 Updated: September 10, 2026
 Repository: [diese-tech/Ratatoskr](https://github.com/diese-tech/Ratatoskr)
@@ -16,7 +16,7 @@ B2's Lucid-inspired telemetry adaptation is separately merged in [PR #77](https:
 
 Issue [#87](https://github.com/diese-tech/Ratatoskr/issues/87) subsequently expanded the Scout lifecycle beyond B2. Its migration-18 foundation and working-roster lifecycle shipped through [PR #88](https://github.com/diese-tech/Ratatoskr/pull/88) and [PR #89](https://github.com/diese-tech/Ratatoskr/pull/89). Live Discord feedback then drove the private-continuation hardening in [PR #91](https://github.com/diese-tech/Ratatoskr/pull/91) and [PR #92](https://github.com/diese-tech/Ratatoskr/pull/92). PR #92 merged as `4317bffa2b3e6796f125bca07e6dd462028cecfb` after 238 local tests, green Ubuntu/Windows CI, and a resolved Half-Shell follow-up. Issue #87 is closed.
 
-On September 7, the user directed that B3 be considered covered for sequencing until new live Discord issues are brought back. This is a product/acceptance disposition, not a claim that every historical #45/#62 checklist step was observed. Issues #36, #45, #62, #68, and #69 remain available as non-blocking trackers. B4a / #23 shipped through PRs #96 and #97; B4b / #21 shipped through PR #99 at `f34b3b7f89884457dab5eb4a62caa97aa5ec1cb8`, with final review and post-merge Ubuntu/Windows CI green. B5a / #100 shipped through PR #101 at `c7b0dc4e0bfb984e5dabfc3bb180a3da12151a68`; focused [Issue #102](https://github.com/diese-tech/Ratatoskr/issues/102) is the active B5b server-storage slice. The separate three-hour Scout cleanup proposal remains in [#90](https://github.com/diese-tech/Ratatoskr/issues/90) and does not silently enter B5.
+On September 7, the user directed that B3 be considered covered for sequencing until new live Discord issues are brought back. This is a product/acceptance disposition, not a claim that every historical #45/#62 checklist step was observed. Issues #36, #45, #62, #68, and #69 remain available as non-blocking trackers. B4a / #23 shipped through PRs #96 and #97; B4b / #21 shipped through PR #99 at `f34b3b7f89884457dab5eb4a62caa97aa5ec1cb8`, with final review and post-merge Ubuntu/Windows CI green. B5a / #100 shipped through PR #101 at `c7b0dc4e0bfb984e5dabfc3bb180a3da12151a68`; B5b / #102 shipped through PR #103 at `5837a72bf81213c33e94d68b36ae99eb9ce9af00`. Focused [Issue #104](https://github.com/diese-tech/Ratatoskr/issues/104) is the active B5c division-storage slice. The separate three-hour Scout cleanup proposal remains in [#90](https://github.com/diese-tech/Ratatoskr/issues/90) and does not silently enter B5.
 
 ## 2. Agreed changes since the original assessment
 
@@ -151,7 +151,7 @@ Solid arrows are prerequisites. Dotted arrows are recommended sequencing, not in
 | 2 | B2 — Scout readiness visibility | #68 live readiness telemetry; #69 moved into B1.7 | Canonical counts; durable telemetry-to-control-panel lifecycle |
 | 3 | B3 — live Scout acceptance (covered by user direction) | Historical #45/#62 coordinated-session checklist retained for future issue intake | No longer blocks sequencing; do not represent the unperformed remainder as observed live evidence |
 | 4 | B4 — season lifecycle (shipped) | #23 status, then #21 close | Five-channel inspection is read-only; confirmed close archives exactly the intended season, leaves zero active seasons, preserves channels and Scouts |
-| 5 | **B5 — Postgres migration (active)** | Scoped workstream extracted from #1; B5a in #100, B5b in #102 | Verified schema/data/invariants, rehearsed cutover and recovery, one replica, post-cutover Scout smoke tests |
+| 5 | **B5 — Postgres migration (active)** | Scoped workstream extracted from #1; B5a in #100, B5b in #102, B5c in #104 | Verified schema/data/invariants, rehearsed cutover and recovery, one replica, post-cutover Scout smoke tests |
 | 6 | B6 — permanent scaffold and notification roles | Remaining full #67, then #22 | Approved fresh/upgrade layout preserves identities/history; notification roles cannot grant access |
 | 7 | B7 — archive design | #7 design only | Explicit storage/export/privacy/attribution/failure decisions and acceptance-ready implementation prerequisites |
 
@@ -461,15 +461,16 @@ The publication-routing change is an updated product contract, not proof of an u
 | B4a / #23 | Merged; issue closed; CI green | [PR #96](https://github.com/diese-tech/Ratatoskr/pull/96), 4b5089f; [PR #97](https://github.com/diese-tech/Ratatoskr/pull/97), 6b397e6 | Read-only active/specified season inspection; review findings resolved; Ubuntu/Windows CI | Live Discord smoke remains separate |
 | B4b / #21 | Merged; issue closed; final review and main CI green | [PR #99](https://github.com/diese-tech/Ratatoskr/pull/99), f34b3b7 | 265 tests; both typechecks; build/audit; final-head review clean; PR and post-merge Ubuntu/Windows CI | Live Discord verification remains separate |
 | B5a / #100 | Merged; issue closed; final review, main CI and Railway deployment status green | [PR #101](https://github.com/diese-tech/Ratatoskr/pull/101), c7b0dc4 | Explicit `DATABASE_BACKEND`; `DATABASE_URL` cannot switch backends; async season workspace contract with SQLite adapter; 269 tests | Runtime/startup logs and live Discord smoke were not inspected |
-| B5b / #102 | In progress on `codex/issue-95-b5-server-storage` | [Issue #102](https://github.com/diese-tech/Ratatoskr/issues/102) | Shared async managed-resource store; `/server bootstrap`, runner and standalone script conversion; 271 tests locally | Review/CI; no server-scaffold behavior change or Postgres implementation |
-| B5 | Active | #100 is the first bounded slice | Dedicated Ratatoskr Postgres selected in #1 | Migration schema/verifier/rehearsal/cutover/recovery remain later gates |
+| B5b / #102 | Merged; issue closed; final review, main CI and Railway deployment status green | [PR #103](https://github.com/diese-tech/Ratatoskr/pull/103), 5837a72 | Shared async managed-resource store; `/server bootstrap`, runner and standalone script conversion; 271 tests | Runtime/startup logs and live Discord smoke were not inspected |
+| B5c / #104 | PR open on `codex/issue-95-b5-division-storage` | [PR #105](https://github.com/diese-tech/Ratatoskr/pull/105) | Async division workspace and SQLite adapter; division command/provisioning conversion; shared legacy Scout lock scope; 275 tests locally | Final-head review/CI; no division behavior change, Scout conversion, or Postgres implementation |
+| B5 | Active | #100, #102, and #104 are bounded vertical slices | Dedicated Ratatoskr Postgres selected in #1 | Remaining workflow extraction plus schema/verifier/rehearsal/cutover/recovery remain later gates |
 | B6 | Planned; product details outstanding | — | — | Full scaffold reference and notification role list |
 | B7 | Design pending | — | — | Storage/privacy/export decisions |
 
 Before resuming implementation:
 
 1. Read this document and the user's latest instructions; recheck current GitHub main/issues/PRs.
-2. Complete B5b / #102 review and CI without changing server-scaffold behavior, adding a Postgres driver, provisioning infrastructure, or changing production persistence.
+2. Complete B5c / #104 review and CI without changing division behavior, converting Scout, adding a Postgres driver, provisioning infrastructure, or changing production persistence.
 3. Define the slice's invariants and tests before edits. Use isolated branches/worktrees as appropriate; do not assume the audit checkout is still authoritative.
 4. Keep a reviewable link between the slice, issue, PR, exact commit and validation evidence. Update this progress table rather than relying on chat recollection.
 5. Complete the acceptance gate or record a precise unresolved blocker; never report merged/deployed/live-verified as interchangeable states.

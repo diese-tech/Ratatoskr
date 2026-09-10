@@ -24,4 +24,6 @@ export interface ManagedResourceStore {
   ): Promise<ManagedResource[]>;
   insertManagedResource(input: InsertManagedResourceInput): Promise<ManagedResource>;
   markManagedResourceObsolete(id: number): Promise<void>;
+  setManagedResourceParent(id: number, parentResourceId: string | null): Promise<void>;
+  markManagedResourcePurged(id: number): Promise<void>;
 }

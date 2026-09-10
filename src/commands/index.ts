@@ -84,7 +84,7 @@ export async function handleInteraction(interaction: Interaction, storage: Appli
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'division') {
-    await handleDivisionCommand(interaction, db);
+    await handleDivisionCommand(interaction, storage.divisions, storage.operationScope);
   } else if (interaction.commandName === 'season') {
     await handleSeasonCommand(interaction, storage.seasons);
   } else if (interaction.commandName === 'scout') {

@@ -1,35 +1,36 @@
 # Implementation checkpoint
 
-Authorized scope: the B1-B7 sequence through the active B5b server-storage
-slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.2,
-roadmap #1, and focused Issue #102.
+Authorized scope: the B1-B7 sequence through the active B5c division-storage
+slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.3,
+roadmap #1, and focused Issue #104.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B5b server managed-resource storage boundary
+## Current checkpoint — B5c division lifecycle storage boundary
 
-Done: B5a / #100 merged through PR #101 at
-`c7b0dc4e0bfb984e5dabfc3bb180a3da12151a68`; final automated review, PR and
-post-merge Ubuntu/Windows CI passed. Railway's GitHub deployment record reported
-success, while runtime/startup logs and live Discord behavior remain uninspected.
+Done: B5a / #100 and B5b / #102 merged through PRs #101 and #103, ending at
+`5837a72bf81213c33e94d68b36ae99eb9ce9af00`; final automated review plus PR and
+post-merge Ubuntu/Windows CI passed for both. Railway's GitHub deployment records
+reported success, while runtime/startup logs and live Discord behavior remain uninspected.
 
-On `codex/issue-95-b5-server-storage`, B5b extracts the managed-resource methods
-into a reusable backend-independent asynchronous `ManagedResourceStore` and SQLite
-adapter. The `/server bootstrap` command, shared bootstrap runner and standalone
-bootstrap script now consume that contract. The season adapter reuses the same
-managed-resource store, avoiding a second persistence abstraction for identical
-operations. Server-scaffold matching, dry-run, apply, permission reconciliation and
-cleanup behavior are unchanged.
+On `codex/issue-95-b5-division-storage`, B5c adds a backend-independent asynchronous
+`DivisionWorkspaceStore` and SQLite adapter over division records, managed resources,
+Scout routing configuration and active lifecycle blockers. `/division` add/status/
+archive/delete and provisioning now consume that contract. A transitional opaque
+operation scope preserves mutual exclusion with legacy Scout callers that still use
+the SQLite handle. Division ownership, archive/delete safety, centralized Scout
+routing, partial-deletion retries and franchise-role concurrency are unchanged.
 
-Validation: 271 tests pass locally, including asynchronous managed-resource insert,
-lookup, domain listing and retirement plus a delayed-storage server dry-run that
-proves no Discord or persistence writes occur. Both typechecks, build, dependency
-audit and diff check pass. Twenty-two non-test command/service files still import
-`better-sqlite3`; B5b does not claim the application is Postgres-ready.
+Validation: 275 tests pass locally, including asynchronous division lifecycle,
+managed-resource parent/purge transitions, shared legacy/new lock scope, and a
+delayed-storage provisioning check. Both typechecks, build, dependency audit and diff check pass.
+Nineteen non-test command/service files still import `better-sqlite3`; B5c does not
+claim the application is Postgres-ready.
 
-Next: open the focused #102 PR and require final-head review plus Ubuntu/Windows CI.
-Do not change the server scaffold, add a Postgres driver, provision infrastructure,
-change production configuration, or cut over persistence in this slice.
+Next: require final-head review plus Ubuntu/Windows CI on PR #105, resolve any findings,
+then merge only the unchanged reviewed commit under the standing authorization.
+Do not change division behavior, convert Scout, add a Postgres driver, provision
+infrastructure, change production configuration, or cut over persistence in this slice.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 

@@ -5,6 +5,7 @@ import { openDatabase, insertManagedResource } from '../db/index.js';
 import { yslGuildStructure } from '../config/guild-structure.js';
 import { resolveFranchiseRepresentativeId, FRANCHISE_REPRESENTATIVE_KEY } from './scoutRoleIdentity.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
+import { openApplicationStorage } from '../storage/index.js';
 
 test('franchise role is provisioned, rejects ambiguity, and retains managed identity after rename', () => {
   const db = openDatabase(':memory:');
@@ -40,4 +41,15 @@ test('division create/teardown guard rejects overlap while other divisions can p
     assert.ok(retry);
     retry();
   } finally { db.close(); }
+});
+
+test('division storage and legacy Scout callers share the same operation guard', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+  try {
+    const release = tryAcquireDivisionOperation(storage.operationScope, 'guild', 'vanaheim')!;
+    assert.equal(tryAcquireDivisionOperation(storage.legacyDatabase, 'guild', 'vanaheim'), undefined);
+    release();
+  } finally {
+    await storage.close();
+  }
 });
