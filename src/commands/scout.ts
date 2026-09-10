@@ -136,6 +136,8 @@ export async function handleScoutCommand(
     return;
   }
 
+  const bindEmoji = interaction.options.getBoolean('bind_emoji');
+  await interaction.deferReply(bindEmoji ? {} : { flags: MessageFlags.Ephemeral });
   let config = await configuration.ensureScoutConfig(interaction.guild.id);
   if (timezone) config = await configuration.setScoutTimezone(interaction.guild.id, timezone);
 
@@ -145,9 +147,8 @@ export async function handleScoutCommand(
     : null;
   if (operationsChannel) {
     if (operationsChannel.type !== ChannelType.GuildText || !operationsChannel.parentId) {
-      await interaction.reply({
+      await interaction.editReply({
         content: 'The Scout Operations control channel must be a server text channel inside a category.',
-        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -158,7 +159,7 @@ export async function handleScoutCommand(
     );
   }
 
-  if (interaction.options.getBoolean('bind_emoji')) {
+  if (bindEmoji) {
     const { startScoutEmojiBinding } = await import('../services/scoutEmojiBinding.js');
     await startScoutEmojiBinding(interaction);
     if (operationsChannel) {
@@ -170,7 +171,7 @@ export async function handleScoutCommand(
     return;
   }
 
-  await interaction.reply({ ...renderScoutConfig(config), flags: MessageFlags.Ephemeral });
+  await interaction.editReply(renderScoutConfig(config));
   if (operationsChannel) {
     const { reconcileActiveScoutSignups } = await import('../services/scoutSignups.js');
     const { reconcileScoutControlPanels } = await import('../services/scoutControlPanel.js');
@@ -193,8 +194,9 @@ export async function handleScoutConfigRoleSelect(
     return true;
   }
 
+  await interaction.deferUpdate();
   const config = await configuration.setScoutAuthorizedRoleIds(interaction.guild.id, interaction.values);
-  await interaction.update(renderScoutConfig(config));
+  await interaction.editReply(renderScoutConfig(config));
   return true;
 }
 

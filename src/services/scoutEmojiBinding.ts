@@ -114,7 +114,8 @@ export async function startScoutEmojiBinding(interaction: ChatInputCommandIntera
   if (!interaction.guild) return;
 
   const state = createScoutEmojiBindingState(interaction.guild.id, interaction.user.id);
-  await interaction.reply({ content: bindingMessage(state) });
+  if (interaction.deferred || interaction.replied) await interaction.editReply({ content: bindingMessage(state) });
+  else await interaction.reply({ content: bindingMessage(state) });
   const message = await interaction.fetchReply();
   liveBindings.set(message.id, { state, expiresAt: Date.now() + BINDING_TTL_MS });
 
@@ -208,8 +209,9 @@ export async function handleScoutFillSkipButton(
     return true;
   }
   if (result.outcome !== 'complete' || !result.emojiByRole) return true;
+  await interaction.deferUpdate();
   await storage.setScoutEmojiByRole(binding.state.guildId, result.emojiByRole);
   liveBindings.delete(interaction.message.id);
-  await interaction.update({ content: `${bindingMessage(result.state)}\n✅ Five scout role emoji are saved; Fill was skipped.`, components: [] });
+  await interaction.editReply({ content: `${bindingMessage(result.state)}\n✅ Five scout role emoji are saved; Fill was skipped.`, components: [] });
   return true;
 }

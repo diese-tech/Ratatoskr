@@ -3,7 +3,7 @@ import test from 'node:test';
 import { ApplicationCommandOptionType, Collection } from 'discord.js';
 import type { ScoutConfig } from '../db/types.js';
 import type { ScoutConfigurationStore } from '../storage/index.js';
-import { handleScoutConfigRoleSelect, scoutCommand } from './scout.js';
+import { handleScoutCommand, handleScoutConfigRoleSelect, scoutCommand } from './scout.js';
 
 test('/scout exposes create, cancel, and the admin configuration surface', () => {
   const command = scoutCommand.toJSON();
@@ -57,7 +57,9 @@ test('Scout configuration role selection awaits persistence before updating the 
     async setScoutTimezone() { throw new Error('not used'); },
     async setScoutEmojiByRole() { throw new Error('not used'); },
   } satisfies ScoutConfigurationStore;
+  let deferredUpdates = 0;
   const updates: unknown[] = [];
+  const edits: unknown[] = [];
   const interaction = {
     customId: 'scout:config:authorized_roles',
     guild: {
@@ -68,13 +70,77 @@ test('Scout configuration role selection awaits persistence before updating the 
     },
     user: { id: 'admin-1' },
     values: ['staff-role'],
+    deferUpdate: async () => { deferredUpdates += 1; },
     update: async (payload: unknown) => { updates.push(payload); },
+    editReply: async (payload: unknown) => { edits.push(payload); },
   } as never;
 
   const handling = handleScoutConfigRoleSelect(interaction, storage);
   await writeStarted;
-  assert.equal(updates.length, 0);
+  const acknowledgementsBeforeWrite = deferredUpdates;
   releaseWrite();
   assert.equal(await handling, true);
-  assert.equal(updates.length, 1);
+  assert.equal(acknowledgementsBeforeWrite, 1);
+  assert.equal(updates.length, 0);
+  assert.equal(edits.length, 1);
+});
+
+test('/scout config defers before awaiting asynchronous configuration reads', async () => {
+  process.env.ROLE_ALLFATHER_ID = 'admin-role';
+  process.env.ROLE_AESIR_ID = 'other-admin-role';
+  let releaseRead!: () => void;
+  let announceRead!: () => void;
+  const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const readStarted = new Promise<void>((resolve) => { announceRead = resolve; });
+  const config: ScoutConfig = {
+    guildId: 'guild-1',
+    authorizedRoleIds: [],
+    operationsCategoryId: null,
+    operationsChannelId: null,
+    emojiByRole: { solo: null, jungle: null, mid: null, support: null, carry: null, fill: null },
+    timezone: 'America/New_York',
+    createdAt: '2026-09-10T00:00:00.000Z',
+    updatedAt: '2026-09-10T00:00:00.000Z',
+  };
+  const storage = {
+    async ensureScoutConfig() {
+      announceRead();
+      await readGate;
+      return config;
+    },
+    async setScoutAuthorizedRoleIds() { throw new Error('not used'); },
+    async setScoutOperationsChannel() { throw new Error('not used'); },
+    async setScoutTimezone() { throw new Error('not used'); },
+    async setScoutEmojiByRole() { throw new Error('not used'); },
+  } satisfies ScoutConfigurationStore;
+  let deferredReplies = 0;
+  const replies: unknown[] = [];
+  const edits: unknown[] = [];
+  const interaction = {
+    guild: {
+      id: 'guild-1',
+      members: {
+        fetch: async () => ({ roles: { cache: new Collection([['admin-role', {}]]) } }),
+      },
+    },
+    user: { id: 'admin-1' },
+    options: {
+      getSubcommand: () => 'config',
+      getString: () => null,
+      getChannel: () => null,
+      getBoolean: () => false,
+    },
+    deferReply: async () => { deferredReplies += 1; },
+    reply: async (payload: unknown) => { replies.push(payload); },
+    editReply: async (payload: unknown) => { edits.push(payload); },
+  } as never;
+
+  const handling = handleScoutCommand(interaction, {} as never, storage);
+  await readStarted;
+  const acknowledgementsBeforeRead = deferredReplies;
+  releaseRead();
+  await handling;
+  assert.equal(acknowledgementsBeforeRead, 1);
+  assert.equal(replies.length, 0);
+  assert.equal(edits.length, 1);
 });

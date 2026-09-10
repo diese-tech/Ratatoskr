@@ -20,9 +20,9 @@ role selector, reaction emoji completion and Skip Fill continuation consume the 
 Scout creation, cancellation, roster, publication, notifications, recovery and
 authorization remain on the transitional SQLite handle for later coherent slices.
 
-Validation: 278 tests pass locally, including asynchronous configuration creation,
+Validation: 280 tests pass locally, including asynchronous configuration creation,
 all existing mutation categories while preserving independent fields, and a delayed
-command-continuation write. Both typechecks,
+command, role-select and Skip Fill acknowledgement/write ordering. Both typechecks,
 build, dependency audit and diff check pass. Eighteen non-test command/service files
 still import `better-sqlite3`; B5d does not claim the application is Postgres-ready.
 
