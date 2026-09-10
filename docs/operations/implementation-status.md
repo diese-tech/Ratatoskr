@@ -27,7 +27,8 @@ delayed-storage provisioning check. Both typechecks, build, dependency audit and
 Nineteen non-test command/service files still import `better-sqlite3`; B5c does not
 claim the application is Postgres-ready.
 
-Next: open the focused #104 PR and require final-head review plus Ubuntu/Windows CI.
+Next: require final-head review plus Ubuntu/Windows CI on PR #105, resolve any findings,
+then merge only the unchanged reviewed commit under the standing authorization.
 Do not change division behavior, convert Scout, add a Postgres driver, provision
 infrastructure, change production configuration, or cut over persistence in this slice.
 
