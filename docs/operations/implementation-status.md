@@ -9,7 +9,8 @@ Apply this process to every authorized batch, preserving separate code/deploymen
 ## Current checkpoint — B4b season close locally complete
 
 Done: B4a / #23 merged through PRs #96 and #97. On
-`codex/issue-21-season-close`, B4b adds ADMIN-gated `/season close [confirm:true]`.
+`codex/issue-21-season-close`, B4b adds ADMIN-gated
+`/season close [number:<n>] [confirm:true]`.
 The default is a private no-write preview. Confirmation atomically archives only
 the exact still-active season, records `archived_at`, leaves all Discord categories,
 channels and season-independent Scouts untouched, and fails closed on stale targeting.
@@ -22,11 +23,18 @@ reproduced all five old channels blocking Season 2. Fix 6d8e072 excludes channel
 already owned by other seasons from new-season candidate matching while preserving
 ambiguity handling for unmanaged resources and drift in the season being provisioned.
 
-Validation: 262 tests, application typecheck, scripts typecheck, build, dependency
+The next automated review found two additional cross-invocation/resource-ownership
+hazards. Fix 4f8d84e binds confirmation to the season number emitted by the preview,
+so an old confirmation cannot close a newly active season, and excludes category IDs
+owned by other seasons so a reused custom category name cannot merge workspaces.
+The help entry remains within Discord's embed field limit.
+
+Validation: 265 tests, application typecheck, scripts typecheck, build, dependency
 audit and diff check pass locally. Focused command/repository coverage includes no
 active season, omitted/false confirmation, confirmed archival, preserved category
-identity, injected stale targeting and a complete close-to-next-create flow. No live
-Discord interaction was performed.
+identity, preview-bound stale confirmation, missing-number rejection, same-name
+category isolation, injected stale targeting and a complete close-to-next-create
+flow with retained channels. No live Discord interaction was performed.
 
 Next: PR #99 is open for the focused #21 slice. Push the review repair, resolve its
 thread, and require a fresh automated review on the final head plus green
