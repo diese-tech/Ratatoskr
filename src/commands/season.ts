@@ -6,22 +6,10 @@ import {
   type ChatInputCommandInteraction,
   type TextChannel,
 } from 'discord.js';
-import type Database from 'better-sqlite3';
 import {
-  activateSeasonIfNoneActive,
-  archiveSeason,
-  createSeason,
-  getActiveManagedResourceByLogicalKey,
-  getActiveSeason,
-  getSeasonByNumber,
-  insertManagedResource,
-  listManagedResourcesByDomain,
-  listSeasons,
-  markManagedResourceObsolete,
-  SeasonAlreadyActiveError,
-  setSeasonDiscordCategoryId,
   type Season,
 } from '../db/index.js';
+import { SeasonAlreadyActiveError, type SeasonWorkspaceStore } from '../storage/index.js';
 import { requireAccess } from '../services/authorization.js';
 import { STAFF_ROLES } from '../services/divisions.js';
 import { classifyMatch, resolveChannelPermissionOverwrites, type CandidateResource } from '../services/serverBootstrap.js';
@@ -94,7 +82,7 @@ export const seasonCommand = new SlashCommandBuilder()
       ),
   );
 
-export async function handleSeasonCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
+export async function handleSeasonCommand(interaction: ChatInputCommandInteraction, storage: SeasonWorkspaceStore) {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
     return;
@@ -108,8 +96,8 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   if (subcommand === 'status') {
     const requestedNumber = interaction.options.getInteger('number');
     const season = requestedNumber === null
-      ? getActiveSeason(db, guild.id)
-      : getSeasonByNumber(db, guild.id, requestedNumber);
+      ? await storage.getActiveSeason(guild.id)
+      : await storage.getSeasonByNumber(guild.id, requestedNumber);
 
     if (!season) {
       await interaction.reply({
@@ -123,14 +111,15 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await guild.channels.fetch();
-    const channelStates = SEASON_CHANNELS.map((spec) => {
-      const managed = getActiveManagedResourceByLogicalKey(
-        db,
-        guild.id,
-        seasonChannelLogicalKey(season.seasonNumber, spec.key),
-      );
-      return `- ${spec.name}: ${seasonChannelState(guild, managed?.discordResourceId, season.discordCategoryId)}`;
-    });
+    const channelStates = await Promise.all(
+      SEASON_CHANNELS.map(async (spec) => {
+        const managed = await storage.getActiveManagedResourceByLogicalKey(
+          guild.id,
+          seasonChannelLogicalKey(season.seasonNumber, spec.key),
+        );
+        return `- ${spec.name}: ${seasonChannelState(guild, managed?.discordResourceId, season.discordCategoryId)}`;
+      }),
+    );
     await interaction.editReply({
       content: [
         `**Season ${season.seasonNumber} status**`,
@@ -144,7 +133,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   }
 
   if (subcommand === 'close') {
-    const activeSeason = getActiveSeason(db, guild.id);
+    const activeSeason = await storage.getActiveSeason(guild.id);
     if (!activeSeason) {
       await interaction.reply({ content: 'No season is currently active.', flags: MessageFlags.Ephemeral });
       return;
@@ -180,7 +169,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
       return;
     }
 
-    const archivedSeason = archiveSeason(db, guild.id, activeSeason.id);
+    const archivedSeason = await storage.archiveSeason(guild.id, activeSeason.id);
     if (!archivedSeason) {
       await interaction.reply({
         content: 'The active season changed before it could be closed. No change was made; run `/season close` again.',
@@ -201,8 +190,8 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   const seasonNumber = interaction.options.getInteger('number', true);
   const displayName = interaction.options.getString('name');
 
-  const activeSeason = getActiveSeason(db, guild.id);
-  const existingForNumber = getSeasonByNumber(db, guild.id, seasonNumber);
+  const activeSeason = await storage.getActiveSeason(guild.id);
+  const existingForNumber = await storage.getSeasonByNumber(guild.id, seasonNumber);
   const eligibility = evaluateSeasonCreateEligibility(activeSeason, existingForNumber);
 
   if (eligibility.outcome === 'blocked-active-season') {
@@ -234,12 +223,12 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   const season: Season =
     eligibility.outcome === 'retry-existing' && existingForNumber
       ? existingForNumber
-      : createSeason(db, { guildId: guild.id, seasonNumber, displayName });
+      : await storage.createSeason({ guildId: guild.id, seasonNumber, displayName });
 
   const categoryName = season.categoryName;
   const resolveRoleId = (roleName: string) => guild.roles.cache.find((role) => role.name === roleName)?.id;
   const otherSeasonCategoryIds = new Set(
-    listSeasons(db, guild.id)
+    (await storage.listSeasons(guild.id))
       .filter((existingSeason) => existingSeason.id !== season.id && existingSeason.discordCategoryId)
       .map((existingSeason) => existingSeason.discordCategoryId as string),
   );
@@ -264,14 +253,14 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
       categoryAmbiguous = true;
     } else if (match.outcome === 'exact') {
       category = guild.channels.cache.get(match.candidate.discordId) as CategoryChannel;
-      setSeasonDiscordCategoryId(db, season.id, category.id);
+      await storage.setSeasonDiscordCategoryId(season.id, category.id);
     } else {
       category = await guild.channels.create({
         name: categoryName,
         type: ChannelType.GuildCategory,
         reason: 'Ratatoskr season bootstrap',
       });
-      setSeasonDiscordCategoryId(db, season.id, category.id);
+      await storage.setSeasonDiscordCategoryId(season.id, category.id);
     }
   }
 
@@ -293,7 +282,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   const ambiguous: string[] = [];
   const currentSeasonLogicalPrefix = `season:${season.seasonNumber}:`;
   const otherSeasonChannelIds = new Set(
-    listManagedResourcesByDomain(db, guild.id, 'season', 'active')
+    (await storage.listManagedResourcesByDomain(guild.id, 'season', 'active'))
       .filter((resource) => !resource.logicalKey.startsWith(currentSeasonLogicalPrefix))
       .map((resource) => resource.discordResourceId),
   );
@@ -302,7 +291,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
     const logicalKey = seasonChannelLogicalKey(season.seasonNumber, spec.key);
     const permissionOverwrites = resolveChannelPermissionOverwrites(guild.roles.everyone.id, resolveRoleId, STAFF_ROLES, spec);
 
-    const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
+    const managed = await storage.getActiveManagedResourceByLogicalKey(guild.id, logicalKey);
     if (managed) {
       const resolved = guild.channels.cache.get(managed.discordResourceId);
       // Also require the parent to still match, not just the type -- e.g.
@@ -325,7 +314,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
       // through to re-match/re-create, same as bootstrap-guild.ts's "stale
       // managed channel" handling, so it doesn't keep shadowing the
       // logical key on every future run.
-      markManagedResourceObsolete(db, managed.id);
+      await storage.markManagedResourceObsolete(managed.id);
     }
 
     const candidates: CandidateResource[] = guild.channels.cache
@@ -349,7 +338,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
 
     if (match.outcome === 'exact') {
       const channel = guild.channels.cache.get(match.candidate.discordId) as TextChannel;
-      insertManagedResource(db, {
+      await storage.insertManagedResource({
         discordResourceId: channel.id,
         guildId: guild.id,
         resourceType: 'text_channel',
@@ -371,7 +360,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
       permissionOverwrites,
       reason: 'Ratatoskr season bootstrap',
     });
-    insertManagedResource(db, {
+    await storage.insertManagedResource({
       discordResourceId: channel.id,
       guildId: guild.id,
       resourceType: 'text_channel',
@@ -402,7 +391,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   // fail-closed contract means the loser must abort, not silently replace
   // whichever one won.
   try {
-    activateSeasonIfNoneActive(db, guild.id, season.id);
+    await storage.activateSeasonIfNoneActive(guild.id, season.id);
   } catch (error) {
     if (error instanceof SeasonAlreadyActiveError) {
       await interaction.editReply(

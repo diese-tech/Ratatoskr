@@ -56,6 +56,7 @@ src/
   commands/       Discord command entry points
   config/         Runtime and guild structure configuration
   db/             SQLite migrations, repositories, and persistence
+  storage/        Backend selection and asynchronous storage contracts/adapters
   domain/         Deterministic league concepts and business rules
   services/       Application and Discord-facing workflow services
   knowledge/      Future approved-document retrieval layer
@@ -73,7 +74,7 @@ scripts/           Operational/bootstrap scripts
 
 - **Node.js 24.x**
 - A Discord application/bot with the required guild permissions
-- SQLite storage; production should use persistent storage for the database file
+- SQLite storage during the staged B5 migration; production must preserve the database file
 
 The exact runtime dependency versions are defined in [`package.json`](package.json) and `package-lock.json`.
 
@@ -87,7 +88,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Configure `.env` with your Discord application values. The current template documents the required admin-role IDs and the optional local SQLite path:
+Configure `.env` with your Discord application values. The current template documents the required admin-role IDs, explicit persistence backend, and optional local SQLite path:
 
 ```env
 DISCORD_TOKEN=
@@ -95,10 +96,12 @@ DISCORD_CLIENT_ID=
 DISCORD_GUILD_ID=
 ROLE_ALLFATHER_ID=
 ROLE_AESIR_ID=
+DATABASE_BACKEND=sqlite
 DATABASE_PATH=
+DATABASE_URL=
 ```
 
-`DATABASE_PATH` defaults to `./data/ratatoskr.db` for local development. Production must point it at the existing persistent mounted volume.
+`DATABASE_BACKEND` defaults to `sqlite`. `DATABASE_URL` alone never changes the backend. The current B5 slice fails startup if `postgres` is explicitly selected because the Postgres adapter is not complete; it never silently falls back. `DATABASE_PATH` defaults to `./data/ratatoskr.db` for local development. Production must keep `DATABASE_BACKEND=sqlite` and point `DATABASE_PATH` at the existing persistent mounted volume until the later rehearsed cutover.
 
 Never commit `.env`, Discord tokens, or other credentials.
 
@@ -118,7 +121,7 @@ CI validates the locked dependency set on Linux and Windows and runs the quoted 
 
 ## Persistence and recovery
 
-Ratatoskr uses SQLite for durable operational state. Production deployments must preserve the database across restarts and releases.
+Ratatoskr currently uses SQLite for durable operational state. B5 is moving command/service workflows behind asynchronous storage contracts one vertical slice at a time; `/season` is the first converted slice. Production deployments must preserve the SQLite database across restarts and releases until the Postgres schema, migration verifier, rehearsal, and explicit cutover are complete.
 
 Important workflow rules:
 

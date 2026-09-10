@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import { handleInteraction, registerGuildCommands } from './commands/index.js';
 import { env } from './config/env.js';
-import { closeDatabase, openDatabase } from './db/index.js';
+import { openApplicationStorage } from './storage/index.js';
 import { syncCaptainAccess } from './services/divisions.js';
 import { tryHandleScoutEmojiBinding } from './services/scoutEmojiBinding.js';
 import { handleScoutSignupReactionAdd, handleScoutSignupReactionRemove } from './services/scoutSignups.js';
@@ -19,8 +19,9 @@ import { startScoutNotificationWorker } from './services/scoutNotifications.js';
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
 // durable storage.
-const db = openDatabase();
-console.log('Database ready.');
+const storage = openApplicationStorage();
+const db = storage.legacyDatabase;
+console.log(`Storage ready (${storage.backend}).`);
 
 const client = new Client({
   intents: [
@@ -38,7 +39,7 @@ let stopScoutNotificationWorker: (() => void) | undefined;
 async function shutdown() {
   stopScoutNotificationWorker?.();
   await client.destroy();
-  closeDatabase(db);
+  await storage.close();
   process.exit(0);
 }
 
@@ -91,7 +92,7 @@ client.once('clientReady', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    await handleInteraction(interaction, db);
+    await handleInteraction(interaction, storage);
   } catch (error) {
     await handleInteractionError(interaction, db, error, env.DISCORD_GUILD_ID);
   }
