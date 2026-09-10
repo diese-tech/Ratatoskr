@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -13,7 +12,7 @@ import type {
   PartialUser,
   User,
 } from 'discord.js';
-import { setScoutEmojiByRole } from '../db/index.js';
+import type { ScoutConfigurationStore } from '../storage/index.js';
 import {
   SCOUT_ROLES,
   SCOUT_SIGNUP_ROLES,
@@ -133,7 +132,7 @@ export async function startScoutEmojiBinding(interaction: ChatInputCommandIntera
 export async function tryHandleScoutEmojiBinding(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser,
-  db: Database.Database,
+  storage: ScoutConfigurationStore,
 ): Promise<boolean> {
   const binding = liveBindings.get(reaction.message.id);
   if (!binding || user.bot) return false;
@@ -178,7 +177,7 @@ export async function tryHandleScoutEmojiBinding(
   }
 
   if (result.outcome === 'complete' && result.emojiByRole) {
-    setScoutEmojiByRole(db, guild.id, result.emojiByRole);
+    await storage.setScoutEmojiByRole(guild.id, result.emojiByRole);
     liveBindings.delete(message.id);
     await message.edit({
       content: `${bindingMessage(result.state)}\n✅ Scout role emoji are saved.`,
@@ -194,7 +193,7 @@ export async function tryHandleScoutEmojiBinding(
 
 export async function handleScoutFillSkipButton(
   interaction: ButtonInteraction,
-  db: Database.Database,
+  storage: ScoutConfigurationStore,
 ): Promise<boolean> {
   if (interaction.customId !== SCOUT_SKIP_FILL_CUSTOM_ID) return false;
   const binding = liveBindings.get(interaction.message.id);
@@ -209,7 +208,7 @@ export async function handleScoutFillSkipButton(
     return true;
   }
   if (result.outcome !== 'complete' || !result.emojiByRole) return true;
-  setScoutEmojiByRole(db, binding.state.guildId, result.emojiByRole);
+  await storage.setScoutEmojiByRole(binding.state.guildId, result.emojiByRole);
   liveBindings.delete(interaction.message.id);
   await interaction.update({ content: `${bindingMessage(result.state)}\n✅ Five scout role emoji are saved; Fill was skipped.`, components: [] });
   return true;

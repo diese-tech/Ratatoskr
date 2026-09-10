@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ApplicationCommandOptionType } from 'discord.js';
-import { scoutCommand } from './scout.js';
+import { ApplicationCommandOptionType, Collection } from 'discord.js';
+import type { ScoutConfig } from '../db/types.js';
+import type { ScoutConfigurationStore } from '../storage/index.js';
+import { handleScoutConfigRoleSelect, scoutCommand } from './scout.js';
 
 test('/scout exposes create, cancel, and the admin configuration surface', () => {
   const command = scoutCommand.toJSON();
@@ -25,4 +27,54 @@ test('/scout exposes create, cancel, and the admin configuration surface', () =>
     config.options?.map((option) => option.name),
     ['timezone', 'bind_emoji', 'operations_channel'],
   );
+});
+
+test('Scout configuration role selection awaits persistence before updating the private view', async () => {
+  process.env.ROLE_ALLFATHER_ID = 'admin-role';
+  process.env.ROLE_AESIR_ID = 'other-admin-role';
+  let releaseWrite!: () => void;
+  let announceWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const writeStarted = new Promise<void>((resolve) => { announceWrite = resolve; });
+  const config: ScoutConfig = {
+    guildId: 'guild-1',
+    authorizedRoleIds: ['staff-role'],
+    operationsCategoryId: null,
+    operationsChannelId: null,
+    emojiByRole: { solo: null, jungle: null, mid: null, support: null, carry: null, fill: null },
+    timezone: 'America/New_York',
+    createdAt: '2026-09-10T00:00:00.000Z',
+    updatedAt: '2026-09-10T00:00:00.000Z',
+  };
+  const storage = {
+    async ensureScoutConfig() { throw new Error('not used'); },
+    async setScoutAuthorizedRoleIds() {
+      announceWrite();
+      await writeGate;
+      return config;
+    },
+    async setScoutOperationsChannel() { throw new Error('not used'); },
+    async setScoutTimezone() { throw new Error('not used'); },
+    async setScoutEmojiByRole() { throw new Error('not used'); },
+  } satisfies ScoutConfigurationStore;
+  const updates: unknown[] = [];
+  const interaction = {
+    customId: 'scout:config:authorized_roles',
+    guild: {
+      id: 'guild-1',
+      members: {
+        fetch: async () => ({ roles: { cache: new Collection([['admin-role', {}]]) } }),
+      },
+    },
+    user: { id: 'admin-1' },
+    values: ['staff-role'],
+    update: async (payload: unknown) => { updates.push(payload); },
+  } as never;
+
+  const handling = handleScoutConfigRoleSelect(interaction, storage);
+  await writeStarted;
+  assert.equal(updates.length, 0);
+  releaseWrite();
+  assert.equal(await handling, true);
+  assert.equal(updates.length, 1);
 });

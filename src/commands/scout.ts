@@ -9,15 +9,10 @@ import {
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { divisions } from '../config/guild-structure.js';
-import {
-  ensureScoutConfig,
-  setScoutAuthorizedRoleIds,
-  setScoutOperationsChannel,
-  setScoutTimezone,
-  type ScoutConfig,
-} from '../db/index.js';
+import type { ScoutConfig } from '../db/types.js';
 import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS } from '../domain/index.js';
 import { isValidScoutTimezone, listScoutTimezones } from '../services/scoutConfig.js';
+import type { ScoutConfigurationStore } from '../storage/index.js';
 
 export const SCOUT_CONFIG_ROLES_CUSTOM_ID = 'scout:config:authorized_roles';
 const divisionChoices = divisions.map((division) => ({ name: division.name, value: division.key }));
@@ -105,7 +100,11 @@ function renderScoutConfig(config: ScoutConfig): {
   };
 }
 
-export async function handleScoutCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
+export async function handleScoutCommand(
+  interaction: ChatInputCommandInteraction,
+  db: Database.Database,
+  configuration: ScoutConfigurationStore,
+) {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
     return;
@@ -137,8 +136,8 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
     return;
   }
 
-  let config = ensureScoutConfig(db, interaction.guild.id);
-  if (timezone) config = setScoutTimezone(db, interaction.guild.id, timezone);
+  let config = await configuration.ensureScoutConfig(interaction.guild.id);
+  if (timezone) config = await configuration.setScoutTimezone(interaction.guild.id, timezone);
 
   const selectedOperationsChannel = interaction.options.getChannel('operations_channel');
   const operationsChannel = selectedOperationsChannel
@@ -152,8 +151,7 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
       });
       return;
     }
-    config = setScoutOperationsChannel(
-      db,
+    config = await configuration.setScoutOperationsChannel(
       interaction.guild.id,
       operationsChannel.parentId,
       operationsChannel.id,
@@ -183,7 +181,7 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
 
 export async function handleScoutConfigRoleSelect(
   interaction: RoleSelectMenuInteraction,
-  db: Database.Database,
+  configuration: ScoutConfigurationStore,
 ): Promise<boolean> {
   if (interaction.customId !== SCOUT_CONFIG_ROLES_CUSTOM_ID) return false;
   if (!interaction.guild) return true;
@@ -195,7 +193,7 @@ export async function handleScoutConfigRoleSelect(
     return true;
   }
 
-  const config = setScoutAuthorizedRoleIds(db, interaction.guild.id, interaction.values);
+  const config = await configuration.setScoutAuthorizedRoleIds(interaction.guild.id, interaction.values);
   await interaction.update(renderScoutConfig(config));
   return true;
 }

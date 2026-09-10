@@ -121,7 +121,7 @@ client.on('roleDelete', async (role) => {
 
 client.on('messageReactionAdd', async (reaction, user) => {
   try {
-    if (await tryHandleScoutEmojiBinding(reaction, user, db)) return;
+    if (await tryHandleScoutEmojiBinding(reaction, user, storage.scoutConfiguration)) return;
     await handleScoutSignupReactionAdd(reaction, user, db);
   } catch (error) {
     await reportOperationalError(client, db, { guildId: reaction.message.guildId ?? env.DISCORD_GUILD_ID, action: 'Scout signup reaction add' }, error);
