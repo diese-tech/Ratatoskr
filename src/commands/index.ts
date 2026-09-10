@@ -90,7 +90,7 @@ export async function handleInteraction(interaction: Interaction, storage: Appli
   } else if (interaction.commandName === 'scout') {
     await handleScoutCommand(interaction, db);
   } else if (interaction.commandName === 'server') {
-    await handleServerCommand(interaction, db);
+    await handleServerCommand(interaction, storage.managedResources);
   } else if (interaction.commandName === 'help') {
     await handleHelpCommand(interaction);
   }

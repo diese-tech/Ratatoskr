@@ -7,15 +7,9 @@ import {
   type TextChannel,
   type VoiceChannel,
 } from 'discord.js';
-import type Database from 'better-sqlite3';
 import { yslGuildStructure, type GuildChannelSpec, type GuildRoleSpec } from '../config/guild-structure.js';
-import {
-  getActiveManagedResourceByLogicalKey,
-  insertManagedResource,
-  listManagedResourcesByDomain,
-  markManagedResourceObsolete,
-  type ManagedResource,
-} from '../db/index.js';
+import type { ManagedResource } from '../db/index.js';
+import type { ManagedResourceStore } from '../storage/index.js';
 import { STAFF_ROLES } from './divisions.js';
 import {
   classifyMatch,
@@ -45,7 +39,7 @@ export type ServerBootstrapOptions = {
 // exactly which role id to use), for categories/channels it means skipping
 // just that one resource and continuing the run.
 export async function runServerBootstrap(
-  db: Database.Database,
+  storage: ManagedResourceStore,
   guild: Guild,
   options: ServerBootstrapOptions,
   log: (line: string) => void,
@@ -57,14 +51,14 @@ export async function runServerBootstrap(
   }
 
   async function resolveManagedRole(logicalKey: string): Promise<Role | undefined> {
-    const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
+    const managed = await storage.getActiveManagedResourceByLogicalKey(guild.id, logicalKey);
     if (!managed) return undefined;
 
     const resolved = guild.roles.cache.get(managed.discordResourceId);
     if (resolved) return resolved;
 
     logAction('stale managed role', `${logicalKey} pointed at a role that no longer exists; re-evaluating`);
-    if (apply) markManagedResourceObsolete(db, managed.id);
+    if (apply) await storage.markManagedResourceObsolete(managed.id);
     return undefined;
   }
 
@@ -96,7 +90,7 @@ export async function runServerBootstrap(
       logAction('role exists (adopting)', spec.name);
       const role = guild.roles.cache.get(match.candidate.discordId)!;
       if (apply) {
-        insertManagedResource(db, {
+        await storage.insertManagedResource({
           discordResourceId: role.id,
           guildId: guild.id,
           resourceType: 'role',
@@ -119,7 +113,7 @@ export async function runServerBootstrap(
       colors: spec.color ? { primaryColor: spec.color } : undefined,
       reason: 'Ratatoskr YSL guild bootstrap',
     });
-    insertManagedResource(db, {
+    await storage.insertManagedResource({
       discordResourceId: role.id,
       guildId: guild.id,
       resourceType: 'role',
@@ -158,7 +152,7 @@ export async function runServerBootstrap(
     const logicalKey = serverCategoryLogicalKey(spec.key);
     const permissionOverwrites = resolveAccessOverwrites(roleMap, spec.access);
 
-    const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
+    const managed = await storage.getActiveManagedResourceByLogicalKey(guild.id, logicalKey);
     if (managed) {
       const resolved = guild.channels.cache.get(managed.discordResourceId);
       if (resolved && resolved.type === ChannelType.GuildCategory) {
@@ -169,7 +163,7 @@ export async function runServerBootstrap(
         return resolved;
       }
       logAction('stale managed category', `${logicalKey} pointed at a category that no longer exists; re-evaluating`);
-      if (apply) markManagedResourceObsolete(db, managed.id);
+      if (apply) await storage.markManagedResourceObsolete(managed.id);
     }
 
     const candidates: CandidateResource[] = guild.channels.cache
@@ -189,7 +183,7 @@ export async function runServerBootstrap(
       logAction('category exists (adopting)', spec.name);
       const category = guild.channels.cache.get(match.candidate.discordId) as CategoryChannel;
       if (apply) {
-        insertManagedResource(db, {
+        await storage.insertManagedResource({
           discordResourceId: category.id,
           guildId: guild.id,
           resourceType: 'category',
@@ -214,7 +208,7 @@ export async function runServerBootstrap(
       permissionOverwrites,
       reason: 'Ratatoskr YSL guild bootstrap',
     })) as CategoryChannel;
-    insertManagedResource(db, {
+    await storage.insertManagedResource({
       discordResourceId: category.id,
       guildId: guild.id,
       resourceType: 'category',
@@ -237,7 +231,7 @@ export async function runServerBootstrap(
     const logicalKey = serverChannelLogicalKey(categorySpec.key, spec.key, resourceType);
     const permissionOverwrites = resolveChannelOverwrites(roleMap, spec);
 
-    const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
+    const managed = await storage.getActiveManagedResourceByLogicalKey(guild.id, logicalKey);
     if (managed) {
       const resolved = guild.channels.cache.get(managed.discordResourceId);
       if (resolved && resolved.type === expectedType) {
@@ -251,7 +245,7 @@ export async function runServerBootstrap(
         return;
       }
       logAction('stale managed channel', `${logicalKey} pointed at a channel that no longer exists; re-evaluating`);
-      if (apply) markManagedResourceObsolete(db, managed.id);
+      if (apply) await storage.markManagedResourceObsolete(managed.id);
     }
 
     // Deliberately not filtered to this category's channels: a same-named
@@ -280,7 +274,7 @@ export async function runServerBootstrap(
       logAction('channel exists (adopting)', `${categoryName} / ${spec.name}`);
       const channel = guild.channels.cache.get(match.candidate.discordId) as TextChannel | VoiceChannel;
       if (apply) {
-        insertManagedResource(db, {
+        await storage.insertManagedResource({
           discordResourceId: channel.id,
           guildId: guild.id,
           resourceType,
@@ -306,7 +300,7 @@ export async function runServerBootstrap(
       permissionOverwrites,
       reason: 'Ratatoskr YSL guild bootstrap',
     });
-    insertManagedResource(db, {
+    await storage.insertManagedResource({
       discordResourceId: channel.id,
       guildId: guild.id,
       resourceType,
@@ -325,7 +319,7 @@ export async function runServerBootstrap(
   }
 
   async function runCleanup() {
-    const managed = listManagedResourcesByDomain(db, guild.id, 'server', 'active');
+    const managed = await storage.listManagedResourcesByDomain(guild.id, 'server', 'active');
     const currentKeys = currentServerLogicalKeys(yslGuildStructure);
     const obsolete = detectObsoleteManagedResources(managed, currentKeys);
 
@@ -365,7 +359,7 @@ export async function runServerBootstrap(
           const channel = guild.channels.cache.get(resource.discordResourceId);
           if (channel) await channel.delete('Ratatoskr server bootstrap cleanup');
         }
-        markManagedResourceObsolete(db, resource.id);
+        await storage.markManagedResourceObsolete(resource.id);
         succeeded.push(resource);
       } catch (error) {
         failed.push({ resource, error: (error as Error).message });

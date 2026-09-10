@@ -1,36 +1,35 @@
 # Implementation checkpoint
 
-Authorized scope: the B1-B7 sequence through the active B5a storage-boundary
-slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.1,
-roadmap #1, and focused Issue #100.
+Authorized scope: the B1-B7 sequence through the active B5b server-storage
+slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.2,
+roadmap #1, and focused Issue #102.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B5a asynchronous season storage boundary
+## Current checkpoint — B5b server managed-resource storage boundary
 
-Done: B4b / #21 merged through PR #99 at
-`f34b3b7f89884457dab5eb4a62caa97aa5ec1cb8`; final automated review found no
-major issues and post-merge Ubuntu/Windows CI passed. B5 is now active through
-#100 on `codex/issue-95-b5-storage-boundary`.
+Done: B5a / #100 merged through PR #101 at
+`c7b0dc4e0bfb984e5dabfc3bb180a3da12151a68`; final automated review, PR and
+post-merge Ubuntu/Windows CI passed. Railway's GitHub deployment record reported
+success, while runtime/startup logs and live Discord behavior remain uninspected.
 
-B5a adds an explicit `DATABASE_BACKEND=sqlite|postgres` selector that defaults
-to SQLite. `DATABASE_URL` alone cannot select Postgres. Explicit Postgres selection
-fails startup closed until that adapter is implemented, rather than falling back to
-SQLite. The complete `/season` vertical now consumes an asynchronous,
-backend-independent `SeasonWorkspaceStore`; a SQLite adapter preserves all current
-season and managed-resource behavior. The application composition root exposes the
-remaining raw SQLite handle as `legacyDatabase` so incomplete migration is visible.
+On `codex/issue-95-b5-server-storage`, B5b extracts the managed-resource methods
+into a reusable backend-independent asynchronous `ManagedResourceStore` and SQLite
+adapter. The `/server bootstrap` command, shared bootstrap runner and standalone
+bootstrap script now consume that contract. The season adapter reuses the same
+managed-resource store, avoiding a second persistence abstraction for identical
+operations. Server-scaffold matching, dry-run, apply, permission reconciliation and
+cleanup behavior are unchanged.
 
-Validation: 269 tests pass locally, including default/explicit/invalid backend
-selection, `DATABASE_URL`-only behavior, fail-closed Postgres selection, asynchronous
-season calls, and the complete season status/create/close regressions. Application
-typecheck passes. Twenty-four non-test command/service files still import
-`better-sqlite3`; B5a does not claim the application is Postgres-ready.
+Validation: 271 tests pass locally, including asynchronous managed-resource insert,
+lookup, domain listing and retirement plus a delayed-storage server dry-run that
+proves no Discord or persistence writes occur. Both typechecks, build, dependency
+audit and diff check pass. Twenty-two non-test command/service files still import
+`better-sqlite3`; B5b does not claim the application is Postgres-ready.
 
-Next: finish both typechecks, build, dependency audit and diff check; open the focused
-#100 PR; require final-head review plus Ubuntu/Windows CI. Do not add a Postgres driver,
-provision infrastructure, change production configuration, or cut over persistence
-in this slice.
+Next: open the focused #102 PR and require final-head review plus Ubuntu/Windows CI.
+Do not change the server scaffold, add a Postgres driver, provision infrastructure,
+change production configuration, or cut over persistence in this slice.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 
