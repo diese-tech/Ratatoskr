@@ -66,6 +66,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
           'Checks the active or selected season category and channels without changing, creating, or repairing anything.',
       },
       {
+        usage: '/season close [number:<n>] [confirm:true]',
+        description:
+          'Previews the active season. Re-run with the season number and confirm:true to archive it. Discord channels stay unchanged.',
+      },
+      {
         usage: '/scout config [operations_channel:<#scout-ops>] [timezone:<IANA zone>] [bind_emoji:true]',
         description: 'Binds the Scout Ops control channel and sets additional all-division scout staff, the game-time timezone, five required role emojis, and optional Fill.',
       },

@@ -70,6 +70,10 @@ test('every slash command, subcommand, and option uses readable English', () => 
   const seasonStatus = child(season, 'status');
   assert.equal(seasonStatus.description, 'Check whether a season category and its channels are present.');
   assert.equal(child(seasonStatus, 'number').description, 'Season number to check; defaults to the active season.');
+  const seasonClose = child(season, 'close');
+  assert.equal(seasonClose.description, 'Preview or close the active season without changing its channels.');
+  assert.equal(child(seasonClose, 'number').description, 'Season number shown in the preview; required with confirm:true.');
+  assert.equal(child(seasonClose, 'confirm').description, 'Choose true to archive the active season.');
 
   const server = asCommand(serverCommand);
   assert.equal(server.description, "Set up or repair Ratatoskr's server roles and channels.");

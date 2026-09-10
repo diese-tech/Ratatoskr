@@ -9,11 +9,14 @@ import {
 import type Database from 'better-sqlite3';
 import {
   activateSeasonIfNoneActive,
+  archiveSeason,
   createSeason,
   getActiveManagedResourceByLogicalKey,
   getActiveSeason,
   getSeasonByNumber,
   insertManagedResource,
+  listManagedResourcesByDomain,
+  listSeasons,
   markManagedResourceObsolete,
   SeasonAlreadyActiveError,
   setSeasonDiscordCategoryId,
@@ -74,6 +77,21 @@ export const seasonCommand = new SlashCommandBuilder()
       .addIntegerOption((option) =>
         option.setName('number').setDescription('Season number to check; defaults to the active season.').setMinValue(1),
       ),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('close')
+      .setDescription('Preview or close the active season without changing its channels.')
+      .addIntegerOption((option) =>
+        option
+          .setName('number')
+          .setDescription('Season number shown in the preview; required with confirm:true.')
+          .setMinValue(1)
+          .setRequired(false),
+      )
+      .addBooleanOption((option) =>
+        option.setName('confirm').setDescription('Choose true to archive the active season.').setRequired(false),
+      ),
   );
 
 export async function handleSeasonCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
@@ -125,6 +143,59 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
     return;
   }
 
+  if (subcommand === 'close') {
+    const activeSeason = getActiveSeason(db, guild.id);
+    if (!activeSeason) {
+      await interaction.reply({ content: 'No season is currently active.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.options.getBoolean('confirm') !== true) {
+      await interaction.reply({
+        content: [
+          `**Close season ${activeSeason.seasonNumber}?**`,
+          `Category: ${activeSeason.categoryName}`,
+          'This archives the season record and cannot be undone. Its Discord category and channels will remain unchanged.',
+          `Re-run \`/season close number:${activeSeason.seasonNumber} confirm:true\` to continue.`,
+        ].join('\n'),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const confirmedSeasonNumber = interaction.options.getInteger('number');
+    if (confirmedSeasonNumber === null) {
+      await interaction.reply({
+        content: 'Confirmation must include the season number from the preview. Run `/season close` again and use the exact command it provides.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (confirmedSeasonNumber !== activeSeason.seasonNumber) {
+      await interaction.reply({
+        content: `Season ${confirmedSeasonNumber} is no longer active, so it was not closed. Run \`/season close\` again to preview the current active season.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const archivedSeason = archiveSeason(db, guild.id, activeSeason.id);
+    if (!archivedSeason) {
+      await interaction.reply({
+        content: 'The active season changed before it could be closed. No change was made; run `/season close` again.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.reply({
+      content: `Season ${archivedSeason.seasonNumber} (${archivedSeason.categoryName}) is now archived. Its Discord category and channels were not changed.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
   if (subcommand !== 'create') return;
 
   const seasonNumber = interaction.options.getInteger('number', true);
@@ -167,6 +238,11 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
 
   const categoryName = season.categoryName;
   const resolveRoleId = (roleName: string) => guild.roles.cache.find((role) => role.name === roleName)?.id;
+  const otherSeasonCategoryIds = new Set(
+    listSeasons(db, guild.id)
+      .filter((existingSeason) => existingSeason.id !== season.id && existingSeason.discordCategoryId)
+      .map((existingSeason) => existingSeason.discordCategoryId as string),
+  );
 
   // --- Category resolution: same exact/ambiguous/none discipline #16
   // establishes for server-scaffold resources. The category id lives on the
@@ -180,7 +256,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   let categoryAmbiguous = false;
   if (!category) {
     const candidates: CandidateResource[] = guild.channels.cache
-      .filter((channel) => channel.type === ChannelType.GuildCategory)
+      .filter((channel) => channel.type === ChannelType.GuildCategory && !otherSeasonCategoryIds.has(channel.id))
       .map((channel) => ({ discordId: channel.id, name: channel.name, kind: 'category', parentId: null }));
     const match = classifyMatch(candidates, { name: categoryName, kind: 'category', parentId: null });
 
@@ -215,6 +291,12 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   const created: string[] = [];
   const adopted: string[] = [];
   const ambiguous: string[] = [];
+  const currentSeasonLogicalPrefix = `season:${season.seasonNumber}:`;
+  const otherSeasonChannelIds = new Set(
+    listManagedResourcesByDomain(db, guild.id, 'season', 'active')
+      .filter((resource) => !resource.logicalKey.startsWith(currentSeasonLogicalPrefix))
+      .map((resource) => resource.discordResourceId),
+  );
 
   for (const spec of SEASON_CHANNELS) {
     const logicalKey = seasonChannelLogicalKey(season.seasonNumber, spec.key);
@@ -247,7 +329,11 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
     }
 
     const candidates: CandidateResource[] = guild.channels.cache
-      .filter((channel) => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice)
+      .filter(
+        (channel) =>
+          !otherSeasonChannelIds.has(channel.id) &&
+          (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice),
+      )
       .map((channel) => ({
         discordId: channel.id,
         name: channel.name,

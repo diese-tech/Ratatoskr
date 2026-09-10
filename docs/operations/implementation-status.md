@@ -1,12 +1,47 @@
 # Implementation checkpoint
 
-Authorized scope: B1, the B2 Lucid telemetry adaptation and the user's recovered
-stale-post management follow-up; see `docs/plans/backlog-execution-plan.md` v1.8,
-`b2-scout-telemetry.md` and `scout-stale-post-management.md`.
+Authorized scope: the B1-B7 sequence through the active B4b season-lifecycle
+slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.0,
+and focused Issue #21.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — recovered-post management merged and startup verified
+## Current checkpoint — B4b season close locally complete
+
+Done: B4a / #23 merged through PRs #96 and #97. On
+`codex/issue-21-season-close`, B4b adds ADMIN-gated
+`/season close [number:<n>] [confirm:true]`.
+The default is a private no-write preview. Confirmation atomically archives only
+the exact still-active season, records `archived_at`, leaves all Discord categories,
+channels and season-independent Scouts untouched, and fails closed on stale targeting.
+The existing `/season create` flow can provision and activate the next season after
+closure. Help text documents the preserved-channel boundary.
+
+Automated review P1 on PR #99 identified that the first regression had not
+provisioned Season 1's retained channels. The strengthened command-level test
+reproduced all five old channels blocking Season 2. Fix 6d8e072 excludes channels
+already owned by other seasons from new-season candidate matching while preserving
+ambiguity handling for unmanaged resources and drift in the season being provisioned.
+
+The next automated review found two additional cross-invocation/resource-ownership
+hazards. Fix 4f8d84e binds confirmation to the season number emitted by the preview,
+so an old confirmation cannot close a newly active season, and excludes category IDs
+owned by other seasons so a reused custom category name cannot merge workspaces.
+The help entry remains within Discord's embed field limit.
+
+Validation: 265 tests, application typecheck, scripts typecheck, build, dependency
+audit and diff check pass locally. Focused command/repository coverage includes no
+active season, omitted/false confirmation, confirmed archival, preserved category
+identity, preview-bound stale confirmation, missing-number rejection, same-name
+category isolation, injected stale targeting and a complete close-to-next-create
+flow with retained channels. No live Discord interaction was performed.
+
+Next: PR #99 is open for the focused #21 slice. Push the review repair, resolve its
+thread, and require a fresh automated review on the final head plus green
+Ubuntu/Windows CI. Do not merge, deploy, claim live verification or begin B5 without
+the corresponding gate or explicit disposition.
+
+## Previous checkpoint — recovered-post management merged and startup verified
 
 Done: checkpoint 8777d03 adds direct cancellation to recovered cards and repairs
 cancellation display/cleanup. Checkpoint 3ba4306 adds durable published completion,

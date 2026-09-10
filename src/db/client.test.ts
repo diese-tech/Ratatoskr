@@ -8,6 +8,7 @@ import { closeDatabase, openDatabase } from './client.js';
 import { migrations } from './migrations.js';
 import {
   activateSeasonIfNoneActive,
+  archiveSeason,
   createSeason,
   getActiveManagedResourceByLogicalKey,
   getActiveSeason,
@@ -375,6 +376,40 @@ test('activateSeasonIfNoneActive throws and touches nothing when a season is alr
 
     assert.equal(getActiveSeason(db, 'guild-1')?.id, seasonOne.id, 'the already-active season must be untouched');
     assert.equal(getSeasonByNumber(db, 'guild-1', 2)?.status, 'inactive', 'the loser must stay inactive, not partially activated');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('archiveSeason archives only the targeted active season and records when it closed', () => {
+  const db = openDatabase(join(tempDir, 'archive-season.db'));
+  try {
+    const season = createSeason(db, { guildId: 'guild-1', seasonNumber: 1 });
+    setActiveSeason(db, 'guild-1', season.id);
+
+    const archived = archiveSeason(db, 'guild-1', season.id);
+
+    assert.equal(archived?.status, 'archived');
+    assert.ok(archived?.archivedAt, 'closing a season must record archived_at');
+    assert.equal(getActiveSeason(db, 'guild-1'), undefined);
+    assert.equal(getSeasonByNumber(db, 'guild-1', 1)?.status, 'archived');
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test('archiveSeason rejects a stale target without archiving the replacement active season', () => {
+  const db = openDatabase(join(tempDir, 'archive-season-stale-target.db'));
+  try {
+    const observed = createSeason(db, { guildId: 'guild-1', seasonNumber: 1 });
+    const replacement = createSeason(db, { guildId: 'guild-1', seasonNumber: 2 });
+    setActiveSeason(db, 'guild-1', observed.id);
+    setActiveSeason(db, 'guild-1', replacement.id);
+
+    assert.equal(archiveSeason(db, 'guild-1', observed.id), undefined);
+    assert.equal(getSeasonByNumber(db, 'guild-1', 1)?.status, 'inactive');
+    assert.equal(getSeasonByNumber(db, 'guild-1', 1)?.archivedAt, null);
+    assert.equal(getActiveSeason(db, 'guild-1')?.id, replacement.id);
   } finally {
     closeDatabase(db);
   }
