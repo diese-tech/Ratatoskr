@@ -16,15 +16,22 @@ channels and season-independent Scouts untouched, and fails closed on stale targ
 The existing `/season create` flow can provision and activate the next season after
 closure. Help text documents the preserved-channel boundary.
 
+Automated review P1 on PR #99 identified that the first regression had not
+provisioned Season 1's retained channels. The strengthened command-level test
+reproduced all five old channels blocking Season 2. Fix 6d8e072 excludes channels
+already owned by other seasons from new-season candidate matching while preserving
+ambiguity handling for unmanaged resources and drift in the season being provisioned.
+
 Validation: 262 tests, application typecheck, scripts typecheck, build, dependency
 audit and diff check pass locally. Focused command/repository coverage includes no
 active season, omitted/false confirmation, confirmed archival, preserved category
 identity, injected stale targeting and a complete close-to-next-create flow. No live
 Discord interaction was performed.
 
-Next: PR #99 is open for the focused #21 slice. Require automated review on the
-final head plus green Ubuntu/Windows CI. Do not merge, deploy, claim live verification
-or begin B5 without the corresponding gate or explicit disposition.
+Next: PR #99 is open for the focused #21 slice. Push the review repair, resolve its
+thread, and require a fresh automated review on the final head plus green
+Ubuntu/Windows CI. Do not merge, deploy, claim live verification or begin B5 without
+the corresponding gate or explicit disposition.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 
