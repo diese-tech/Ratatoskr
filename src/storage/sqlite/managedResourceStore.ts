@@ -4,6 +4,8 @@ import {
   insertManagedResource,
   listManagedResourcesByDomain,
   markManagedResourceObsolete,
+  markManagedResourcePurged,
+  setManagedResourceParent,
 } from '../../db/index.js';
 import type { ManagedResourceStore } from '../managedResourceStore.js';
 
@@ -20,6 +22,12 @@ export function createSqliteManagedResourceStore(db: Database.Database): Managed
     },
     async markManagedResourceObsolete(id) {
       markManagedResourceObsolete(db, id);
+    },
+    async setManagedResourceParent(id, parentResourceId) {
+      setManagedResourceParent(db, id, parentResourceId);
+    },
+    async markManagedResourcePurged(id) {
+      markManagedResourcePurged(db, id);
     },
   };
 }

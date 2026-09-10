@@ -121,7 +121,7 @@ CI validates the locked dependency set on Linux and Windows and runs the quoted 
 
 ## Persistence and recovery
 
-Ratatoskr currently uses SQLite for durable operational state. B5 is moving command/service workflows behind asynchronous storage contracts one vertical slice at a time; `/season` is the first converted slice. Production deployments must preserve the SQLite database across restarts and releases until the Postgres schema, migration verifier, rehearsal, and explicit cutover are complete.
+Ratatoskr currently uses SQLite for durable operational state. B5 is moving command/service workflows behind asynchronous storage contracts one vertical slice at a time; season, server-bootstrap, and division lifecycle persistence now use those boundaries. Production deployments must preserve the SQLite database across restarts and releases until the Postgres schema, migration verifier, rehearsal, and explicit cutover are complete.
 
 Important workflow rules:
 

@@ -23,6 +23,12 @@ test('server bootstrap dry-run awaits asynchronous storage without writing Disco
     async markManagedResourceObsolete() {
       throw new Error('dry-run must not retire managed resources');
     },
+    async setManagedResourceParent() {
+      throw new Error('dry-run must not move managed resources');
+    },
+    async markManagedResourcePurged() {
+      throw new Error('dry-run must not purge managed resources');
+    },
   };
 
   let discordCreates = 0;

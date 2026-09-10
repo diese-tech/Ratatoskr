@@ -8,19 +8,9 @@ import {
   type TextChannel,
   type VoiceChannel,
 } from 'discord.js';
-import type Database from 'better-sqlite3';
 import { divisions, DIVISION_ROLE_COLORS, type DivisionKey, type DivisionSpec } from '../config/guild-structure.js';
 import type { ManagedResourceType } from '../db/types.js';
-import {
-  getActiveManagedResourceByLogicalKey,
-  getDivisionByKey,
-  getScoutConfig,
-  insertManagedResource,
-  markManagedResourceObsolete,
-  setManagedResourceParent,
-  setDivisionStatus,
-  upsertDivision,
-} from '../db/index.js';
+import type { DivisionWorkspaceStore } from '../storage/index.js';
 import {
   divisionCaptainRoleLogicalKey,
   divisionCategoryLogicalKey,
@@ -33,7 +23,7 @@ import { classifyMatch, type CandidateResource } from './serverBootstrap.js';
 
 export const STAFF_ROLES = ['Valkyries', 'Aesir', 'Allfather'] as const;
 export const DIVISION_ADMIN_ROLES = ['Aesir', 'Allfather'] as const;
-import { FRANCHISE_REPRESENTATIVE_ROLE, FRANCHISE_REPRESENTATIVE_KEY, resolveFranchiseRepresentativeId } from './scoutRoleIdentity.js';
+import { FRANCHISE_REPRESENTATIVE_ROLE, FRANCHISE_REPRESENTATIVE_KEY } from './scoutRoleIdentity.js';
 export { FRANCHISE_REPRESENTATIVE_ROLE } from './scoutRoleIdentity.js';
 
 export type DivisionPermissionProfile =
@@ -293,7 +283,13 @@ function roleByName(guild: Guild, name: string) {
   return guild.roles.cache.find((role) => role.name === name);
 }
 
-function permissionRoleIds(db: Database.Database, guild: Guild, divisionRole: Role, managerRole: Role, captainRole: Role): DivisionPermissionRoleIds {
+function permissionRoleIds(
+  guild: Guild,
+  divisionRole: Role,
+  managerRole: Role,
+  captainRole: Role,
+  franchiseRepresentativeRole: Role,
+): DivisionPermissionRoleIds {
   const required = (name: string): Role => {
     const role = roleByName(guild, name);
     if (!role) throw new Error(`Required role "${name}" is missing. Create it before provisioning divisions.`);
@@ -304,7 +300,7 @@ function permissionRoleIds(db: Database.Database, guild: Guild, divisionRole: Ro
     division: divisionRole.id,
     manager: managerRole.id,
     captain: captainRole.id,
-    franchiseRepresentative: resolveFranchiseRepresentativeId(db, guild) ?? required(FRANCHISE_REPRESENTATIVE_ROLE).id,
+    franchiseRepresentative: franchiseRepresentativeRole.id,
     admins: DIVISION_ADMIN_ROLES.map((name) => required(name).id),
   };
 }
@@ -315,26 +311,26 @@ function permissionRoleIds(db: Database.Database, guild: Guild, divisionRole: Ro
 // exact/ambiguous/none discipline, and register on create/adopt. Reused
 // rather than reimplemented, per the plan.
 
-async function resolveManagedRole(db: Database.Database, guild: Guild, logicalKey: string): Promise<Role | undefined> {
-  const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
+async function resolveManagedRole(storage: DivisionWorkspaceStore, guild: Guild, logicalKey: string): Promise<Role | undefined> {
+  const managed = await storage.getActiveManagedResourceByLogicalKey(guild.id, logicalKey);
   if (!managed) return undefined;
 
   const resolved = guild.roles.cache.get(managed.discordResourceId);
   if (resolved) return resolved;
 
-  markManagedResourceObsolete(db, managed.id);
+  await storage.markManagedResourceObsolete(managed.id);
   return undefined;
 }
 
 async function ensureRole(
-  db: Database.Database,
+  storage: DivisionWorkspaceStore,
   guild: Guild,
   logicalKey: string,
   name: string,
   options: { utility?: boolean; color?: number; scaffoldDomain?: 'server' | 'division' },
   result: DivisionProvisionResult,
 ): Promise<Role> {
-  const managedRole = await resolveManagedRole(db, guild, logicalKey);
+  const managedRole = await resolveManagedRole(storage, guild, logicalKey);
   if (managedRole) {
     if (managedRole.name !== name) {
       await managedRole.setName(name, 'Ratatoskr reconcile division role name');
@@ -360,7 +356,7 @@ async function ensureRole(
 
   if (match.outcome === 'exact') {
     const role = guild.roles.cache.get(match.candidate.discordId)!;
-    insertManagedResource(db, {
+    await storage.insertManagedResource({
       discordResourceId: role.id,
       guildId: guild.id,
       resourceType: 'role',
@@ -378,7 +374,7 @@ async function ensureRole(
     colors: options.color ? { primaryColor: options.color } : undefined,
     reason: 'Ratatoskr division provisioning',
   });
-  insertManagedResource(db, {
+  await storage.insertManagedResource({
     discordResourceId: role.id,
     guildId: guild.id,
     resourceType: 'role',
@@ -390,14 +386,14 @@ async function ensureRole(
 }
 
 async function ensureCategory(
-  db: Database.Database,
+  storage: DivisionWorkspaceStore,
   guild: Guild,
   logicalKey: string,
   name: string,
   overwrites: DivisionPermissionOverwrite[],
   result: DivisionProvisionResult,
 ): Promise<CategoryChannel> {
-  const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
+  const managed = await storage.getActiveManagedResourceByLogicalKey(guild.id, logicalKey);
   if (managed) {
     const resolved = guild.channels.cache.get(managed.discordResourceId);
     if (resolved && resolved.type === ChannelType.GuildCategory) {
@@ -405,7 +401,7 @@ async function ensureCategory(
       result.reused.push(`category:${name}`);
       return resolved;
     }
-    markManagedResourceObsolete(db, managed.id);
+    await storage.markManagedResourceObsolete(managed.id);
   }
 
   const candidates: CandidateResource[] = guild.channels.cache
@@ -423,7 +419,7 @@ async function ensureCategory(
   if (match.outcome === 'exact') {
     const category = guild.channels.cache.get(match.candidate.discordId) as CategoryChannel;
     await category.permissionOverwrites.set(overwrites, 'Ratatoskr reconcile division category permissions');
-    insertManagedResource(db, {
+    await storage.insertManagedResource({
       discordResourceId: category.id,
       guildId: guild.id,
       resourceType: 'category',
@@ -440,7 +436,7 @@ async function ensureCategory(
     permissionOverwrites: overwrites,
     reason: 'Ratatoskr division provisioning',
   });
-  insertManagedResource(db, {
+  await storage.insertManagedResource({
     discordResourceId: created.id,
     guildId: guild.id,
     resourceType: 'category',
@@ -452,7 +448,7 @@ async function ensureCategory(
 }
 
 async function ensureChannel(
-  db: Database.Database,
+  storage: DivisionWorkspaceStore,
   guild: Guild,
   category: CategoryChannel,
   logicalKey: string,
@@ -466,7 +462,7 @@ async function ensureChannel(
   const expectedType = type === 'voice' ? ChannelType.GuildVoice : ChannelType.GuildText;
   const resourceType = type === 'voice' ? ('voice_channel' as const) : ('text_channel' as const);
 
-  const managed = getActiveManagedResourceByLogicalKey(db, guild.id, logicalKey);
+  const managed = await storage.getActiveManagedResourceByLogicalKey(guild.id, logicalKey);
   if (managed) {
     const resolved = guild.channels.cache.get(managed.discordResourceId);
     // Deliberately NOT checking resolved.name === name: name is
@@ -477,7 +473,7 @@ async function ensureChannel(
       if (resolved.parentId !== category.id) {
         await resolved.setParent(category.id, { reason: 'Ratatoskr move division channel to its configured category' });
       }
-      if (managed.parentResourceId !== category.id) setManagedResourceParent(db, managed.id, category.id);
+      if (managed.parentResourceId !== category.id) await storage.setManagedResourceParent(managed.id, category.id);
       if (!resolved.isThread()) {
         if (permissionOverwrites) {
           await resolved.permissionOverwrites.set(permissionOverwrites, 'Ratatoskr reconcile division channel permissions');
@@ -488,7 +484,7 @@ async function ensureChannel(
       result.reused.push(`channel:${name}`);
       return;
     }
-    markManagedResourceObsolete(db, managed.id);
+    await storage.markManagedResourceObsolete(managed.id);
   }
 
   const candidates: CandidateResource[] = guild.channels.cache
@@ -541,7 +537,7 @@ async function ensureChannel(
       // default-deny policy.
       await channel.lockPermissions();
     }
-    insertManagedResource(db, {
+    await storage.insertManagedResource({
       discordResourceId: channel.id,
       guildId: guild.id,
       resourceType,
@@ -560,7 +556,7 @@ async function ensureChannel(
     permissionOverwrites,
     reason: 'Ratatoskr division provisioning',
   });
-  insertManagedResource(db, {
+  await storage.insertManagedResource({
     discordResourceId: channel.id,
     guildId: guild.id,
     resourceType,
@@ -573,30 +569,30 @@ async function ensureChannel(
 
 // Different divisions share this server-owned role. Join the in-flight repair
 // before observing identity; a per-division guard cannot prevent duplicate creates.
-const franchiseRoleRepairs = new WeakMap<Database.Database, Map<string, Promise<Role>>>();
+const franchiseRoleRepairs = new WeakMap<DivisionWorkspaceStore, Map<string, Promise<Role>>>();
 
-async function ensureFranchiseRole(db: Database.Database, guild: Guild, result: DivisionProvisionResult): Promise<Role> {
-  let repairs = franchiseRoleRepairs.get(db);
-  if (!repairs) { repairs = new Map(); franchiseRoleRepairs.set(db, repairs); }
+async function ensureFranchiseRole(storage: DivisionWorkspaceStore, guild: Guild, result: DivisionProvisionResult): Promise<Role> {
+  let repairs = franchiseRoleRepairs.get(storage);
+  if (!repairs) { repairs = new Map(); franchiseRoleRepairs.set(storage, repairs); }
   const existing = repairs.get(guild.id);
   if (existing) {
     const role = await existing;
     result.reused.push(`role:${FRANCHISE_REPRESENTATIVE_ROLE}`);
     return role;
   }
-  const repair = ensureRole(db, guild, FRANCHISE_REPRESENTATIVE_KEY, FRANCHISE_REPRESENTATIVE_ROLE,
+  const repair = ensureRole(storage, guild, FRANCHISE_REPRESENTATIVE_KEY, FRANCHISE_REPRESENTATIVE_ROLE,
     { scaffoldDomain: 'server' }, result);
   repairs.set(guild.id, repair);
   try { return await repair; }
   finally { repairs.delete(guild.id); }
 }
 
-export async function provisionDivision(db: Database.Database, guild: Guild, divisionKey: DivisionKey): Promise<DivisionProvisionResult> {
+export async function provisionDivision(storage: DivisionWorkspaceStore, guild: Guild, divisionKey: DivisionKey): Promise<DivisionProvisionResult> {
   await guild.roles.fetch();
   await guild.channels.fetch();
 
   const division = getDivisionSpec(divisionKey);
-  const existingRecord = getDivisionByKey(db, guild.id, division.key);
+  const existingRecord = await storage.getDivisionByKey(guild.id, division.key);
   const reactivatedFromArchived = existingRecord?.status === 'archived';
 
   // Reset status to 'active' *before* any of the ensureRole/ensureCategory/
@@ -613,7 +609,7 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
   // gate more conservative, never less. upsertDivision's own reset stays too
   // as a harmless backstop for the normal end-of-run write.
   if (reactivatedFromArchived) {
-    setDivisionStatus(db, guild.id, division.key, 'active');
+    await storage.setDivisionStatus(guild.id, division.key, 'active');
   }
 
   const result: DivisionProvisionResult = {
@@ -624,9 +620,9 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
   };
   const template = getDivisionTemplate(division);
 
-  await ensureFranchiseRole(db, guild, result);
+  const franchiseRepresentativeRole = await ensureFranchiseRole(storage, guild, result);
   const divisionRole = await ensureRole(
-    db,
+    storage,
     guild,
     divisionRoleLogicalKey(division.key),
     template.divisionRoleName,
@@ -634,7 +630,7 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
     result,
   );
   const managerRole = await ensureRole(
-    db,
+    storage,
     guild,
     divisionManagerRoleLogicalKey(division.key),
     template.managerRoleName,
@@ -642,23 +638,23 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
     result,
   );
   const captainRole = await ensureRole(
-    db,
+    storage,
     guild,
     divisionCaptainRoleLogicalKey(division.key),
     template.captainRoleName,
     { utility: true },
     result,
   );
-  const roleIds = permissionRoleIds(db, guild, divisionRole, managerRole, captainRole);
+  const roleIds = permissionRoleIds(guild, divisionRole, managerRole, captainRole, franchiseRepresentativeRole);
   const category = await ensureCategory(
-    db,
+    storage,
     guild,
     divisionCategoryLogicalKey(division.key),
     template.categoryName,
     resolveDivisionPermissionOverwrites(roleIds, 'category'),
     result,
   );
-  const scoutConfig = getScoutConfig(db, guild.id);
+  const scoutConfig = await storage.getScoutConfig(guild.id);
   let scoutOperationsCategory: CategoryChannel | undefined;
   if (scoutConfig?.operationsCategoryId || scoutConfig?.operationsChannelId) {
     const configuredCategory = scoutConfig.operationsCategoryId
@@ -690,7 +686,7 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
         ? scoutOperationsCategory
         : category;
     await ensureChannel(
-      db,
+      storage,
       guild,
       targetCategory,
       logicalKey,
@@ -703,7 +699,7 @@ export async function provisionDivision(db: Database.Database, guild: Guild, div
     );
   }
 
-  upsertDivision(db, {
+  await storage.upsertDivision({
     guildId: guild.id,
     divisionKey: division.key,
     displayName: division.name,

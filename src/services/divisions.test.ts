@@ -5,6 +5,7 @@ import type { DivisionSpec } from '../config/guild-structure.js';
 import { closeDatabase, openDatabase } from '../db/client.js';
 import { insertManagedResource, listManagedResourcesByDomain, setManagedResourceParent } from '../db/repositories/managedResources.js';
 import { setScoutOperationsChannel } from '../db/repositories/scoutConfig.js';
+import { createSqliteDivisionWorkspaceStore } from '../storage/index.js';
 import { divisionChannelLogicalKey } from './divisionScaffold.js';
 import {
   classifyDivisionChannelMatch,
@@ -12,9 +13,67 @@ import {
   getDivisionTemplate,
   getExpectedChannelNames,
   isDivisionKey,
-  provisionDivision,
+  provisionDivision as provisionDivisionWithStorage,
   resolveDivisionPermissionOverwrites,
 } from './divisions.js';
+
+const divisionStores = new WeakMap<
+  ReturnType<typeof openDatabase>,
+  ReturnType<typeof createSqliteDivisionWorkspaceStore>
+>();
+
+function provisionDivision(db: ReturnType<typeof openDatabase>, guild: Guild, divisionKey: 'vanaheim' | 'alfheim') {
+  let storage = divisionStores.get(db);
+  if (!storage) {
+    storage = createSqliteDivisionWorkspaceStore(db);
+    divisionStores.set(db, storage);
+  }
+  return provisionDivisionWithStorage(storage, guild, divisionKey);
+}
+
+test('provisionDivision awaits asynchronous persistence before continuing Discord writes', async () => {
+  const db = openDatabase(':memory:');
+  const baseStorage = createSqliteDivisionWorkspaceStore(db);
+  let releaseInsert!: () => void;
+  let announceInsert!: () => void;
+  const insertGate = new Promise<void>((resolve) => { releaseInsert = resolve; });
+  const insertStarted = new Promise<void>((resolve) => { announceInsert = resolve; });
+  let reachedDivisionRoleCreate = false;
+  const storage = {
+    ...baseStorage,
+    async insertManagedResource(input: Parameters<typeof baseStorage.insertManagedResource>[0]) {
+      announceInsert();
+      await insertGate;
+      return baseStorage.insertManagedResource(input);
+    },
+  };
+  const roles = new Collection<string, any>([
+    ['franchise', { id: 'franchise', name: 'Franchise Representative' }],
+  ]);
+  const guild = {
+    id: 'async-storage-guild',
+    roles: {
+      cache: roles,
+      fetch: async () => roles,
+      create: async () => {
+        reachedDivisionRoleCreate = true;
+        throw new Error('Reached division-specific work');
+      },
+    },
+    channels: { fetch: async () => undefined },
+  } as unknown as Guild;
+
+  try {
+    const provisioning = provisionDivisionWithStorage(storage, guild, 'vanaheim');
+    await insertStarted;
+    assert.equal(reachedDivisionRoleCreate, false);
+    releaseInsert();
+    await assert.rejects(provisioning, /Reached division-specific work/);
+    assert.equal(reachedDivisionRoleCreate, true);
+  } finally {
+    closeDatabase(db);
+  }
+});
 
 test('concurrent division provisioning creates and tracks the shared franchise role once', async () => {
   const db = openDatabase(':memory:');

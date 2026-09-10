@@ -8,17 +8,9 @@ import {
   type Guild,
   type Role,
 } from 'discord.js';
-import type Database from 'better-sqlite3';
 import { divisions, type DivisionKey } from '../config/guild-structure.js';
-import {
-  getDivisionByKey,
-  getScoutConfig,
-  listDivisionScoutLifecycleBlockers,
-  listManagedResourcesByDomain,
-  markManagedResourcePurged,
-  setDivisionStatus,
-  type ManagedResource,
-} from '../db/index.js';
+import type { ManagedResource } from '../db/types.js';
+import type { DivisionWorkspaceStore } from '../storage/index.js';
 import { requireAccess } from '../services/authorization.js';
 import {
   divisionCaptainRoleLogicalKey,
@@ -107,17 +99,21 @@ function archiveOverwrites(interaction: ChatInputCommandInteraction) {
 
 import { tryAcquireDivisionOperation } from '../services/divisionOperation.js';
 
-export async function handleDivisionCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
-  if (!interaction.guildId) return handleDivisionCommandLocked(interaction, db);
-  const release = tryAcquireDivisionOperation(db, interaction.guildId, interaction.options.getString('name', true));
+export async function handleDivisionCommand(
+  interaction: ChatInputCommandInteraction,
+  storage: DivisionWorkspaceStore,
+  operationScope: object,
+) {
+  if (!interaction.guildId) return handleDivisionCommandLocked(interaction, storage);
+  const release = tryAcquireDivisionOperation(operationScope, interaction.guildId, interaction.options.getString('name', true));
   if (!release) {
     await interaction.reply({ content: 'This division has an operation in progress. Retry when it finishes.', flags: MessageFlags.Ephemeral });
     return;
   }
-  try { return await handleDivisionCommandLocked(interaction, db); } finally { release(); }
+  try { return await handleDivisionCommandLocked(interaction, storage); } finally { release(); }
 }
 
-async function handleDivisionCommandLocked(interaction: ChatInputCommandInteraction, db: Database.Database) {
+async function handleDivisionCommandLocked(interaction: ChatInputCommandInteraction, storage: DivisionWorkspaceStore) {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
     return;
@@ -133,7 +129,7 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
 
   if (subcommand === 'add') {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const result = await provisionDivision(db, guild, divisionKey);
+    const result = await provisionDivision(storage, guild, divisionKey);
     const reactivationNote = result.reactivatedFromArchived
       ? `\n\nNote: ${result.division} was archived; provisioning restored its normal visibility, and its status is active again.`
       : '';
@@ -150,9 +146,9 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
   // divisions rows, never from Discord name-matching (#31 Defect 1) --
   // status, archive, and delete all resolve "what does Ratatoskr manage for
   // this division" the same, ID-first way provisionDivision writes it.
-  const record = getDivisionByKey(db, guild.id, division.key);
+  const record = await storage.getDivisionByKey(guild.id, division.key);
   const managedForDivision = resourcesForDivision(
-    listManagedResourcesByDomain(db, guild.id, 'division', 'active'),
+    await storage.listManagedResourcesByDomain(guild.id, 'division', 'active'),
     division.key,
   );
   const managedCategoryRow = managedForDivision.find((resource) => resource.logicalKey === divisionCategoryLogicalKey(division.key));
@@ -172,7 +168,7 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
     const roleManaged = Boolean(roleRow) && managedResourceIsLive(guild, roleRow!);
     const managerRoleManaged = Boolean(managerRoleRow) && managedResourceIsLive(guild, managerRoleRow!);
     const captainRoleManaged = Boolean(captainRoleRow) && managedResourceIsLive(guild, captainRoleRow!);
-    const scoutOperationsCategoryId = getScoutConfig(db, guild.id)?.operationsCategoryId;
+    const scoutOperationsCategoryId = (await storage.getScoutConfig(guild.id))?.operationsCategoryId;
     const centralizedScoutKeys = new Set([
       divisionChannelLogicalKey(division.key, 'scout_signups', 'text_channel'),
       divisionChannelLogicalKey(division.key, 'scout_results', 'text_channel'),
@@ -213,7 +209,7 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
   }
 
   if ((subcommand === 'archive' || subcommand === 'delete') && record) {
-    const blockers = listDivisionScoutLifecycleBlockers(db, guild.id, record.id);
+    const blockers = await storage.listDivisionScoutLifecycleBlockers(guild.id, record.id);
     if (blockers.length > 0) {
       await interaction.reply({
         content: [
@@ -321,7 +317,7 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
       try {
         const channel = guild.channels.cache.get(resource.discordResourceId);
         if (channel) await channel.delete('Ratatoskr division deletion');
-        markManagedResourcePurged(db, resource.id);
+        await storage.markManagedResourcePurged(resource.id);
         succeeded.push(label);
       } catch (error) {
         failed.push({ name: label, error: (error as Error).message });
@@ -331,7 +327,7 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
     if (category) {
       try {
         await category.delete('Ratatoskr division deletion');
-        if (managedCategoryRow) markManagedResourcePurged(db, managedCategoryRow.id);
+        if (managedCategoryRow) await storage.markManagedResourcePurged(managedCategoryRow.id);
         succeeded.push(`category:${category.name}`);
       } catch (error) {
         failed.push({ name: `category:${category.name}`, error: (error as Error).message });
@@ -343,7 +339,7 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
       try {
         const role = guild.roles.cache.get(roleRowToDelete.discordResourceId) as Role | undefined;
         if (role) await role.delete('Ratatoskr division deletion');
-        markManagedResourcePurged(db, roleRowToDelete.id);
+        await storage.markManagedResourcePurged(roleRowToDelete.id);
         succeeded.push(label);
       } catch (error) {
         failed.push({ name: label, error: (error as Error).message });
@@ -391,7 +387,7 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
     }
   }
 
-  setDivisionStatus(db, guild.id, division.key, 'archived');
+  await storage.setDivisionStatus(guild.id, division.key, 'archived');
 
   await interaction.editReply(
     `${division.name} has been archived. The category and history were preserved and hidden from normal division access.`,

@@ -1,7 +1,9 @@
 import type Database from 'better-sqlite3';
 import { closeDatabase, openDatabase } from '../db/client.js';
+import type { DivisionWorkspaceStore } from './divisionWorkspaceStore.js';
 import type { ManagedResourceStore } from './managedResourceStore.js';
 import type { SeasonWorkspaceStore } from './seasonWorkspaceStore.js';
+import { createSqliteDivisionWorkspaceStore } from './sqlite/divisionWorkspaceStore.js';
 import { createSqliteManagedResourceStore } from './sqlite/managedResourceStore.js';
 import { createSqliteSeasonWorkspaceStore } from './sqlite/seasonWorkspaceStore.js';
 
@@ -21,6 +23,10 @@ export interface ApplicationStorage {
   // Transitional and intentionally named: the remaining B5 slices must move
   // callers off this synchronous SQLite handle before Postgres can be enabled.
   readonly legacyDatabase: Database.Database;
+  // Division lifecycle operations and legacy Scout callers must contend on
+  // the same in-process lock while the workflows migrate in separate slices.
+  readonly operationScope: object;
+  readonly divisions: DivisionWorkspaceStore;
   readonly managedResources: ManagedResourceStore;
   readonly seasons: SeasonWorkspaceStore;
   close(): Promise<void>;
@@ -44,6 +50,8 @@ export function openApplicationStorage(options: OpenApplicationStorageOptions = 
   return {
     backend,
     legacyDatabase: db,
+    operationScope: db,
+    divisions: createSqliteDivisionWorkspaceStore(db, managedResources),
     managedResources,
     seasons: createSqliteSeasonWorkspaceStore(db, managedResources),
     async close() {
@@ -53,7 +61,9 @@ export function openApplicationStorage(options: OpenApplicationStorageOptions = 
 }
 
 export { SeasonAlreadyActiveError } from './seasonWorkspaceStore.js';
+export type { DivisionWorkspaceStore, UpsertDivisionInput } from './divisionWorkspaceStore.js';
 export type { InsertManagedResourceInput, ManagedResourceStore } from './managedResourceStore.js';
 export type { CreateSeasonInput, SeasonWorkspaceStore } from './seasonWorkspaceStore.js';
 export { createSqliteManagedResourceStore } from './sqlite/managedResourceStore.js';
+export { createSqliteDivisionWorkspaceStore } from './sqlite/divisionWorkspaceStore.js';
 export { createSqliteSeasonWorkspaceStore } from './sqlite/seasonWorkspaceStore.js';
