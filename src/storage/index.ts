@@ -1,6 +1,8 @@
 import type Database from 'better-sqlite3';
 import { closeDatabase, openDatabase } from '../db/client.js';
+import type { ManagedResourceStore } from './managedResourceStore.js';
 import type { SeasonWorkspaceStore } from './seasonWorkspaceStore.js';
+import { createSqliteManagedResourceStore } from './sqlite/managedResourceStore.js';
 import { createSqliteSeasonWorkspaceStore } from './sqlite/seasonWorkspaceStore.js';
 
 export type DatabaseBackend = 'sqlite' | 'postgres';
@@ -19,6 +21,7 @@ export interface ApplicationStorage {
   // Transitional and intentionally named: the remaining B5 slices must move
   // callers off this synchronous SQLite handle before Postgres can be enabled.
   readonly legacyDatabase: Database.Database;
+  readonly managedResources: ManagedResourceStore;
   readonly seasons: SeasonWorkspaceStore;
   close(): Promise<void>;
 }
@@ -37,10 +40,12 @@ export function openApplicationStorage(options: OpenApplicationStorageOptions = 
   }
 
   const db = openDatabase(options.sqlitePath);
+  const managedResources = createSqliteManagedResourceStore(db);
   return {
     backend,
     legacyDatabase: db,
-    seasons: createSqliteSeasonWorkspaceStore(db),
+    managedResources,
+    seasons: createSqliteSeasonWorkspaceStore(db, managedResources),
     async close() {
       closeDatabase(db);
     },
@@ -48,5 +53,7 @@ export function openApplicationStorage(options: OpenApplicationStorageOptions = 
 }
 
 export { SeasonAlreadyActiveError } from './seasonWorkspaceStore.js';
+export type { InsertManagedResourceInput, ManagedResourceStore } from './managedResourceStore.js';
 export type { CreateSeasonInput, SeasonWorkspaceStore } from './seasonWorkspaceStore.js';
+export { createSqliteManagedResourceStore } from './sqlite/managedResourceStore.js';
 export { createSqliteSeasonWorkspaceStore } from './sqlite/seasonWorkspaceStore.js';

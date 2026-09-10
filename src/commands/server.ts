@@ -5,9 +5,9 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import type Database from 'better-sqlite3';
 import { hasAccess } from '../services/authorization.js';
 import { runServerBootstrap } from '../services/serverBootstrapRunner.js';
+import type { ManagedResourceStore } from '../storage/index.js';
 
 // Guild ids with an in-flight `apply` run. A plain in-process Set is
 // sufficient (and never persisted) -- this only guards against two
@@ -44,7 +44,7 @@ export const serverCommand = new SlashCommandBuilder()
 // script (scripts/bootstrap-guild.ts) uses -- this command exists so the
 // server scaffold can be (re)applied from Discord itself, without needing
 // local machine/repo access, on a guild the bot is already running in.
-export async function handleServerCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
+export async function handleServerCommand(interaction: ChatInputCommandInteraction, storage: ManagedResourceStore) {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
     return;
@@ -90,7 +90,7 @@ export async function handleServerCommand(interaction: ChatInputCommandInteracti
   const lines: string[] = [];
   let errorMessage: string | undefined;
   try {
-    await runServerBootstrap(db, interaction.guild, { apply, deleteObsolete }, (line) => lines.push(line));
+    await runServerBootstrap(storage, interaction.guild, { apply, deleteObsolete }, (line) => lines.push(line));
   } catch (error) {
     errorMessage = (error as Error).message;
   } finally {

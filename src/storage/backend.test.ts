@@ -34,3 +34,38 @@ test('sqlite storage exposes asynchronous season operations and closes cleanly',
   await storage.close();
   assert.equal(storage.legacyDatabase.open, false);
 });
+
+test('sqlite storage exposes asynchronous managed-resource operations', async () => {
+  const storage = openApplicationStorage({ environment: { DATABASE_BACKEND: 'sqlite' }, sqlitePath: ':memory:' });
+
+  try {
+    const pendingInsert = storage.managedResources.insertManagedResource({
+      discordResourceId: 'role-1',
+      guildId: 'guild-1',
+      resourceType: 'role',
+      logicalKey: 'server:role:admin',
+      scaffoldDomain: 'server',
+    });
+    assert.ok(pendingInsert instanceof Promise);
+    const inserted = await pendingInsert;
+
+    assert.equal(
+      (await storage.managedResources.getActiveManagedResourceByLogicalKey('guild-1', 'server:role:admin'))?.id,
+      inserted.id,
+    );
+    assert.deepEqual(
+      (await storage.managedResources.listManagedResourcesByDomain('guild-1', 'server', 'active')).map(
+        (resource) => resource.id,
+      ),
+      [inserted.id],
+    );
+
+    await storage.managedResources.markManagedResourceObsolete(inserted.id);
+    assert.equal(
+      await storage.managedResources.getActiveManagedResourceByLogicalKey('guild-1', 'server:role:admin'),
+      undefined,
+    );
+  } finally {
+    await storage.close();
+  }
+});

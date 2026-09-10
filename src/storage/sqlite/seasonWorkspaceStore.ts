@@ -3,19 +3,21 @@ import {
   activateSeasonIfNoneActive,
   archiveSeason,
   createSeason,
-  getActiveManagedResourceByLogicalKey,
   getActiveSeason,
   getSeasonByNumber,
-  insertManagedResource,
-  listManagedResourcesByDomain,
   listSeasons,
-  markManagedResourceObsolete,
   setSeasonDiscordCategoryId,
 } from '../../db/index.js';
+import type { ManagedResourceStore } from '../managedResourceStore.js';
 import type { SeasonWorkspaceStore } from '../seasonWorkspaceStore.js';
+import { createSqliteManagedResourceStore } from './managedResourceStore.js';
 
-export function createSqliteSeasonWorkspaceStore(db: Database.Database): SeasonWorkspaceStore {
+export function createSqliteSeasonWorkspaceStore(
+  db: Database.Database,
+  managedResources: ManagedResourceStore = createSqliteManagedResourceStore(db),
+): SeasonWorkspaceStore {
   return {
+    ...managedResources,
     async createSeason(input) {
       return createSeason(db, input);
     },
@@ -36,18 +38,6 @@ export function createSqliteSeasonWorkspaceStore(db: Database.Database): SeasonW
     },
     async setSeasonDiscordCategoryId(seasonId, discordCategoryId) {
       setSeasonDiscordCategoryId(db, seasonId, discordCategoryId);
-    },
-    async getActiveManagedResourceByLogicalKey(guildId, logicalKey) {
-      return getActiveManagedResourceByLogicalKey(db, guildId, logicalKey);
-    },
-    async listManagedResourcesByDomain(guildId, scaffoldDomain, status) {
-      return listManagedResourcesByDomain(db, guildId, scaffoldDomain, status);
-    },
-    async insertManagedResource(input) {
-      return insertManagedResource(db, input);
-    },
-    async markManagedResourceObsolete(id) {
-      markManagedResourceObsolete(db, id);
     },
   };
 }
