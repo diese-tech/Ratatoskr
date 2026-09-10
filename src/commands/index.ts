@@ -1,5 +1,5 @@
 import type { Client, Interaction } from 'discord.js';
-import type Database from 'better-sqlite3';
+import type { ApplicationStorage } from '../storage/index.js';
 import { divisionCommand, handleDivisionCommand } from './division.js';
 import { handleHelpCommand, helpCommand } from './help.js';
 import {
@@ -24,7 +24,8 @@ export async function registerGuildCommands(client: Client, guildId: string) {
   await guild.commands.set(commandData);
 }
 
-export async function handleInteraction(interaction: Interaction, db: Database.Database) {
+export async function handleInteraction(interaction: Interaction, storage: ApplicationStorage) {
+  const db = storage.legacyDatabase;
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === 'scout') await handleScoutAutocomplete(interaction);
     return;
@@ -85,7 +86,7 @@ export async function handleInteraction(interaction: Interaction, db: Database.D
   if (interaction.commandName === 'division') {
     await handleDivisionCommand(interaction, db);
   } else if (interaction.commandName === 'season') {
-    await handleSeasonCommand(interaction, db);
+    await handleSeasonCommand(interaction, storage.seasons);
   } else if (interaction.commandName === 'scout') {
     await handleScoutCommand(interaction, db);
   } else if (interaction.commandName === 'server') {

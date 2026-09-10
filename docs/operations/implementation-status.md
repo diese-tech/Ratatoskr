@@ -1,45 +1,36 @@
 # Implementation checkpoint
 
-Authorized scope: the B1-B7 sequence through the active B4b season-lifecycle
-slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.0,
-and focused Issue #21.
+Authorized scope: the B1-B7 sequence through the active B5a storage-boundary
+slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.1,
+roadmap #1, and focused Issue #100.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B4b season close locally complete
+## Current checkpoint — B5a asynchronous season storage boundary
 
-Done: B4a / #23 merged through PRs #96 and #97. On
-`codex/issue-21-season-close`, B4b adds ADMIN-gated
-`/season close [number:<n>] [confirm:true]`.
-The default is a private no-write preview. Confirmation atomically archives only
-the exact still-active season, records `archived_at`, leaves all Discord categories,
-channels and season-independent Scouts untouched, and fails closed on stale targeting.
-The existing `/season create` flow can provision and activate the next season after
-closure. Help text documents the preserved-channel boundary.
+Done: B4b / #21 merged through PR #99 at
+`f34b3b7f89884457dab5eb4a62caa97aa5ec1cb8`; final automated review found no
+major issues and post-merge Ubuntu/Windows CI passed. B5 is now active through
+#100 on `codex/issue-95-b5-storage-boundary`.
 
-Automated review P1 on PR #99 identified that the first regression had not
-provisioned Season 1's retained channels. The strengthened command-level test
-reproduced all five old channels blocking Season 2. Fix 6d8e072 excludes channels
-already owned by other seasons from new-season candidate matching while preserving
-ambiguity handling for unmanaged resources and drift in the season being provisioned.
+B5a adds an explicit `DATABASE_BACKEND=sqlite|postgres` selector that defaults
+to SQLite. `DATABASE_URL` alone cannot select Postgres. Explicit Postgres selection
+fails startup closed until that adapter is implemented, rather than falling back to
+SQLite. The complete `/season` vertical now consumes an asynchronous,
+backend-independent `SeasonWorkspaceStore`; a SQLite adapter preserves all current
+season and managed-resource behavior. The application composition root exposes the
+remaining raw SQLite handle as `legacyDatabase` so incomplete migration is visible.
 
-The next automated review found two additional cross-invocation/resource-ownership
-hazards. Fix 4f8d84e binds confirmation to the season number emitted by the preview,
-so an old confirmation cannot close a newly active season, and excludes category IDs
-owned by other seasons so a reused custom category name cannot merge workspaces.
-The help entry remains within Discord's embed field limit.
+Validation: 269 tests pass locally, including default/explicit/invalid backend
+selection, `DATABASE_URL`-only behavior, fail-closed Postgres selection, asynchronous
+season calls, and the complete season status/create/close regressions. Application
+typecheck passes. Twenty-four non-test command/service files still import
+`better-sqlite3`; B5a does not claim the application is Postgres-ready.
 
-Validation: 265 tests, application typecheck, scripts typecheck, build, dependency
-audit and diff check pass locally. Focused command/repository coverage includes no
-active season, omitted/false confirmation, confirmed archival, preserved category
-identity, preview-bound stale confirmation, missing-number rejection, same-name
-category isolation, injected stale targeting and a complete close-to-next-create
-flow with retained channels. No live Discord interaction was performed.
-
-Next: PR #99 is open for the focused #21 slice. Push the review repair, resolve its
-thread, and require a fresh automated review on the final head plus green
-Ubuntu/Windows CI. Do not merge, deploy, claim live verification or begin B5 without
-the corresponding gate or explicit disposition.
+Next: finish both typechecks, build, dependency audit and diff check; open the focused
+#100 PR; require final-head review plus Ubuntu/Windows CI. Do not add a Postgres driver,
+provision infrastructure, change production configuration, or cut over persistence
+in this slice.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 

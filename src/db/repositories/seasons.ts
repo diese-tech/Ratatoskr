@@ -1,5 +1,9 @@
 import type Database from 'better-sqlite3';
 import type { Season, SeasonStatus } from '../types.js';
+import { SeasonAlreadyActiveError, type CreateSeasonInput } from '../../storage/seasonWorkspaceStore.js';
+
+export { SeasonAlreadyActiveError } from '../../storage/seasonWorkspaceStore.js';
+export type { CreateSeasonInput } from '../../storage/seasonWorkspaceStore.js';
 
 type SeasonRow = {
   id: number;
@@ -33,12 +37,6 @@ function toSeason(row: SeasonRow): Season {
 export function computeSeasonCategoryName(seasonNumber: number, displayName: string | null | undefined): string {
   return displayName && displayName.trim().length > 0 ? displayName : `YSL Season ${seasonNumber}`;
 }
-
-export type CreateSeasonInput = {
-  guildId: string;
-  seasonNumber: number;
-  displayName?: string | null;
-};
 
 // Season identity (seasonNumber) and its Discord-facing name are stored as
 // separate columns and never reconstructed from one another -- category_name
@@ -157,13 +155,6 @@ export function setSeasonDiscordCategoryId(db: Database.Database, seasonId: numb
 // Thrown by activateSeasonIfNoneActive when another season won the race --
 // distinct from the generic "not found" error setActiveSeason throws, so
 // callers can tell "someone else is already active" apart from "bad id."
-export class SeasonAlreadyActiveError extends Error {
-  constructor(public readonly activeSeasonNumber: number) {
-    super(`Season ${activeSeasonNumber} is already active for this guild`);
-    this.name = 'SeasonAlreadyActiveError';
-  }
-}
-
 // Unlike setActiveSeason (which deactivates whatever is active and
 // replaces it -- the right primitive for a future /season close|activate),
 // this activates `seasonId` only if no season is currently active, atomically.

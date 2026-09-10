@@ -13,7 +13,7 @@ process.env.ROLE_ALLFATHER_ID ??= 'allfather-test-role';
 process.env.ROLE_AESIR_ID ??= 'aesir-test-role';
 
 const [
-  { handleSeasonCommand, seasonCommand },
+  { handleSeasonCommand: handleSeasonCommandWithStorage, seasonCommand },
   {
     createSeason,
     getActiveSeason,
@@ -23,7 +23,13 @@ const [
     setActiveSeason,
     setSeasonDiscordCategoryId,
   },
-] = await Promise.all([import('./season.js'), import('../db/index.js')]);
+  { createSqliteSeasonWorkspaceStore },
+] = await Promise.all([import('./season.js'), import('../db/index.js'), import('../storage/index.js')]);
+
+const handleSeasonCommand = (
+  interaction: ChatInputCommandInteraction,
+  db: ReturnType<typeof openDatabase>,
+) => handleSeasonCommandWithStorage(interaction, createSqliteSeasonWorkspaceStore(db));
 
 function statusInteraction(number: number | null = null, channels = new Collection<string, object>()) {
   const replies: InteractionReplyOptions[] = [];
