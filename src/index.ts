@@ -86,7 +86,13 @@ client.once('clientReady', async () => {
   console.log('Finished scout posts reconciled.');
   await reconcileScoutControlPanels(client, db);
   console.log('Scout control panels reconciled.');
-  stopScoutNotificationWorker = await startScoutNotificationWorker(client, db);
+  stopScoutNotificationWorker = await startScoutNotificationWorker(client, {
+    storage: storage.scoutNotificationDelivery,
+    operationScope: storage.operationScope,
+    reportError: async (context, error) => {
+      await reportOperationalError(client, db, context, error);
+    },
+  });
   console.log('Scout notification worker started.');
 });
 
