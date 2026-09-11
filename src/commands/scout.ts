@@ -136,32 +136,36 @@ export async function handleScoutCommand(
     return;
   }
 
-  const bindEmoji = interaction.options.getBoolean('bind_emoji');
-  await interaction.deferReply(bindEmoji ? {} : { flags: MessageFlags.Ephemeral });
-  let config = await configuration.ensureScoutConfig(interaction.guild.id);
-  if (timezone) config = await configuration.setScoutTimezone(interaction.guild.id, timezone);
-
   const selectedOperationsChannel = interaction.options.getChannel('operations_channel');
+  const bindEmoji = interaction.options.getBoolean('bind_emoji');
+  await interaction.deferReply(bindEmoji && !selectedOperationsChannel ? {} : { flags: MessageFlags.Ephemeral });
+
   const operationsChannel = selectedOperationsChannel
     ? await interaction.guild.channels.fetch(selectedOperationsChannel.id)
     : null;
-  if (operationsChannel) {
-    if (operationsChannel.type !== ChannelType.GuildText || !operationsChannel.parentId) {
-      await interaction.editReply({
-        content: 'The Scout Operations control channel must be a server text channel inside a category.',
-      });
-      return;
-    }
+  const operationsCategoryId = operationsChannel?.parentId ?? null;
+  if (selectedOperationsChannel
+    && (!operationsChannel || operationsChannel.type !== ChannelType.GuildText || !operationsCategoryId)) {
+    await interaction.editReply({
+      content: 'The Scout Operations control channel must be a server text channel inside a category.',
+    });
+    return;
+  }
+
+  let config = await configuration.ensureScoutConfig(interaction.guild.id);
+  if (timezone) config = await configuration.setScoutTimezone(interaction.guild.id, timezone);
+
+  if (operationsChannel && operationsCategoryId) {
     config = await configuration.setScoutOperationsChannel(
       interaction.guild.id,
-      operationsChannel.parentId,
+      operationsCategoryId,
       operationsChannel.id,
     );
   }
 
   if (bindEmoji) {
     const { startScoutEmojiBinding } = await import('../services/scoutEmojiBinding.js');
-    await startScoutEmojiBinding(interaction);
+    await startScoutEmojiBinding(interaction, { publicFollowUp: Boolean(selectedOperationsChannel) });
     if (operationsChannel) {
       const { reconcileActiveScoutSignups } = await import('../services/scoutSignups.js');
       const { reconcileScoutControlPanels } = await import('../services/scoutControlPanel.js');

@@ -110,13 +110,22 @@ function bindingComponents(state: ScoutEmojiBindingState) {
   ];
 }
 
-export async function startScoutEmojiBinding(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function startScoutEmojiBinding(
+  interaction: ChatInputCommandInteraction,
+  options: { publicFollowUp?: boolean } = {},
+): Promise<void> {
   if (!interaction.guild) return;
 
   const state = createScoutEmojiBindingState(interaction.guild.id, interaction.user.id);
-  if (interaction.deferred || interaction.replied) await interaction.editReply({ content: bindingMessage(state) });
-  else await interaction.reply({ content: bindingMessage(state) });
-  const message = await interaction.fetchReply();
+  let message;
+  if (options.publicFollowUp) {
+    await interaction.editReply({ content: 'Scout configuration saved. The emoji binding prompt is posted below.' });
+    message = await interaction.followUp({ content: bindingMessage(state), fetchReply: true });
+  } else {
+    if (interaction.deferred || interaction.replied) await interaction.editReply({ content: bindingMessage(state) });
+    else await interaction.reply({ content: bindingMessage(state) });
+    message = await interaction.fetchReply();
+  }
   liveBindings.set(message.id, { state, expiresAt: Date.now() + BINDING_TTL_MS });
 
   setTimeout(() => {

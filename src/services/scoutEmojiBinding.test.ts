@@ -75,6 +75,31 @@ test('emoji binding rejects other users, standard emoji, foreign emoji, and dupl
   );
 });
 
+test('emoji binding publishes only its successful prompt after private channel validation', async () => {
+  const edits: any[] = [];
+  const followUps: any[] = [];
+  const message = {
+    id: 'binding-message',
+    edit: async () => message,
+  };
+
+  await startScoutEmojiBinding({
+    guild: { id: 'guild-1' },
+    user: { id: 'admin-1' },
+    deferred: true,
+    replied: false,
+    editReply: async (payload: unknown) => { edits.push(payload); },
+    followUp: async (payload: unknown) => { followUps.push(payload); return message; },
+    fetchReply: async () => { throw new Error('the private reply is not the binding message'); },
+  } as never, { publicFollowUp: true });
+
+  assert.equal(edits.length, 1);
+  assert.match(edits[0].content, /saved/i);
+  assert.equal(followUps.length, 1);
+  assert.equal(followUps[0].fetchReply, true);
+  assert.match(followUps[0].content, /React to this message/i);
+});
+
 test('Skip Fill acknowledges before awaiting asynchronous emoji persistence', async () => {
   let releaseWrite!: () => void;
   let announceWrite!: () => void;

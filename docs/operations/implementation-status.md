@@ -20,7 +20,7 @@ role selector, reaction emoji completion and Skip Fill continuation consume the 
 Scout creation, cancellation, roster, publication, notifications, recovery and
 authorization remain on the transitional SQLite handle for later coherent slices.
 
-Validation: 280 tests pass locally, including asynchronous configuration creation,
+Validation: 282 tests pass locally, including asynchronous configuration creation,
 all existing mutation categories while preserving independent fields, and a delayed
 command, role-select and Skip Fill acknowledgement/write ordering. Both typechecks,
 build, dependency audit and diff check pass. Eighteen non-test command/service files

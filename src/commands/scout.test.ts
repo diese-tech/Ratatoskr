@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ApplicationCommandOptionType, Collection } from 'discord.js';
+import { ApplicationCommandOptionType, ChannelType, Collection, MessageFlags } from 'discord.js';
 import type { ScoutConfig } from '../db/types.js';
 import type { ScoutConfigurationStore } from '../storage/index.js';
 import { handleScoutCommand, handleScoutConfigRoleSelect, scoutCommand } from './scout.js';
@@ -143,4 +143,54 @@ test('/scout config defers before awaiting asynchronous configuration reads', as
   assert.equal(acknowledgementsBeforeRead, 1);
   assert.equal(replies.length, 0);
   assert.equal(edits.length, 1);
+});
+
+test('/scout config keeps invalid operations-channel errors private when emoji binding is requested', async () => {
+  process.env.ROLE_ALLFATHER_ID = 'admin-role';
+  process.env.ROLE_AESIR_ID = 'other-admin-role';
+  let configurationReads = 0;
+  const storage = {
+    async ensureScoutConfig() { configurationReads += 1; throw new Error('validation must happen first'); },
+    async setScoutAuthorizedRoleIds() { throw new Error('not used'); },
+    async setScoutOperationsChannel() { throw new Error('not used'); },
+    async setScoutTimezone() { throw new Error('not used'); },
+    async setScoutEmojiByRole() { throw new Error('not used'); },
+  } satisfies ScoutConfigurationStore;
+  const replies: any[] = [];
+  const deferredReplies: any[] = [];
+  const edits: unknown[] = [];
+  const selectedChannel = { id: 'channel-1' };
+  const interaction = {
+    guild: {
+      id: 'guild-1',
+      members: {
+        fetch: async () => ({ roles: { cache: new Collection([['admin-role', {}]]) } }),
+      },
+      channels: {
+        fetch: async () => {
+          assert.equal(deferredReplies.length, 1, 'channel validation must start after acknowledgement');
+          return { id: 'channel-1', type: ChannelType.GuildText, parentId: null };
+        },
+      },
+    },
+    user: { id: 'admin-1' },
+    options: {
+      getSubcommand: () => 'config',
+      getString: () => null,
+      getChannel: () => selectedChannel,
+      getBoolean: () => true,
+    },
+    deferReply: async (payload: unknown) => { deferredReplies.push(payload); },
+    reply: async (payload: unknown) => { replies.push(payload); },
+    editReply: async (payload: unknown) => { edits.push(payload); },
+  } as never;
+
+  await handleScoutCommand(interaction, {} as never, storage);
+
+  assert.equal(configurationReads, 0);
+  assert.equal(deferredReplies.length, 1);
+  assert.equal(deferredReplies[0].flags, MessageFlags.Ephemeral);
+  assert.equal(replies.length, 0);
+  assert.equal(edits.length, 1);
+  assert.match((edits[0] as { content: string }).content, /inside a category/);
 });
