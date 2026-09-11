@@ -1,5 +1,6 @@
 import type { Client, Interaction } from 'discord.js';
 import type { ApplicationStorage } from '../storage/index.js';
+import type { ScoutSignupDependencies } from '../services/scoutSignups.js';
 import { divisionCommand, handleDivisionCommand } from './division.js';
 import { handleHelpCommand, helpCommand } from './help.js';
 import {
@@ -24,7 +25,11 @@ export async function registerGuildCommands(client: Client, guildId: string) {
   await guild.commands.set(commandData);
 }
 
-export async function handleInteraction(interaction: Interaction, storage: ApplicationStorage) {
+export async function handleInteraction(
+  interaction: Interaction,
+  storage: ApplicationStorage,
+  scoutSignupDependencies: ScoutSignupDependencies,
+) {
   const db = storage.legacyDatabase;
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === 'scout') await handleScoutAutocomplete(interaction);
@@ -88,7 +93,7 @@ export async function handleInteraction(interaction: Interaction, storage: Appli
   } else if (interaction.commandName === 'season') {
     await handleSeasonCommand(interaction, storage.seasons);
   } else if (interaction.commandName === 'scout') {
-    await handleScoutCommand(interaction, db, storage.scoutConfiguration);
+    await handleScoutCommand(interaction, db, storage.scoutConfiguration, scoutSignupDependencies);
   } else if (interaction.commandName === 'server') {
     await handleServerCommand(interaction, storage.managedResources);
   } else if (interaction.commandName === 'help') {

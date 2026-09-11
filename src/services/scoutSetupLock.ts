@@ -1,11 +1,9 @@
-import type Database from 'better-sqlite3';
-
-const locksByDatabase = new WeakMap<Database.Database, Map<number, Promise<void>>>();
+const locksByScope = new WeakMap<object, Map<number, Promise<void>>>();
 
 /** Serializes signup state and closure; Discord card delivery uses its own lock. */
-export async function withScoutSetupLock<T>(db: Database.Database, setupId: number, task: () => Promise<T>): Promise<T> {
-  let locks = locksByDatabase.get(db);
-  if (!locks) { locks = new Map(); locksByDatabase.set(db, locks); }
+export async function withScoutSetupLock<T>(scope: object, setupId: number, task: () => Promise<T>): Promise<T> {
+  let locks = locksByScope.get(scope);
+  if (!locks) { locks = new Map(); locksByScope.set(scope, locks); }
   const previous = locks.get(setupId) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });

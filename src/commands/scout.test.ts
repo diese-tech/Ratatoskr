@@ -135,7 +135,7 @@ test('/scout config defers before awaiting asynchronous configuration reads', as
     editReply: async (payload: unknown) => { edits.push(payload); },
   } as never;
 
-  const handling = handleScoutCommand(interaction, {} as never, storage);
+  const handling = handleScoutCommand(interaction, {} as never, storage, {} as never);
   await readStarted;
   const acknowledgementsBeforeRead = deferredReplies;
   releaseRead();
@@ -185,7 +185,7 @@ test('/scout config keeps invalid operations-channel errors private when emoji b
     editReply: async (payload: unknown) => { edits.push(payload); },
   } as never;
 
-  await handleScoutCommand(interaction, {} as never, storage);
+  await handleScoutCommand(interaction, {} as never, storage, {} as never);
 
   assert.equal(configurationReads, 0);
   assert.equal(deferredReplies.length, 1);

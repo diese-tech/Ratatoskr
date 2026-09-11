@@ -265,3 +265,17 @@ test('sqlite storage exposes asynchronous Scout notification delivery reads', as
     await storage.close();
   }
 });
+
+test('sqlite storage exposes asynchronous Scout signup lifecycle reads', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+
+  try {
+    const pendingSetups = storage.scoutSignups.listActiveSetups();
+    assert.ok(pendingSetups instanceof Promise);
+    assert.deepEqual(await pendingSetups, []);
+    assert.deepEqual(await storage.scoutSignups.listSignups(999), []);
+    assert.deepEqual(await storage.scoutSignups.listRosterSlots(999), []);
+  } finally {
+    await storage.close();
+  }
+});

@@ -15,6 +15,8 @@ import {
   scoutRoleForEmoji,
   selectReconciledScoutSignups,
 } from './scoutSignups.js';
+import { createSqliteScoutSignupStore, type ScoutSignupStore } from '../storage/index.js';
+import { withScoutSetupLock } from './scoutSetupLock.js';
 
 test('signup reaction role resolution uses the setup emoji snapshot', () => {
   const snapshot = {
@@ -64,9 +66,10 @@ test('restart reconciliation keeps deterministic role-limit signups and identifi
   });
 });
 
-test('eligible signup reconciliation preserves fixed staff seats while refreshing automatic seats', () => {
+test('eligible signup reconciliation preserves fixed staff seats while refreshing automatic seats', async () => {
   const db = openDatabase(':memory:');
   try {
+    const storage = createSqliteScoutSignupStore(db);
     const division = upsertDivision(db, {
       guildId: 'guild', divisionKey: 'alfheim', displayName: 'Alfheim', roleId: 'division-role',
       managerRoleId: 'manager-role', captainRoleId: 'captain-role', categoryId: 'category',
@@ -85,7 +88,7 @@ test('eligible signup reconciliation preserves fixed staff seats while refreshin
       userId: 'manual', actorUserId: 'staff', confirmOffRole: true,
     }), 'updated');
 
-    assert.equal(reconcileWorkingScoutRoster(db, setup.id, [
+    assert.equal(await reconcileWorkingScoutRoster(storage, setup.id, [
       { userId: 'automatic', role: 'jungle', createdAt: '2026-01-01' },
     ], 'signup'), 'updated');
     const roster = listScoutRosterSlots(db, setup.id);
@@ -95,4 +98,101 @@ test('eligible signup reconciliation preserves fixed staff seats while refreshin
   } finally {
     closeDatabase(db);
   }
+});
+
+test('working-roster reconciliation awaits asynchronous state before committing the generated roster', async () => {
+  let releaseSetup!: () => void;
+  let announceSetupRead!: () => void;
+  const setupGate = new Promise<void>((resolve) => { releaseSetup = resolve; });
+  const setupRead = new Promise<void>((resolve) => { announceSetupRead = resolve; });
+  const events: string[] = [];
+  const setup = {
+    id: 7,
+    status: 'open',
+    version: 3,
+    gameCount: 1,
+  } as Awaited<ReturnType<ScoutSignupStore['getSetup']>>;
+  const storage = {
+    async getSetup() {
+      events.push('setup-read-started');
+      announceSetupRead();
+      await setupGate;
+      events.push('setup-read-complete');
+      return setup;
+    },
+    async listRosterSlots() {
+      events.push('slots-read');
+      return [];
+    },
+    async reconcileWorkingRoster(input: { expectedVersion: number }) {
+      events.push(`reconcile:${input.expectedVersion}`);
+      return 'updated' as const;
+    },
+  } as unknown as ScoutSignupStore;
+
+  const reconciliation = reconcileWorkingScoutRoster(storage, 7, [
+    { userId: 'player', role: 'solo', createdAt: '2026-01-01' },
+  ], 'signup');
+  await setupRead;
+  assert.deepEqual(events, ['setup-read-started']);
+  releaseSetup();
+
+  assert.equal(await reconciliation, 'updated');
+  assert.deepEqual(events, ['setup-read-started', 'setup-read-complete', 'slots-read', 'reconcile:3']);
+});
+
+test('Scout signup locking serializes one setup while allowing another setup to progress', async () => {
+  const scope = {};
+  const events: string[] = [];
+  let releaseFirst!: () => void;
+  let announceFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstStarted = new Promise<void>((resolve) => { announceFirst = resolve; });
+  const first = withScoutSetupLock(scope, 1, async () => {
+    events.push('first-start');
+    announceFirst();
+    await firstGate;
+    events.push('first-finish');
+  });
+  await firstStarted;
+  const second = withScoutSetupLock(scope, 1, async () => { events.push('second'); });
+  const other = withScoutSetupLock(scope, 2, async () => { events.push('other'); });
+  await other;
+  assert.deepEqual(events, ['first-start', 'other']);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ['first-start', 'other', 'first-finish', 'second']);
+});
+
+test('signup roster reconciliation retries a stale staff-mutation race with fresh fixed seats', async () => {
+  let version = 3;
+  const expectedVersions: number[] = [];
+  const storage = {
+    async getSetup() {
+      return { id: 7, status: 'open', version, gameCount: 1 };
+    },
+    async listRosterSlots() {
+      return version === 3 ? [] : [{
+        gameNumber: 1,
+        team: 'team_one',
+        role: 'mid',
+        userId: 'staff-seat',
+        staffAssigned: true,
+      }];
+    },
+    async reconcileWorkingRoster(input: { expectedVersion: number; slots: readonly { userId: string }[] }) {
+      expectedVersions.push(input.expectedVersion);
+      if (expectedVersions.length === 1) {
+        version = 4;
+        return 'stale' as const;
+      }
+      assert.ok(input.slots.some((slot) => slot.userId === 'staff-seat'));
+      return 'updated' as const;
+    },
+  } as unknown as ScoutSignupStore;
+
+  assert.equal(await reconcileWorkingScoutRoster(storage, 7, [
+    { userId: 'automatic', role: 'solo', createdAt: '2026-01-01' },
+  ], 'signup'), 'updated');
+  assert.deepEqual(expectedVersions, [3, 4]);
 });
