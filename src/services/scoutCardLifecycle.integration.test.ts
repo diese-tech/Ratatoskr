@@ -9,10 +9,17 @@ import { openDatabase, upsertDivision, createScoutSetup, getScoutSetupById, list
   listScoutRosterSlots, swapPublishedScoutRosterSlotsIfVersion, replacePublishedScoutRosterSlotIfVersion,
   listDivisionScoutLifecycleBlockers, listOverlappingScoutSetups, listScoutEvents } from '../db/index.js';
 import { getScoutCompletion, finishScoutSetupIfVersion } from '../db/repositories/scoutCompletions.js';
-import { SCOUT_ROLES } from '../domain/index.js';
+import { SCOUT_ROLES, type ScoutSignupRole } from '../domain/index.js';
 import { ensurePostedScoutSetup } from './scoutCreate.js';
-import { handleScoutSignupReactionAdd, handleScoutSignupReactionRemove, refreshScoutMemberReadiness } from './scoutSignups.js';
-import { refreshScoutStatusCard, reconcileScoutStatusCards } from './scoutCardLifecycle.js';
+import {
+  handleScoutSignupReactionAdd,
+  handleScoutSignupReactionRemove,
+  reconcileActiveScoutSignups,
+  refreshScoutMemberReadiness,
+} from './scoutSignups.js';
+import { refreshScoutStatusCard, refreshScoutStatusCardSafely, reconcileScoutStatusCards } from './scoutCardLifecycle.js';
+import { reportOperationalError } from './operationalErrors.js';
+import { createSqliteScoutSignupStore } from '../storage/index.js';
 import { handleScoutReviewButton } from './scoutReview.js';
 import { handleScoutPublishButton, handleScoutPublishedSlotSelect, handleScoutPublishedUserSelect } from './scoutPublish.js';
 import { handleScoutCancelButton } from './scoutCancel.js';
@@ -44,6 +51,12 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
   const sent: any[] = [];
   const channels = new Collection<string, any>();
   const client: any = { user: { id: 'bot' }, guilds: { fetch: async () => guild }, channels: { fetch: async (id: string) => channels.get(id) } };
+  const signupDependencies = {
+    storage: createSqliteScoutSignupStore(db),
+    operationScope: db,
+    refreshStatusCard: async (targetClient: Client, setupId: number) => refreshScoutStatusCardSafely(targetClient, db, setupId),
+    reportError: async (context: any, error: unknown) => { await reportOperationalError(client, db, context, error); },
+  };
   const channel = (id: string) => {
     const messages = new Collection<string, any>();
     const result: any = { id, guildId: 'guild', guild, isTextBased: () => true, isSendable: () => true,
@@ -85,8 +98,8 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
     const message = signups.all.get(current.signupMessageId!);
     const reaction = message.reactions.cache.get(role);
     const member = members.get(id) ?? addMember(id);
-    if (remove) await handleScoutSignupReactionRemove(reaction, member.user, db);
-    else await handleScoutSignupReactionAdd(reaction, member.user, db);
+    if (remove) await handleScoutSignupReactionRemove(reaction, member.user, signupDependencies);
+    else await handleScoutSignupReactionAdd(reaction, member.user, signupDependencies);
   };
   const fill = async (perRole = 2) => {
     for (const role of SCOUT_ROLES) for (let i = 0; i < perRole; i++) await react(`${role}-${i}`, role);
@@ -94,7 +107,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
   const interaction = (customId: string): any => ({ customId, guild, guildId: 'guild', channelId: 'ops', client, user: { id: 'staff' },
     message: ops.all.first() ?? { id: 'missing-ops-card' },
     deferUpdate: async () => undefined, deferReply: async () => undefined, editReply: async () => undefined });
-  return { db, setup, client: client as Client, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction, channel,
+  return { db, setup, client: client as Client, signupDependencies, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction, channel,
     rejectSend: (code = 50013) => { rejectSend = code; },
     loseSend: () => { loseSend = true; }, denyDelete: (value: boolean) => { loseDelete = value; }, denyRead: (value: boolean) => { denyRead = value; } };
 }
@@ -173,11 +186,11 @@ test('eligibility loss gain and departure refresh existing cards without deletin
     await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.react('player', 'solo');
     const card = f.ops.all.first()!;
     f.addMember('player', []);
-    await refreshScoutMemberReadiness(f.client, f.db, 'guild', { userId: 'player' });
+    await refreshScoutMemberReadiness(f.client, f.signupDependencies, 'guild', { userId: 'player' });
     assert.match(card.content, /0\/10 seated/); assert.equal(listScoutSignups(f.db, f.setup.id).length, 1);
-    f.addMember('player'); await refreshScoutMemberReadiness(f.client, f.db, 'guild', { userId: 'player' });
+    f.addMember('player'); await refreshScoutMemberReadiness(f.client, f.signupDependencies, 'guild', { userId: 'player' });
     assert.match(card.content, /1\/10 seated/);
-    f.members.delete('player'); await refreshScoutMemberReadiness(f.client, f.db, 'guild', { userId: 'player' });
+    f.members.delete('player'); await refreshScoutMemberReadiness(f.client, f.signupDependencies, 'guild', { userId: 'player' });
     assert.match(card.content, /0\/10 seated/);
   } finally { f.db.close(); }
 });
@@ -513,14 +526,40 @@ test('eligibility gain can trigger readiness and a missing role shows an actiona
     f.addMember('carry-1', []); await f.fill();
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'open');
     assert.match(f.ops.all.first()!.content, /9\/10 seated/);
-    f.addMember('carry-1'); await refreshScoutMemberReadiness(f.client, f.db, 'guild', { userId: 'carry-1' });
+    f.addMember('carry-1'); await refreshScoutMemberReadiness(f.client, f.signupDependencies, 'guild', { userId: 'carry-1' });
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'roster_ready');
     f.roleCache.delete('eligible');
-    await refreshScoutMemberReadiness(f.client, f.db, 'guild', { eligibilityRoleId: 'eligible' });
+    await refreshScoutMemberReadiness(
+      f.client, f.signupDependencies, 'guild', { eligibilityRoleId: 'eligible' },
+    );
     assert.match(f.ops.all.first()!.content, /Live eligibility could not be verified/);
     assert.ok(!f.ops.all.first()!.content.includes('A complete roster can be formed'));
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 10);
   } finally { f.db.close(); }
+});
+
+test('startup reconciliation rebuilds persisted signups and the working roster from reactions', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const member = f.addMember('offline-support');
+    const signupMessage = f.signups.all.get(getScoutSetupById(f.db, f.setup.id)!.signupMessageId!)!;
+    signupMessage.reactions.cache.get('support').users.fetch = async () => new Collection<string, any>([
+      ['bot', { id: 'bot', bot: true }],
+      [member.id, member.user],
+    ]);
+
+    await reconcileActiveScoutSignups(f.client, f.signupDependencies);
+
+    assert.deepEqual(
+      listScoutSignups(f.db, f.setup.id).map(({ userId, role }) => ({ userId, role })),
+      [{ userId: 'offline-support', role: 'support' }],
+    );
+    assert.match(f.ops.all.first()!.content, /1\/10 seated/);
+    assert.match(f.ops.all.first()!.content, /Support: <@offline-support>/);
+  } finally {
+    f.db.close();
+  }
 });
 
 test('eligibility warning plus a large working roster stays within Discord limits', async (t) => {
@@ -533,7 +572,9 @@ test('eligibility warning plus a large working roster stays within Discord limit
         .run(f.setup.id, `51${String(index).padStart(16, '0')}`, SCOUT_ROLES[index % SCOUT_ROLES.length]);
     }
     f.roleCache.delete('eligible');
-    await refreshScoutMemberReadiness(f.client, f.db, 'guild', { eligibilityRoleId: 'eligible' });
+    await refreshScoutMemberReadiness(
+      f.client, f.signupDependencies, 'guild', { eligibilityRoleId: 'eligible' },
+    );
 
     const content = f.ops.all.first()!.content;
     assert.match(content, /Live eligibility could not be verified/);
@@ -615,6 +656,39 @@ test('a delayed staff-card edit does not block subsequent signup persistence', a
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 2);
   } finally { release(); await Promise.all([first, second]); f.db.close(); }
+});
+
+test('a signup reaction awaits durable async storage before roster and card refresh', async () => {
+  const f = fixture();
+  let releaseWrite!: () => void;
+  let announceWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const writeStarted = new Promise<void>((resolve) => { announceWrite = resolve; });
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    const sqliteStorage = f.signupDependencies.storage;
+    f.signupDependencies.storage = {
+      ...sqliteStorage,
+      async addSignup(setupId: number, userId: string, role: ScoutSignupRole) {
+        announceWrite();
+        await writeGate;
+        return sqliteStorage.addSignup(setupId, userId, role);
+      },
+    };
+
+    const handling = f.react('delayed', 'solo');
+    await writeStarted;
+    assert.equal(listScoutSignups(f.db, f.setup.id).length, 0);
+    assert.match(card.content, /0\/10 seated/);
+    releaseWrite();
+    await handling;
+    assert.equal(listScoutSignups(f.db, f.setup.id).length, 1);
+    assert.match(card.content, /1\/10 seated/);
+  } finally {
+    releaseWrite();
+    f.db.close();
+  }
 });
 
 test('cancellation retains the last known snapshot when final eligibility cannot be verified', async (t) => {

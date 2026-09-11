@@ -48,6 +48,7 @@ import {
 } from './scoutEligibility.js';
 import { scoutCancelButton } from './scoutCancel.js';
 import { reconcileWorkingScoutRoster } from './scoutSignups.js';
+import { createSqliteScoutSignupStore } from '../storage/index.js';
 
 const TEAM_LABELS = { team_one: 'Order', team_two: 'Chaos' } as const;
 
@@ -441,8 +442,8 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
     const eligibility = await classifyScoutSignups(
       interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId,
     );
-    const outcome = reconcileWorkingScoutRoster(
-      db, setup.id, eligibility.eligibleSignups, 'refresh', interaction.user.id, expectedVersion,
+    const outcome = await reconcileWorkingScoutRoster(
+      createSqliteScoutSignupStore(db), setup.id, eligibility.eligibleSignups, 'refresh', interaction.user.id, expectedVersion,
     );
     const rostered = new Set(listScoutRosterSlots(db, setup.id).map((slot) => slot.userId));
     const excluded = ineligibleSignupLines(eligibility.ineligibleSignups, rostered);

@@ -13,6 +13,7 @@ import type { ScoutConfig } from '../db/types.js';
 import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS } from '../domain/index.js';
 import { isValidScoutTimezone, listScoutTimezones } from '../services/scoutConfig.js';
 import type { ScoutConfigurationStore } from '../storage/index.js';
+import type { ScoutSignupDependencies } from '../services/scoutSignups.js';
 
 export const SCOUT_CONFIG_ROLES_CUSTOM_ID = 'scout:config:authorized_roles';
 const divisionChoices = divisions.map((division) => ({ name: division.name, value: division.key }));
@@ -104,6 +105,7 @@ export async function handleScoutCommand(
   interaction: ChatInputCommandInteraction,
   db: Database.Database,
   configuration: ScoutConfigurationStore,
+  scoutSignupDependencies: ScoutSignupDependencies,
 ) {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
@@ -169,7 +171,7 @@ export async function handleScoutCommand(
     if (operationsChannel) {
       const { reconcileActiveScoutSignups } = await import('../services/scoutSignups.js');
       const { reconcileScoutControlPanels } = await import('../services/scoutControlPanel.js');
-      await reconcileActiveScoutSignups(interaction.client, db);
+      await reconcileActiveScoutSignups(interaction.client, scoutSignupDependencies);
       await reconcileScoutControlPanels(interaction.client, db);
     }
     return;
@@ -179,7 +181,7 @@ export async function handleScoutCommand(
   if (operationsChannel) {
     const { reconcileActiveScoutSignups } = await import('../services/scoutSignups.js');
     const { reconcileScoutControlPanels } = await import('../services/scoutControlPanel.js');
-    await reconcileActiveScoutSignups(interaction.client, db);
+    await reconcileActiveScoutSignups(interaction.client, scoutSignupDependencies);
     await reconcileScoutControlPanels(interaction.client, db);
   }
 }

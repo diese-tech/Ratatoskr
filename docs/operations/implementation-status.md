@@ -17,20 +17,21 @@ Runtime/startup logs and live Discord behavior remain uninspected.
 On `codex/issue-95-b5-scout-signup-storage`, B5f begins with an asynchronous
 `ScoutSignupStore` and SQLite adapter for setup lookup, active setup enumeration,
 signup/slot reads, signup mutations, and versioned working-roster reconciliation.
-The next checkpoint converts reaction, startup and membership refresh callers while
-injecting status-card refresh and operational reporting dependencies.
+Reaction add/remove, startup reconciliation, membership/eligibility refresh and
+working-roster generation now consume that contract. Status-card refresh and
+operational reporting are injected, and setup locking uses the shared backend scope.
 
-Validation currently covers Promise-based empty active-setup, signup and roster-slot
-reads through application storage. Complete mutation, delayed-store, setup-lock,
-reaction, restart and membership-refresh coverage remains required before the PR.
-Seventeen non-test command/service files still import `better-sqlite3`; B5f does not
-claim the application is Postgres-ready.
+Validation: 289 tests pass locally, including delayed async reads and writes,
+reaction-to-card ordering, restart reconstruction, fixed staff seats, same-setup
+serialization, independent setup progress and membership eligibility changes. Both
+typechecks, build, dependency audit and diff check pass. Fifteen non-test
+command/service files still import `better-sqlite3`; B5f does not claim the
+application is Postgres-ready.
 
-Next: convert `scoutSignups.ts` and `scoutSetupLock.ts` test-first, run all local
-gates, open the focused PR, and resolve exact-head review and CI. Do not change
-signup policy or routing, convert published-roster transactions, add a Postgres
-driver, provision infrastructure, change production configuration, or cut over
-persistence in this slice.
+Next: commit the completed conversion, open the focused PR, and resolve exact-head
+review and CI. Do not change signup policy or routing, convert published-roster
+transactions, add a Postgres driver, provision infrastructure, change production
+configuration, or cut over persistence in this slice.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 

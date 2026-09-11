@@ -15,6 +15,8 @@ import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } fr
 import { reportOperationalError } from './services/operationalErrors.js';
 import { handleInteractionError } from './services/interactionErrors.js';
 import { startScoutNotificationWorker } from './services/scoutNotifications.js';
+import { refreshScoutStatusCardSafely } from './services/scoutCardLifecycle.js';
+import type { ScoutSignupDependencies } from './services/scoutSignups.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -33,6 +35,15 @@ const client = new Client({
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 });
+
+const scoutSignupDependencies: ScoutSignupDependencies = {
+  storage: storage.scoutSignups,
+  operationScope: storage.operationScope,
+  refreshStatusCard: async (targetClient, setupId) => refreshScoutStatusCardSafely(targetClient, db, setupId),
+  reportError: async (context, error) => {
+    await reportOperationalError(client, db, context, error);
+  },
+};
 
 let stopScoutNotificationWorker: (() => void) | undefined;
 
@@ -78,7 +89,7 @@ client.once('clientReady', async () => {
   console.log('Pending scout publishes reconciled.');
   await reconcilePendingScoutRosterUpdates(client, db);
   console.log('Pending published roster updates reconciled.');
-  await reconcileActiveScoutSignups(client, db);
+  await reconcileActiveScoutSignups(client, scoutSignupDependencies);
   console.log('Active scout signups reconciled.');
   await reconcileCancelledScoutSignupPosts(client, db);
   console.log('Cancelled scout signup posts reconciled.');
@@ -98,7 +109,7 @@ client.once('clientReady', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    await handleInteraction(interaction, storage);
+    await handleInteraction(interaction, storage, scoutSignupDependencies);
   } catch (error) {
     await handleInteractionError(interaction, db, error, env.DISCORD_GUILD_ID);
   }
@@ -114,21 +125,21 @@ client.on('guildMemberUpdate', async (_oldMember, newMember) => {
 });
 
 async function scoutMembershipChanged(guildId: string, userId: string) {
-  try { await refreshScoutMemberReadiness(client, db, guildId, { userId }); }
+  try { await refreshScoutMemberReadiness(client, scoutSignupDependencies, guildId, { userId }); }
   catch (error) { await reportOperationalError(client, db, { guildId, action: 'Scout membership refresh' }, error); }
 }
 
 client.on('guildMemberAdd', (member) => scoutMembershipChanged(member.guild.id, member.id));
 client.on('guildMemberRemove', (member) => scoutMembershipChanged(member.guild.id, member.id));
 client.on('roleDelete', async (role) => {
-  try { await refreshScoutMemberReadiness(client, db, role.guild.id, { eligibilityRoleId: role.id }); }
+  try { await refreshScoutMemberReadiness(client, scoutSignupDependencies, role.guild.id, { eligibilityRoleId: role.id }); }
   catch (error) { await reportOperationalError(client, db, { guildId: role.guild.id, action: 'Scout eligibility role removal' }, error); }
 });
 
 client.on('messageReactionAdd', async (reaction, user) => {
   try {
     if (await tryHandleScoutEmojiBinding(reaction, user, storage.scoutConfiguration)) return;
-    await handleScoutSignupReactionAdd(reaction, user, db);
+    await handleScoutSignupReactionAdd(reaction, user, scoutSignupDependencies);
   } catch (error) {
     await reportOperationalError(client, db, { guildId: reaction.message.guildId ?? env.DISCORD_GUILD_ID, action: 'Scout signup reaction add' }, error);
   }
@@ -136,7 +147,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
 client.on('messageReactionRemove', async (reaction, user) => {
   try {
-    await handleScoutSignupReactionRemove(reaction, user, db);
+    await handleScoutSignupReactionRemove(reaction, user, scoutSignupDependencies);
   } catch (error) {
     await reportOperationalError(client, db, { guildId: reaction.message.guildId ?? env.DISCORD_GUILD_ID, action: 'Scout signup reaction remove' }, error);
   }

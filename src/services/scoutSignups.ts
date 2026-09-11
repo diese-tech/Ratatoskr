@@ -1,28 +1,22 @@
-import { reportOperationalError } from './operationalErrors.js';
-import type Database from 'better-sqlite3';
 import type { Client, MessageReaction, PartialMessageReaction, PartialUser, User } from 'discord.js';
-import {
-  addScoutSignup,
-  getScoutSetupById,
-  getScoutSetupBySignupMessageId,
-  listActiveScoutSetups,
-  removeScoutSignup,
-  listScoutSignups,
-  listScoutRosterSlots,
-  reconcileScoutWorkingRoster,
-  replaceScoutSignups,
-  type ScoutSetup,
-  type ReconcileScoutWorkingRosterOutcome,
-} from '../db/index.js';
+import type { ScoutSetup } from '../db/types.js';
 import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS, type ScoutSignupRole } from '../domain/index.js';
 import {
   generateScoutWorkingRoster,
   type ScoutSignupRecord,
 } from '../domain/scoutRoster.js';
+import type { ReconcileScoutWorkingRosterOutcome, ScoutSignupStore } from '../storage/index.js';
 import { eligibleScoutSignups } from './scoutEligibility.js';
-import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
 import { renderPersistedScoutSignupPost } from './scoutCreate.js';
+import type { OperationContext } from './operationalErrors.js';
 import { withScoutSetupLock } from './scoutSetupLock.js';
+
+export type ScoutSignupDependencies = {
+  storage: ScoutSignupStore;
+  operationScope: object;
+  refreshStatusCard: (client: Client, setupId: number) => Promise<unknown>;
+  reportError: (context: OperationContext, error: unknown) => Promise<void>;
+};
 
 export function scoutRoleForEmoji(
   emojiByRole: Readonly<Record<ScoutSignupRole, string | null>>,
@@ -70,18 +64,18 @@ export function prioritizeObservedScoutSignups(
   return prioritized;
 }
 
-export function reconcileWorkingScoutRoster(
-  db: Database.Database,
+export async function reconcileWorkingScoutRoster(
+  storage: ScoutSignupStore,
   setupId: number,
   eligibleSignups: readonly ScoutSignupRecord[],
   source: 'signup' | 'startup' | 'membership' | 'refresh',
   actorUserId?: string | null,
   expectedVersion?: number,
-): ReconcileScoutWorkingRosterOutcome {
-  const setup = getScoutSetupById(db, setupId);
+): Promise<ReconcileScoutWorkingRosterOutcome> {
+  const setup = await storage.getSetup(setupId);
   if (!setup || !['open', 'roster_ready'].includes(setup.status)) return 'stale';
   if (expectedVersion !== undefined && setup.version !== expectedVersion) return 'stale';
-  const fixedSlots = listScoutRosterSlots(db, setupId)
+  const fixedSlots = (await storage.listRosterSlots(setupId))
     .filter((slot) => slot.staffAssigned)
     .map((slot) => ({
       gameNumber: slot.gameNumber,
@@ -93,7 +87,7 @@ export function reconcileWorkingScoutRoster(
     gameCount: setup.gameCount,
     fixedSlots,
   });
-  return reconcileScoutWorkingRoster(db, {
+  return storage.reconcileWorkingRoster({
     setupId,
     expectedVersion: expectedVersion ?? setup.version,
     slots: generated.slots,
@@ -114,11 +108,14 @@ async function fetchReactionUsers(reaction: MessageReaction): Promise<User[]> {
   }
 }
 
-export async function reconcileActiveScoutSignups(client: Client, db: Database.Database): Promise<void> {
-  for (const candidate of listActiveScoutSetups(db)) {
+export async function reconcileActiveScoutSignups(
+  client: Client,
+  dependencies: ScoutSignupDependencies,
+): Promise<void> {
+  for (const candidate of await dependencies.storage.listActiveSetups()) {
     try {
-      await withScoutSetupLock(db, candidate.id, async () => {
-        const setup = getScoutSetupById(db, candidate.id);
+      await withScoutSetupLock(dependencies.operationScope, candidate.id, async () => {
+        const setup = await dependencies.storage.getSetup(candidate.id);
         if (!setup || !['open', 'roster_ready'].includes(setup.status) || !setup.signupMessageId) return;
         const channel = await client.channels.fetch(setup.signupChannelId);
         if (!channel?.isTextBased()) throw new Error('Signup post is unavailable.');
@@ -135,39 +132,39 @@ export async function reconcileActiveScoutSignups(client: Client, db: Database.D
             if (!user.bot) observed.push({ userId: user.id, role });
           }
         }
-        const existing = listScoutSignups(db, setup.id);
+        const existing = await dependencies.storage.listSignups(setup.id);
         const prioritized = prioritizeObservedScoutSignups(observed, existing);
         const { accepted, rejected } = selectReconciledScoutSignups(prioritized, setup.roleLimit);
-        if (!replaceScoutSignups(db, setup.id, accepted)) return;
+        if (!await dependencies.storage.replaceSignups(setup.id, accepted)) return;
         for (const signup of rejected) {
           await reactionsByRole.get(signup.role)?.users.remove(signup.userId).catch(async (error) => {
-            await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout excess reaction cleanup' }, error);
+            await dependencies.reportError({ guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout excess reaction cleanup' }, error);
           });
         }
 
-        const latestBeforeRoster = getScoutSetupBySignupMessageId(db, setup.signupMessageId);
+        const latestBeforeRoster = await dependencies.storage.getSetupBySignupMessageId(setup.signupMessageId);
         if (latestBeforeRoster && ['open', 'roster_ready'].includes(latestBeforeRoster.status) && message.guild) {
           const eligible = await eligibleScoutSignups(
             message.guild,
-            listScoutSignups(db, setup.id),
+            await dependencies.storage.listSignups(setup.id),
             setup.eligibilityRoleId,
           );
-          reconcileWorkingScoutRoster(db, setup.id, eligible, 'startup');
+          await reconcileWorkingScoutRoster(dependencies.storage, setup.id, eligible, 'startup');
         }
-        const latest = getScoutSetupBySignupMessageId(db, setup.signupMessageId);
+        const latest = await dependencies.storage.getSetupBySignupMessageId(setup.signupMessageId);
         if (latest && ['open', 'roster_ready'].includes(latest.status)) {
           await message.edit({
             content: renderPersistedScoutSignupPost(latest),
             components: [],
             allowedMentions: { parse: [] },
           }).catch(async (error) => {
-            await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout signup post recovery' }, error);
+            await dependencies.reportError({ guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout signup post recovery' }, error);
           });
         }
-        if (latest) await refreshScoutStatusCardSafely(client, db, latest.id);
+        if (latest) await dependencies.refreshStatusCard(client, latest.id);
       });
     } catch (error) {
-      await reportOperationalError(client, db, { guildId: candidate.guildId, setupId: candidate.id, division: candidate.divisionDisplayName, action: 'Scout signup recovery' }, error);
+      await dependencies.reportError({ guildId: candidate.guildId, setupId: candidate.id, division: candidate.divisionDisplayName, action: 'Scout signup recovery' }, error);
     }
   }
 }
@@ -185,11 +182,11 @@ async function hydrateReaction(
   }
 }
 
-function resolveSignupReaction(
-  db: Database.Database,
+async function resolveSignupReaction(
+  storage: ScoutSignupStore,
   reaction: MessageReaction,
-): { setup: ScoutSetup; role: ScoutSignupRole } | undefined {
-  const setup = getScoutSetupBySignupMessageId(db, reaction.message.id);
+): Promise<{ setup: ScoutSetup; role: ScoutSignupRole } | undefined> {
+  const setup = await storage.getSetupBySignupMessageId(reaction.message.id);
   if (!setup || !['open', 'roster_ready'].includes(setup.status)) return undefined;
   if (reaction.message.guildId !== setup.guildId || reaction.message.channelId !== setup.signupChannelId) return undefined;
   const role = scoutRoleForEmoji(setup.emojiByRole, reaction.emoji.id);
@@ -199,38 +196,38 @@ function resolveSignupReaction(
 export async function handleScoutSignupReactionAdd(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser,
-  db: Database.Database,
+  dependencies: ScoutSignupDependencies,
 ): Promise<void> {
   if (user.bot) return;
   const hydrated = await hydrateReaction(reaction, user);
   if (!hydrated || hydrated.user.bot) return;
-  const resolved = resolveSignupReaction(db, hydrated.reaction);
+  const resolved = await resolveSignupReaction(dependencies.storage, hydrated.reaction);
   if (!resolved) return;
 
   let changed = false;
-  await withScoutSetupLock(db, resolved.setup.id, async () => {
-    const outcome = addScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
+  await withScoutSetupLock(dependencies.operationScope, resolved.setup.id, async () => {
+    const outcome = await dependencies.storage.addSignup(resolved.setup.id, hydrated.user.id, resolved.role);
     if (outcome.status === 'added') {
       changed = true;
       const guild = hydrated.reaction.message.guild;
       if (!guild) return;
-      const current = getScoutSetupById(db, resolved.setup.id);
+      const current = await dependencies.storage.getSetup(resolved.setup.id);
       if (!current) return;
       const signups = await eligibleScoutSignups(
         guild,
-        listScoutSignups(db, resolved.setup.id),
+        await dependencies.storage.listSignups(resolved.setup.id),
         current.eligibilityRoleId,
       );
       const wasReady = current.status === 'roster_ready';
-      reconcileWorkingScoutRoster(db, resolved.setup.id, signups, 'signup', hydrated.user.id);
-      const latest = getScoutSetupBySignupMessageId(db, hydrated.reaction.message.id);
+      await reconcileWorkingScoutRoster(dependencies.storage, resolved.setup.id, signups, 'signup', hydrated.user.id);
+      const latest = await dependencies.storage.getSetupBySignupMessageId(hydrated.reaction.message.id);
       if (!wasReady && latest?.status === 'roster_ready') {
         await hydrated.reaction.message.edit({
           content: renderPersistedScoutSignupPost(latest),
           components: [],
           allowedMentions: { parse: [] },
         }).catch(async (error) => {
-          await reportOperationalError(hydrated.reaction.client, db, { guildId: latest.guildId, setupId: latest.id, division: latest.divisionDisplayName, action: 'Scout signup control cleanup' }, error);
+          await dependencies.reportError({ guildId: latest.guildId, setupId: latest.id, division: latest.divisionDisplayName, action: 'Scout signup control cleanup' }, error);
         });
       }
       return;
@@ -238,7 +235,7 @@ export async function handleScoutSignupReactionAdd(
     if (outcome.status !== 'over_limit') return;
 
     await hydrated.reaction.users.remove(hydrated.user.id).catch(async (error) => {
-      await reportOperationalError(hydrated.reaction.client, db, { guildId: resolved.setup.guildId, setupId: resolved.setup.id, division: resolved.setup.divisionDisplayName, action: 'Scout excess reaction cleanup' }, error);
+      await dependencies.reportError({ guildId: resolved.setup.guildId, setupId: resolved.setup.id, division: resolved.setup.divisionDisplayName, action: 'Scout excess reaction cleanup' }, error);
     });
     await hydrated.user
       .send(
@@ -248,54 +245,68 @@ export async function handleScoutSignupReactionAdd(
       .catch(() => undefined);
   }).finally(async () => {
     // Staff-message rate limits must not hold the signup persistence lock.
-    if (changed) await refreshScoutStatusCardSafely(hydrated.reaction.client, db, resolved.setup.id);
+    if (changed) await dependencies.refreshStatusCard(hydrated.reaction.client, resolved.setup.id);
   });
 }
 
 export async function handleScoutSignupReactionRemove(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser,
-  db: Database.Database,
+  dependencies: ScoutSignupDependencies,
 ): Promise<void> {
   if (user.bot) return;
   const hydrated = await hydrateReaction(reaction, user);
   if (!hydrated || hydrated.user.bot) return;
-  const resolved = resolveSignupReaction(db, hydrated.reaction);
+  const resolved = await resolveSignupReaction(dependencies.storage, hydrated.reaction);
   if (!resolved) return;
-  await withScoutSetupLock(db, resolved.setup.id, async () => {
-    removeScoutSignup(db, resolved.setup.id, hydrated.user.id, resolved.role);
-    const current = getScoutSetupById(db, resolved.setup.id);
+  await withScoutSetupLock(dependencies.operationScope, resolved.setup.id, async () => {
+    await dependencies.storage.removeSignup(resolved.setup.id, hydrated.user.id, resolved.role);
+    const current = await dependencies.storage.getSetup(resolved.setup.id);
     const guild = hydrated.reaction.message.guild;
     if (current && guild) {
       const signups = await eligibleScoutSignups(
-        guild, listScoutSignups(db, current.id), current.eligibilityRoleId,
+        guild, await dependencies.storage.listSignups(current.id), current.eligibilityRoleId,
       );
-      reconcileWorkingScoutRoster(db, current.id, signups, 'signup', hydrated.user.id);
+      await reconcileWorkingScoutRoster(dependencies.storage, current.id, signups, 'signup', hydrated.user.id);
     }
   });
-  await refreshScoutStatusCardSafely(hydrated.reaction.client, db, resolved.setup.id);
+  await dependencies.refreshStatusCard(hydrated.reaction.client, resolved.setup.id);
 }
 
 /** Membership events change eligibility even when nobody adds a reaction. */
-export async function refreshScoutMemberReadiness(client: Client, db: Database.Database, guildId: string,
-  change: { userId: string } | { eligibilityRoleId: string }): Promise<void> {
-  for (const candidate of listActiveScoutSetups(db)) {
+export async function refreshScoutMemberReadiness(
+  client: Client,
+  dependencies: ScoutSignupDependencies,
+  guildId: string,
+  change: { userId: string } | { eligibilityRoleId: string },
+): Promise<void> {
+  for (const candidate of await dependencies.storage.listActiveSetups()) {
     if (candidate.guildId !== guildId) continue;
     if ('eligibilityRoleId' in change && candidate.eligibilityRoleId !== change.eligibilityRoleId) continue;
-    if ('userId' in change && !listScoutSignups(db, candidate.id).some((signup) => signup.userId === change.userId)
-      && !listScoutRosterSlots(db, candidate.id).some((slot) => slot.userId === change.userId)) continue;
-    await withScoutSetupLock(db, candidate.id, async () => {
+    if ('userId' in change) {
+      const [signups, slots] = await Promise.all([
+        dependencies.storage.listSignups(candidate.id),
+        dependencies.storage.listRosterSlots(candidate.id),
+      ]);
+      if (!signups.some((signup) => signup.userId === change.userId)
+        && !slots.some((slot) => slot.userId === change.userId)) continue;
+    }
+    await withScoutSetupLock(dependencies.operationScope, candidate.id, async () => {
       try {
-        const setup = getScoutSetupById(db, candidate.id);
+        const setup = await dependencies.storage.getSetup(candidate.id);
         if (setup && ['open', 'roster_ready'].includes(setup.status)) {
           const guild = await client.guilds.fetch(guildId);
-          const signups = await eligibleScoutSignups(guild, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
-          reconcileWorkingScoutRoster(db, setup.id, signups, 'membership');
+          const signups = await eligibleScoutSignups(
+            guild,
+            await dependencies.storage.listSignups(setup.id),
+            setup.eligibilityRoleId,
+          );
+          await reconcileWorkingScoutRoster(dependencies.storage, setup.id, signups, 'membership');
         }
       } catch (error) {
-        await reportOperationalError(client, db, { guildId, setupId: candidate.id, action: 'Scout membership readiness' }, error);
+        await dependencies.reportError({ guildId, setupId: candidate.id, action: 'Scout membership readiness' }, error);
       }
     });
-    await refreshScoutStatusCardSafely(client, db, candidate.id);
+    await dependencies.refreshStatusCard(client, candidate.id);
   }
 }
