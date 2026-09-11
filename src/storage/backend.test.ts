@@ -5,6 +5,7 @@ import {
   getScoutNotificationByDedupeKey,
   scheduleScoutNotification,
   setScoutOperationsChannel,
+  setScoutSetupSignupMessage,
 } from '../db/index.js';
 import { openApplicationStorage, resolveDatabaseBackend } from './index.js';
 
@@ -275,6 +276,52 @@ test('sqlite storage exposes asynchronous Scout signup lifecycle reads', async (
     assert.deepEqual(await pendingSetups, []);
     assert.deepEqual(await storage.scoutSignups.listSignups(999), []);
     assert.deepEqual(await storage.scoutSignups.listRosterSlots(999), []);
+  } finally {
+    await storage.close();
+  }
+});
+
+test('sqlite storage exposes asynchronous Scout readiness-card lifecycle reads', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+
+  try {
+    const division = await storage.divisions.upsertDivision({
+      guildId: 'guild-1', divisionKey: 'vanaheim', displayName: 'Vanaheim', roleId: 'division-role',
+      managerRoleId: 'manager-role', captainRoleId: 'captain-role', categoryId: 'category',
+    });
+    const setup = createScoutSetup(storage.legacyDatabase, {
+      guildId: 'guild-1', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'organizer', signupChannelId: 'signups',
+      resultsChannelId: 'results', operationsChannelId: 'ops', divisionRoleId: 'division-role',
+      emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+      startAt: 2_000_000_000, roleLimit: 2,
+    });
+    setScoutSetupSignupMessage(storage.legacyDatabase, setup.id, 'signup-message');
+
+    const pendingIds = storage.scoutReadinessCards.listSetupIds();
+    assert.ok(pendingIds instanceof Promise);
+    assert.deepEqual(await pendingIds, [setup.id]);
+    assert.equal((await storage.scoutReadinessCards.getSetup(setup.id))?.id, setup.id);
+    assert.equal((await storage.scoutReadinessCards.ensureCard(setup.id)).setup_id, setup.id);
+    assert.equal(await storage.scoutReadinessCards.patchSnapshotIfStatus(setup.id, 'posting', '{}'), false);
+    assert.equal(await storage.scoutReadinessCards.patchSnapshotIfStatus(setup.id, 'open', '{}'), true);
+
+    await storage.scoutReadinessCards.patchCard(setup.id, {
+      telemetry_attempted: 1,
+      telemetry_message_id: 'telemetry-message',
+    });
+    storage.legacyDatabase.prepare("UPDATE scout_setups SET status = 'roster_ready' WHERE id = ?").run(setup.id);
+    assert.equal(await storage.scoutReadinessCards.promoteTelemetryToControl(setup.id, 'stale-message'), false);
+    assert.equal((await storage.scoutReadinessCards.getSetup(setup.id))?.controlMessageId, null);
+    assert.equal((await storage.scoutReadinessCards.ensureCard(setup.id)).telemetry_message_id, 'telemetry-message');
+    assert.equal(await storage.scoutReadinessCards.promoteTelemetryToControl(setup.id, 'telemetry-message'), true);
+    assert.equal((await storage.scoutReadinessCards.getSetup(setup.id))?.controlMessageId, 'telemetry-message');
+    assert.equal((await storage.scoutReadinessCards.ensureCard(setup.id)).telemetry_message_id, null);
+    assert.equal(await storage.scoutReadinessCards.clearControlMessage(setup.id, 'wrong-message'), false);
+    assert.equal(await storage.scoutReadinessCards.clearControlMessage(setup.id, 'telemetry-message'), true);
+    assert.equal(await storage.scoutReadinessCards.confirmControlMessage(setup.id, 'control-message'), true);
+    assert.equal((await storage.scoutReadinessCards.ensureCard(setup.id)).control_attempted, 1);
+    assert.equal(await storage.scoutReadinessCards.confirmControlMessage(setup.id, 'other-message'), false);
   } finally {
     await storage.close();
   }

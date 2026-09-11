@@ -1,4 +1,4 @@
-import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
 import {
   ActionRowBuilder,

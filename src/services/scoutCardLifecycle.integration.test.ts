@@ -17,9 +17,10 @@ import {
   reconcileActiveScoutSignups,
   refreshScoutMemberReadiness,
 } from './scoutSignups.js';
-import { refreshScoutStatusCard, refreshScoutStatusCardSafely, reconcileScoutStatusCards } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCard as refreshScoutStatusCardWithDependencies } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCard, refreshScoutStatusCardSafely, reconcileScoutStatusCards } from './scoutCardCompatibility.js';
 import { reportOperationalError } from './operationalErrors.js';
-import { createSqliteScoutSignupStore } from '../storage/index.js';
+import { createSqliteScoutReadinessCardStore, createSqliteScoutSignupStore } from '../storage/index.js';
 import { handleScoutReviewButton } from './scoutReview.js';
 import { handleScoutPublishButton, handleScoutPublishedSlotSelect, handleScoutPublishedUserSelect } from './scoutPublish.js';
 import { handleScoutCancelButton } from './scoutCancel.js';
@@ -56,6 +57,11 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
     operationScope: db,
     refreshStatusCard: async (targetClient: Client, setupId: number) => refreshScoutStatusCardSafely(targetClient, db, setupId),
     reportError: async (context: any, error: unknown) => { await reportOperationalError(client, db, context, error); },
+  };
+  const cardDependencies = {
+    storage: createSqliteScoutReadinessCardStore(db),
+    operationScope: db,
+    reportError: async (targetClient: Client, context: any, error: unknown) => reportOperationalError(targetClient, db, context, error),
   };
   const channel = (id: string) => {
     const messages = new Collection<string, any>();
@@ -107,7 +113,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
   const interaction = (customId: string): any => ({ customId, guild, guildId: 'guild', channelId: 'ops', client, user: { id: 'staff' },
     message: ops.all.first() ?? { id: 'missing-ops-card' },
     deferUpdate: async () => undefined, deferReply: async () => undefined, editReply: async () => undefined });
-  return { db, setup, client: client as Client, signupDependencies, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction, channel,
+  return { db, setup, client: client as Client, signupDependencies, cardDependencies, guild, members, roleCache, addMember, ops, signups, sent, react, fill, makeSetup, interaction, channel,
     rejectSend: (code = 50013) => { rejectSend = code; },
     loseSend: () => { loseSend = true; }, denyDelete: (value: boolean) => { loseDelete = value; }, denyRead: (value: boolean) => { denyRead = value; } };
 }
@@ -494,10 +500,44 @@ test('readiness promotion reuses the working card without a second send', async 
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'roster_ready');
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.controlMessageId, workingCardId);
     assert.equal(f.ops.all.size, 1);
-    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    await refreshScoutStatusCardWithDependencies(f.client, f.cardDependencies, f.setup.id);
     assert.equal(f.ops.all.size, 1);
     assert.equal(f.sent.filter((entry) => entry.channel === 'ops').length, 1);
   } finally { f.db.close(); }
+});
+
+test('working-card creation awaits its durable attempt marker before Discord send', async () => {
+  const f = fixture();
+  f.db.prepare("UPDATE scout_setups SET status = 'open' WHERE id = ?").run(f.setup.id);
+  let releaseWrite!: () => void;
+  let announceWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const writeStarted = new Promise<void>((resolve) => { announceWrite = resolve; });
+  const sqliteStorage = f.cardDependencies.storage;
+  f.cardDependencies.storage = {
+    ...sqliteStorage,
+    async patchCard(setupId, changes) {
+      if (changes.telemetry_attempted === 1 && changes.telemetry_message_id === null) {
+        announceWrite();
+        await writeGate;
+      }
+      return sqliteStorage.patchCard(setupId, changes);
+    },
+  };
+  const refreshing = refreshScoutStatusCardWithDependencies(f.client, f.cardDependencies, f.setup.id);
+  try {
+    await writeStarted;
+    assert.equal(f.ops.all.size, 0);
+    assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).telemetry_attempted, 0);
+    releaseWrite();
+    await refreshing;
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).telemetry_message_id, f.ops.all.first()!.id);
+  } finally {
+    releaseWrite();
+    await refreshing;
+    f.db.close();
+  }
 });
 
 test('concurrent setups retain isolated cards and an open cancellation preserves its snapshot', async () => {
@@ -706,6 +746,54 @@ test('cancellation retains the last known snapshot when final eligibility cannot
     await reconcileScoutStatusCards(f.client, f.db);
     assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).snapshot_json, saved);
   } finally { f.db.close(); }
+});
+
+test('a delayed open snapshot cannot overwrite the terminal cancellation snapshot', async () => {
+  const f = fixture();
+  let releaseWrite!: () => void;
+  let announceWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const writeStarted = new Promise<void>((resolve) => { announceWrite = resolve; });
+  const sqliteStorage = f.cardDependencies.storage;
+  let delaySnapshot = true;
+  let refreshing: Promise<unknown> | undefined;
+  let cancelling: Promise<unknown> | undefined;
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    f.addMember('first');
+    f.db.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, 'first', 'solo')").run(f.setup.id);
+    f.cardDependencies.storage = {
+      ...sqliteStorage,
+      async patchSnapshotIfStatus(setupId, expectedStatus, snapshotJson) {
+        if (delaySnapshot) {
+          delaySnapshot = false;
+          announceWrite();
+          await writeGate;
+        }
+        return sqliteStorage.patchSnapshotIfStatus(setupId, expectedStatus, snapshotJson);
+      },
+    };
+    refreshing = refreshScoutStatusCardWithDependencies(f.client, f.cardDependencies, f.setup.id);
+    await writeStarted;
+
+    f.addMember('second');
+    f.db.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, 'second', 'mid')").run(f.setup.id);
+    const version = getScoutSetupById(f.db, f.setup.id)!.version;
+    cancelling = handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${f.setup.id}:${version}`), f.db);
+    for (let attempt = 0; attempt < 10 && getScoutSetupById(f.db, f.setup.id)?.status !== 'cancelled'; attempt++) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, f.setup.id))?.players, 2);
+
+    releaseWrite();
+    await Promise.all([refreshing, cancelling]);
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, f.setup.id))?.players, 2);
+  } finally {
+    releaseWrite();
+    await Promise.all([refreshing, cancelling]);
+    f.db.close();
+  }
 });
 
 for (const terminal of ['cancelled', 'published'] as const) {

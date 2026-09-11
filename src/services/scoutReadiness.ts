@@ -1,23 +1,27 @@
 import type { Client } from 'discord.js';
 import type Database from 'better-sqlite3';
-import { getScoutSetupById, listScoutSignups, listScoutRosterSlots, withdrawnScoutRosterUserIds,
-  ensureScoutReadinessCard, patchScoutReadinessCard, type ScoutSetup } from '../db/index.js';
+import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard } from '../db/index.js';
+import type { ScoutSetup } from '../db/types.js';
 import { scoutReadinessSnapshot } from '../domain/scoutReadiness.js';
+import { createSqliteScoutReadinessCardStore, type ScoutReadinessCardStore } from '../storage/index.js';
 import { resolveScoutUserEligibility, type ScoutSignupEligibility } from './scoutEligibility.js';
 import { withScoutSetupLock } from './scoutSetupLock.js';
 import { reportOperationalError } from './operationalErrors.js';
 
 export async function captureScoutReadinessDetails(
   client: Client,
-  db: Database.Database,
+  storage: ScoutReadinessCardStore,
   setup: ScoutSetup,
 ): Promise<ScoutSignupEligibility & { snapshot: ReturnType<typeof scoutReadinessSnapshot> }> {
   const guild = await client.guilds.fetch(setup.guildId);
-  const signups = listScoutSignups(db, setup.id);
-  const slots = listScoutRosterSlots(db, setup.id);
+  const [signups, slots, withdrawnUserIds] = await Promise.all([
+    storage.listSignups(setup.id),
+    storage.listRosterSlots(setup.id),
+    storage.listWithdrawnUserIds(setup.id),
+  ]);
   const { eligibleUserIds, ineligibilityByUserId } = await resolveScoutUserEligibility(guild,
     [...signups.map((signup) => signup.userId), ...slots.map((slot) => slot.userId)], setup.eligibilityRoleId);
-  const unavailable = new Set([...withdrawnScoutRosterUserIds(db, setup.id),
+  const unavailable = new Set([...withdrawnUserIds,
     ...slots.filter((slot) => !eligibleUserIds.has(slot.userId)).map((slot) => slot.userId)]);
   const eligibleSignups = signups.filter((signup) => eligibleUserIds.has(signup.userId));
   return {
@@ -30,8 +34,8 @@ export async function captureScoutReadinessDetails(
   };
 }
 
-export async function captureScoutReadiness(client: Client, db: Database.Database, setup: ScoutSetup) {
-  return (await captureScoutReadinessDetails(client, db, setup)).snapshot;
+export async function captureScoutReadiness(client: Client, storage: ScoutReadinessCardStore, setup: ScoutSetup) {
+  return (await captureScoutReadinessDetails(client, storage, setup)).snapshot;
 }
 
 /** Freeze current signup counts atomically with a successful terminal transition.
@@ -41,12 +45,13 @@ export async function captureScoutReadiness(client: Client, db: Database.Databas
  */
 export async function withFinalScoutReadiness<T>(client: Client, db: Database.Database, setupId: number,
   close: () => T): Promise<T> {
+  const storage = createSqliteScoutReadinessCardStore(db);
   let failure: { setup: ScoutSetup; error: unknown } | undefined;
   const outcome = await withScoutSetupLock(db, setupId, async () => {
     const setup = getScoutSetupById(db, setupId);
     if (!setup?.operationsChannelId || !['open', 'roster_ready'].includes(setup.status)) return close();
     let finalSnapshot: Awaited<ReturnType<typeof captureScoutReadiness>> | undefined;
-    try { finalSnapshot = await captureScoutReadiness(client, db, setup); }
+    try { finalSnapshot = await captureScoutReadiness(client, storage, setup); }
     catch (error) { failure = { setup, error }; }
     return db.transaction(() => {
       const result = close();

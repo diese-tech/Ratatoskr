@@ -1,37 +1,40 @@
 # Implementation checkpoint
 
-Authorized scope: the B1-B7 sequence through the active B5f Scout-signup
-storage slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.6,
-roadmap #1, and focused Issue #110.
+Authorized scope: the B1-B7 sequence through the active B5g Scout-readiness-card
+storage slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.7,
+roadmap #1, and focused Issue #112.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B5f Scout signup storage boundary
+## Current checkpoint — B5g Scout readiness-card storage boundary
 
-Done: B5a-B5e / #100/#102/#104/#106/#108 merged through PRs
-#101/#103/#105/#107/#109, ending at `8e361e05104837c55df1b6a49a9e7d9845e106ad`.
-B5e's exact head received clean automated review, PR and post-merge Ubuntu/Windows
-CI passed, and Railway deployment record 6384932102 reported success.
-Runtime/startup logs and live Discord behavior remain uninspected.
+Done: B5a-B5f / #100/#102/#104/#106/#108/#110 merged through PRs
+#101/#103/#105/#107/#109/#111, ending at `4a121ec9b071fbc6b426a2c99dc253025d003f25`.
+B5f's first review finding was reproduced and fixed; exact-head review was clean,
+PR and post-merge Ubuntu/Windows CI passed, and Railway deployment record
+6387336629 reported success. Runtime/startup logs and live Discord behavior remain
+uninspected.
 
-On `codex/issue-95-b5-scout-signup-storage`, B5f begins with an asynchronous
-`ScoutSignupStore` and SQLite adapter for setup lookup, active setup enumeration,
-signup/slot reads, signup mutations, and versioned working-roster reconciliation.
-Reaction add/remove, startup reconciliation, membership/eligibility refresh and
-working-roster generation now consume that contract. Status-card refresh and
-operational reporting are injected, and setup locking uses the shared backend scope.
+On `codex/issue-95-b5-scout-readiness-storage`, B5g begins with an asynchronous
+`ScoutReadinessCardStore` and SQLite adapter for setup/completion/signup/slot/card
+reads, recovery markers, snapshots, and conditional control-message identity. The
+Discord card lifecycle and live-readiness capture now use that asynchronous aggregate
+and injected operational reporting; transitional SQLite wiring remains in a separate
+compatibility module for lifecycle callers outside this slice. The atomic
+publish/cancel transition still owns its final-readiness snapshot.
 
-Validation: 290 tests pass locally, including delayed async reads and writes,
-reaction-to-card ordering, restart reconstruction, fixed staff seats, same-setup
-serialization, stale staff-mutation retry, independent setup progress and membership eligibility changes. Both
-typechecks, build, dependency audit and diff check pass. Fifteen non-test
-command/service files still import `better-sqlite3`; B5f does not claim the
-application is Postgres-ready.
+Validation passes 293 tests, application and script typechecks, build, dependency
+audit and diff check. Coverage includes delayed persistence before Discord send,
+stale telemetry-message promotion, working-card promotion, concurrent setup cards,
+transition rereads, terminal-snapshot overwrite prevention, disk restart, missing
+messages, rejected-send rollback and ambiguous-send retention. Fifteen non-test command/service files still import
+`better-sqlite3`, including the explicit compatibility module; the backend-independent
+card lifecycle does not. B5g does not claim the application is Postgres-ready.
 
-Next: commit the completed conversion, open the focused PR, and resolve exact-head
-review and CI. Do not change signup policy or routing, convert published-roster
-transactions, add a Postgres driver, provision infrastructure, change production
-configuration, or cut over persistence in this slice.
+Next: commit and open the focused B5g PR, then require exact-head automated review
+and Ubuntu/Windows CI before merge. Do not split the final-readiness snapshot from
+publish/cancel transitions, convert other Scout mutations, add a Postgres driver,
+provision infrastructure, change production configuration, or cut over persistence.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 
