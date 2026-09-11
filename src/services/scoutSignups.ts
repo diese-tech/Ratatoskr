@@ -72,28 +72,33 @@ export async function reconcileWorkingScoutRoster(
   actorUserId?: string | null,
   expectedVersion?: number,
 ): Promise<ReconcileScoutWorkingRosterOutcome> {
-  const setup = await storage.getSetup(setupId);
-  if (!setup || !['open', 'roster_ready'].includes(setup.status)) return 'stale';
-  if (expectedVersion !== undefined && setup.version !== expectedVersion) return 'stale';
-  const fixedSlots = (await storage.listRosterSlots(setupId))
-    .filter((slot) => slot.staffAssigned)
-    .map((slot) => ({
-      gameNumber: slot.gameNumber,
-      team: slot.team,
-      role: slot.role,
-      userId: slot.userId,
-    }));
-  const generated = generateScoutWorkingRoster(eligibleSignups, {
-    gameCount: setup.gameCount,
-    fixedSlots,
-  });
-  return storage.reconcileWorkingRoster({
-    setupId,
-    expectedVersion: expectedVersion ?? setup.version,
-    slots: generated.slots,
-    source,
-    actorUserId,
-  });
+  const attempts = expectedVersion === undefined ? 3 : 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const setup = await storage.getSetup(setupId);
+    if (!setup || !['open', 'roster_ready'].includes(setup.status)) return 'stale';
+    if (expectedVersion !== undefined && setup.version !== expectedVersion) return 'stale';
+    const fixedSlots = (await storage.listRosterSlots(setupId))
+      .filter((slot) => slot.staffAssigned)
+      .map((slot) => ({
+        gameNumber: slot.gameNumber,
+        team: slot.team,
+        role: slot.role,
+        userId: slot.userId,
+      }));
+    const generated = generateScoutWorkingRoster(eligibleSignups, {
+      gameCount: setup.gameCount,
+      fixedSlots,
+    });
+    const outcome = await storage.reconcileWorkingRoster({
+      setupId,
+      expectedVersion: expectedVersion ?? setup.version,
+      slots: generated.slots,
+      source,
+      actorUserId,
+    });
+    if (outcome !== 'stale' || expectedVersion !== undefined) return outcome;
+  }
+  return 'stale';
 }
 
 async function fetchReactionUsers(reaction: MessageReaction): Promise<User[]> {

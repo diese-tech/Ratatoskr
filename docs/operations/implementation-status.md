@@ -21,9 +21,9 @@ Reaction add/remove, startup reconciliation, membership/eligibility refresh and
 working-roster generation now consume that contract. Status-card refresh and
 operational reporting are injected, and setup locking uses the shared backend scope.
 
-Validation: 289 tests pass locally, including delayed async reads and writes,
+Validation: 290 tests pass locally, including delayed async reads and writes,
 reaction-to-card ordering, restart reconstruction, fixed staff seats, same-setup
-serialization, independent setup progress and membership eligibility changes. Both
+serialization, stale staff-mutation retry, independent setup progress and membership eligibility changes. Both
 typechecks, build, dependency audit and diff check pass. Fifteen non-test
 command/service files still import `better-sqlite3`; B5f does not claim the
 application is Postgres-ready.

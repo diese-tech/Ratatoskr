@@ -163,3 +163,36 @@ test('Scout signup locking serializes one setup while allowing another setup to 
   await Promise.all([first, second]);
   assert.deepEqual(events, ['first-start', 'other', 'first-finish', 'second']);
 });
+
+test('signup roster reconciliation retries a stale staff-mutation race with fresh fixed seats', async () => {
+  let version = 3;
+  const expectedVersions: number[] = [];
+  const storage = {
+    async getSetup() {
+      return { id: 7, status: 'open', version, gameCount: 1 };
+    },
+    async listRosterSlots() {
+      return version === 3 ? [] : [{
+        gameNumber: 1,
+        team: 'team_one',
+        role: 'mid',
+        userId: 'staff-seat',
+        staffAssigned: true,
+      }];
+    },
+    async reconcileWorkingRoster(input: { expectedVersion: number; slots: readonly { userId: string }[] }) {
+      expectedVersions.push(input.expectedVersion);
+      if (expectedVersions.length === 1) {
+        version = 4;
+        return 'stale' as const;
+      }
+      assert.ok(input.slots.some((slot) => slot.userId === 'staff-seat'));
+      return 'updated' as const;
+    },
+  } as unknown as ScoutSignupStore;
+
+  assert.equal(await reconcileWorkingScoutRoster(storage, 7, [
+    { userId: 'automatic', role: 'solo', createdAt: '2026-01-01' },
+  ], 'signup'), 'updated');
+  assert.deepEqual(expectedVersions, [3, 4]);
+});
