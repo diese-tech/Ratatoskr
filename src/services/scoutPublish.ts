@@ -45,7 +45,7 @@ import {
   isScoutResultsChannel,
 } from './scoutAuthorization.js';
 import { renderScoutResult } from './scoutResults.js';
-import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { eligibleScoutSignups, isScoutUserEligible, resolveEligibleScoutUserIds } from './scoutEligibility.js';
 import { withFinalScoutReadiness } from './scoutReadiness.js';

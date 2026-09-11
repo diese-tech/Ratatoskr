@@ -1,8 +1,8 @@
 # Ratatoskr backlog execution plan
 
-Version: 2.7 — B5a-B5f shipped; B5g Scout readiness-card boundary in progress
+Version: 2.8 — B5a-B5f shipped; B5g Scout readiness-card code complete, review pending
 Recorded: September 2, 2026
-Updated: September 10, 2026
+Updated: September 11, 2026
 Repository: [diese-tech/Ratatoskr](https://github.com/diese-tech/Ratatoskr)
 Baseline commit: [`866407f3bdca0e26a2ae3b21221d45a96cdc3056`](https://github.com/diese-tech/Ratatoskr/commit/866407f3bdca0e26a2ae3b21221d45a96cdc3056)
 
@@ -466,7 +466,7 @@ The publication-routing change is an updated product contract, not proof of an u
 | B5d / #106 | Merged; issue closed; final review, main CI and Railway deployment status green | [PR #107](https://github.com/diese-tech/Ratatoskr/pull/107), ab2d526 | Async Scout configuration store and SQLite adapter; early acknowledgement; private validation failures; successful public emoji prompt; 282 tests | Runtime/startup logs and live Discord smoke were not inspected |
 | B5e / #108 | Merged; issue closed; final review, main CI and Railway deployment status green | [PR #109](https://github.com/diese-tech/Ratatoskr/pull/109), 8e361e0 | Async notification delivery/recovery store and SQLite adapter; claim/send/confirm ordering; shared operation scope; injected error reporting; 284 tests | Runtime/startup logs and live Discord smoke were not inspected |
 | B5f / #110 | Merged; issue closed; final review, main CI and Railway deployment status green | [PR #111](https://github.com/diese-tech/Ratatoskr/pull/111), 4a121ec | Async signup/working-roster store and SQLite adapter; reaction/restart/member-refresh conversion; stale-race retry; 290 tests | Runtime/startup logs and live Discord smoke were not inspected |
-| B5g / #112 | In progress on `codex/issue-95-b5-scout-readiness-storage` | PR pending | Async readiness-card store and SQLite adapter started; caller conversion pending | Complete card/recovery conversion and local gates; final-readiness transactions and Postgres remain separate |
+| B5g / #112 | Code complete on `codex/issue-95-b5-scout-readiness-storage`; review pending | PR pending | Async readiness-card aggregate and SQLite adapter; card/recovery conversion; delayed-store and conditional-identity coverage; 292 tests | Require exact-head review and CI; final-readiness transactions and Postgres remain separate |
 | B5 | Active | #100, #102, #104, #106, #108, #110, and #112 are bounded vertical slices | Dedicated Ratatoskr Postgres selected in #1 | Remaining Scout workflow extraction plus schema/verifier/rehearsal/cutover/recovery remain later gates |
 | B6 | Planned; product details outstanding | — | — | Full scaffold reference and notification role list |
 | B7 | Design pending | — | — | Storage/privacy/export decisions |
@@ -502,5 +502,6 @@ Commit after each meaningful coherent chunk of work. Each commit body records **
 | 2.5 | Record B5a-B5d as merged and verified; begin bounded B5e notification-delivery storage extraction without splitting lifecycle scheduling transactions | PRs #101/#103/#105/#107, Issues #100/#102/#104/#106/#108, tracker #95, exact-head review, CI and deployment records |
 | 2.6 | Record B5e as merged and verified; begin B5f signup/working-roster storage extraction with setup-scoped locking and restart/member refresh in one aggregate | PR #109, Issues #108/#110, tracker #95, exact-head review, CI and deployment records |
 | 2.7 | Record B5f as merged and verified; begin B5g readiness/control-card storage extraction with durable delivery markers and conditional message identity | PR #111, Issues #110/#112, tracker #95, exact-head review, CI and deployment records |
+| 2.8 | Record B5g code completion with its async card aggregate, isolated SQLite compatibility, preserved final-readiness transaction, and local recovery/race gates | Issue #112, tracker #95, 292 tests and local gate evidence |
 
 For later revisions, record what changed, the evidence or user decision, affected acceptance criteria, dependency/order effects, and authorization status. No change to this plan silently authorizes production actions or expands later product scope.

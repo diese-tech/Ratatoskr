@@ -27,7 +27,7 @@ import {
 } from '../db/index.js';
 import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
-import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
 import { withFinalScoutReadiness } from './scoutReadiness.js';
 

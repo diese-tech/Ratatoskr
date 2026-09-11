@@ -15,7 +15,7 @@ import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } fr
 import { reportOperationalError } from './services/operationalErrors.js';
 import { handleInteractionError } from './services/interactionErrors.js';
 import { startScoutNotificationWorker } from './services/scoutNotifications.js';
-import { refreshScoutStatusCardSafely } from './services/scoutCardLifecycle.js';
+import { refreshScoutStatusCardSafely, type ScoutCardDependencies } from './services/scoutCardLifecycle.js';
 import type { ScoutSignupDependencies } from './services/scoutSignups.js';
 
 // Opened before login: a database that can't be opened/migrated fails
@@ -36,10 +36,16 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 });
 
+const scoutCardDependencies: ScoutCardDependencies = {
+  storage: storage.scoutReadinessCards,
+  operationScope: storage.operationScope,
+  reportError: (targetClient, context, error) => reportOperationalError(targetClient, db, context, error),
+};
+
 const scoutSignupDependencies: ScoutSignupDependencies = {
   storage: storage.scoutSignups,
   operationScope: storage.operationScope,
-  refreshStatusCard: async (targetClient, setupId) => refreshScoutStatusCardSafely(targetClient, db, setupId),
+  refreshStatusCard: async (targetClient, setupId) => refreshScoutStatusCardSafely(targetClient, scoutCardDependencies, setupId),
   reportError: async (context, error) => {
     await reportOperationalError(client, db, context, error);
   },

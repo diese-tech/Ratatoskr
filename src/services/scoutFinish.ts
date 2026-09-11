@@ -4,7 +4,7 @@ import type Database from 'better-sqlite3';
 import { finishScoutSetupIfVersion, getScoutCompletion, getScoutSetupById, listPendingScoutCompletions,
   listScoutGameHosts, listScoutRosterSlots, markScoutCompletionReconciled, type ScoutSetup } from '../db/index.js';
 import { canManageScoutOperationsSetup } from './scoutCancel.js';
-import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { renderPersistedScoutResult, scoutResultLinkRow, scoutRosterLinkRow } from './scoutPublish.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';

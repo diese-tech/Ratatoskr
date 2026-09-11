@@ -42,7 +42,11 @@ export function createSqliteScoutReadinessCardStore(db: Database.Database): Scou
         const result = db.prepare(`UPDATE scout_setups
           SET control_message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
           WHERE id = ? AND control_message_id IS NULL
-            AND status IN ('roster_ready', 'published', 'cancelled')`).run(telemetryMessageId, setupId);
+            AND status IN ('roster_ready', 'published', 'cancelled')
+            AND EXISTS (
+              SELECT 1 FROM scout_readiness_cards
+              WHERE setup_id = scout_setups.id AND telemetry_message_id = ?
+            )`).run(telemetryMessageId, setupId, telemetryMessageId);
         if (result.changes !== 1) return false;
         patchScoutReadinessCard(db, setupId, { telemetry_message_id: null, telemetry_attempted: 0 });
         return true;

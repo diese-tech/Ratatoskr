@@ -1,22 +1,30 @@
 import { RESTJSONErrorCodes, type Client, type Message, type TextBasedChannel } from 'discord.js';
-import type Database from 'better-sqlite3';
-import { getScoutSetupById, ensureScoutReadinessCard, patchScoutReadinessCard,
-  readScoutReadinessSnapshot, listScoutReadinessSetupIds, getScoutCompletion,
-  listScoutRosterSlots, listScoutSignups, withdrawnScoutRosterUserIds, type ScoutSetup } from '../db/index.js';
-import { renderScoutReadiness } from '../domain/scoutReadiness.js';
+import type { ScoutSetup } from '../db/types.js';
+import { renderScoutReadiness, type ScoutReadinessSnapshot } from '../domain/scoutReadiness.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
+import type { ScoutReadinessCardStore } from '../storage/index.js';
 import { captureScoutReadinessDetails } from './scoutReadiness.js';
 import { buildScoutWorkingRosterView } from './scoutReview.js';
 import type { ScoutSignupEligibility } from './scoutEligibility.js';
 import { scoutCancelButtonRow } from './scoutCancel.js';
 import { managementRow, scoutResultLinkRow } from './scoutPublish.js';
 import { scoutFinishButtonRow } from './scoutFinish.js';
-import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
+import { operationalErrorGuidance, type OperationContext } from './operationalErrors.js';
 
-const locks = new WeakMap<Database.Database, Map<number, Promise<void>>>();
-async function withCardLock<T>(db: Database.Database, setupId: number, action: () => Promise<T>): Promise<T> {
-  let entries = locks.get(db);
-  if (!entries) { entries = new Map(); locks.set(db, entries); }
+export type ScoutCardDependencies = {
+  storage: ScoutReadinessCardStore;
+  operationScope: object;
+  reportError: (
+    client: Client,
+    context: OperationContext,
+    error: unknown,
+  ) => Promise<{ reference: string; staffDelivered: boolean }>;
+};
+
+const locks = new WeakMap<object, Map<number, Promise<void>>>();
+async function withCardLock<T>(scope: object, setupId: number, action: () => Promise<T>): Promise<T> {
+  let entries = locks.get(scope);
+  if (!entries) { entries = new Map(); locks.set(scope, entries); }
   const previous = entries.get(setupId) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
@@ -25,6 +33,10 @@ async function withCardLock<T>(db: Database.Database, setupId: number, action: (
   await previous;
   try { return await action(); }
   finally { release(); if (entries.get(setupId) === tail) entries.delete(setupId); }
+}
+
+function readScoutReadinessSnapshot(snapshotJson: string | null): ScoutReadinessSnapshot | undefined {
+  return snapshotJson ? JSON.parse(snapshotJson) as ScoutReadinessSnapshot : undefined;
 }
 
 const missingMessage = (error: unknown) => Number((error as { code?: number })?.code) === 10008;
@@ -55,9 +67,15 @@ async function findCard(channel: TextBasedChannel, botId: string, setupId: numbe
   }
 }
 
-function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 'control', notify: boolean,
-  unavailable?: string, signupEligibility?: ScoutSignupEligibility) {
-  const completion = getScoutCompletion(db, setup.id);
+async function cardView(
+  storage: ScoutReadinessCardStore,
+  setup: ScoutSetup,
+  kind: 'telemetry' | 'control',
+  notify: boolean,
+  unavailable?: string,
+  signupEligibility?: ScoutSignupEligibility,
+) {
+  const completion = await storage.getCompletion(setup.id);
   if (completion) {
     return {
       content: [
@@ -72,8 +90,13 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
       allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
     };
   }
-  if (!getScoutCompletion(db, setup.id) && ['open', 'roster_ready'].includes(setup.status)) {
-    const unavailableUsers = new Set(withdrawnScoutRosterUserIds(db, setup.id));
+  if (['open', 'roster_ready'].includes(setup.status)) {
+    const [withdrawnUserIds, slots, persistedSignups] = await Promise.all([
+      storage.listWithdrawnUserIds(setup.id),
+      storage.listRosterSlots(setup.id),
+      signupEligibility ? Promise.resolve([]) : storage.listSignups(setup.id),
+    ]);
+    const unavailableUsers = new Set(withdrawnUserIds);
     const prefixes = [
       notify ? `<@${setup.createdBy}>` : '',
       unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '',
@@ -81,8 +104,8 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
     const prefixLength = prefixes.join('\n').length + (prefixes.length ? 1 : 0);
     const view = buildScoutWorkingRosterView(
       setup,
-      listScoutRosterSlots(db, setup.id),
-      signupEligibility?.eligibleSignups ?? listScoutSignups(db, setup.id),
+      slots,
+      signupEligibility?.eligibleSignups ?? persistedSignups,
       unavailableUsers,
       signupEligibility?.ineligibleSignups,
       2_000 - prefixLength,
@@ -93,8 +116,8 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
       allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] },
     };
   }
-  if (!getScoutCompletion(db, setup.id) && setup.status === 'published' && setup.resultMessageId) {
-    const replacementSlots = listScoutRosterSlots(db, setup.id).filter((slot) => slot.replacementNeeded);
+  if (setup.status === 'published' && setup.resultMessageId) {
+    const replacementSlots = (await storage.listRosterSlots(setup.id)).filter((slot) => slot.replacementNeeded);
     return {
       content: replacementSlots.length
         ? [
@@ -106,7 +129,7 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
       allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
     };
   }
-  const saved = readScoutReadinessSnapshot(ensureScoutReadinessCard(db, setup.id));
+  const saved = readScoutReadinessSnapshot((await storage.ensureCard(setup.id)).snapshot_json);
   const terminal = ['published', 'cancelled'].includes(setup.status);
   const status = setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
     : setup.status === 'published' ? 'published' : 'cancelled';
@@ -131,86 +154,90 @@ function cardView(db: Database.Database, setup: ScoutSetup, kind: 'telemetry' | 
   allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] } };
 }
 
-async function editCard(message: Message, view: ReturnType<typeof cardView>): Promise<void> {
+async function editCard(message: Message, view: Awaited<ReturnType<typeof cardView>>): Promise<void> {
   if (message.content === view.content && JSON.stringify(message.components) === JSON.stringify(view.components)) return;
   await message.edit(view);
 }
 
 /** One serialized writer for temporary status, ready controls and terminal cards. */
-export async function refreshScoutStatusCard(client: Client, db: Database.Database, setupId: number): Promise<'created' | 'recovered' | 'existing' | 'not_ready'> {
-  return withCardLock(db, setupId, async () => {
+export async function refreshScoutStatusCard(
+  client: Client,
+  dependencies: ScoutCardDependencies,
+  setupId: number,
+): Promise<'created' | 'recovered' | 'existing' | 'not_ready'> {
+  const { storage } = dependencies;
+  return withCardLock(dependencies.operationScope, setupId, async () => {
     let outcome: 'created' | 'recovered' | 'existing' = 'existing';
     // Open -> ready -> terminal can happen while Discord work is in flight.
     // Re-read the lifecycle before deciding which card must remain visible.
     for (let transition = 0; transition < 4; transition++) {
-      let setup = getScoutSetupById(db, setupId);
+      let setup = await storage.getSetup(setupId);
       if (!setup?.operationsChannelId || !client.user || !['open', 'roster_ready', 'published', 'cancelled'].includes(setup.status)) return 'not_ready';
       const previousStatus = setup.status;
       const channel = await client.channels.fetch(setup.operationsChannelId);
       if (!channel?.isTextBased() || !channel.isSendable() || !('guildId' in channel) || channel.guildId !== setup.guildId) {
         throw new Error('The snapshotted Scout Ops channel is unavailable or belongs to another guild.');
       }
-      let state = ensureScoutReadinessCard(db, setupId);
+      let state = await storage.ensureCard(setupId);
       let unavailable: string | undefined;
       let signupEligibility: ScoutSignupEligibility | undefined;
       if (['open', 'roster_ready'].includes(setup.status)) {
         try {
-          const readiness = await captureScoutReadinessDetails(client, db, setup);
+          const readiness = await captureScoutReadinessDetails(client, storage, setup);
           signupEligibility = readiness;
           const currentSnapshot = readiness.snapshot;
-          const previousSnapshot = readScoutReadinessSnapshot(state);
+          const previousSnapshot = readScoutReadinessSnapshot(state.snapshot_json);
           if (previousSnapshot && JSON.stringify({ ...currentSnapshot, recordedAt: 0 }) === JSON.stringify({ ...previousSnapshot, recordedAt: 0 })) {
             currentSnapshot.recordedAt = previousSnapshot.recordedAt;
           }
-          if (getScoutSetupById(db, setupId)?.status === setup.status) {
-            patchScoutReadinessCard(db, setupId, { snapshot_json: JSON.stringify(currentSnapshot) });
+          if ((await storage.getSetup(setupId))?.status === setup.status) {
+            await storage.patchCard(setupId, { snapshot_json: JSON.stringify(currentSnapshot) });
           }
         } catch (error) {
-          const report = await reportOperationalError(client, db, { guildId: setup.guildId, setupId,
+          const report = await dependencies.reportError(client, { guildId: setup.guildId, setupId,
             division: setup.divisionDisplayName, action: 'Scout readiness eligibility' }, error);
           unavailable = operationalErrorGuidance(report);
         }
-        setup = getScoutSetupById(db, setupId)!;
+        setup = (await storage.getSetup(setupId))!;
         if (setup.status !== previousStatus) continue;
       }
       let telemetry = state.telemetry_message_id ? await getMessage(channel, state.telemetry_message_id) : undefined;
       if (!telemetry && !state.telemetry_message_id) telemetry = await findCard(channel, client.user.id, setupId);
       if (telemetry && !state.telemetry_message_id) {
-        patchScoutReadinessCard(db, setupId, { telemetry_message_id: telemetry.id, telemetry_attempted: 1 });
-        state = ensureScoutReadinessCard(db, setupId);
+        await storage.patchCard(setupId, { telemetry_message_id: telemetry.id, telemetry_attempted: 1 });
+        state = await storage.ensureCard(setupId);
       }
       if (setup.status !== 'open') {
         // A lost send response could still materialize a temporary message.
         if (!telemetry && state.telemetry_attempted && !state.telemetry_message_id) throw new Error('Scout telemetry send is uncertain; retain its marker before creating a ready panel.');
         if (telemetry && !setup.controlMessageId) {
-          db.prepare('UPDATE scout_setups SET control_message_id = ? WHERE id = ?').run(telemetry.id, setupId);
-          patchScoutReadinessCard(db, setupId, { telemetry_message_id: null, telemetry_attempted: 0 });
-          setup = getScoutSetupById(db, setupId)!;
+          if (!await storage.promoteTelemetryToControl(setupId, telemetry.id)) continue;
+          setup = (await storage.getSetup(setupId))!;
         } else if (telemetry && setup.controlMessageId !== telemetry.id) {
           if (setup.status === 'cancelled' && !setup.controlMessageId) {
-            await editCard(telemetry, cardView(db, setup, 'telemetry', false));
+            await editCard(telemetry, await cardView(storage, setup, 'telemetry', false));
             return outcome;
           }
           try { await telemetry.delete(); } catch (error) { if (!missingMessage(error)) throw error; }
         }
-        patchScoutReadinessCard(db, setupId, { telemetry_message_id: null, telemetry_attempted: 0 });
+        await storage.patchCard(setupId, { telemetry_message_id: null, telemetry_attempted: 0 });
       } else {
         if (!telemetry) {
           if (state.telemetry_attempted && !state.telemetry_message_id) throw new Error('Scout telemetry send is uncertain; waiting for marker recovery.');
-          patchScoutReadinessCard(db, setupId, { telemetry_attempted: 1, telemetry_message_id: null });
-          try { telemetry = await channel.send(cardView(db, setup, 'telemetry', false, unavailable, signupEligibility)); }
+          await storage.patchCard(setupId, { telemetry_attempted: 1, telemetry_message_id: null });
+          try { telemetry = await channel.send(await cardView(storage, setup, 'telemetry', false, unavailable, signupEligibility)); }
           catch (error) {
-            if (rejectedSend(error)) patchScoutReadinessCard(db, setupId, { telemetry_attempted: 0 });
+            if (rejectedSend(error)) await storage.patchCard(setupId, { telemetry_attempted: 0 });
             throw error;
           }
-          patchScoutReadinessCard(db, setupId, { telemetry_message_id: telemetry.id });
+          await storage.patchCard(setupId, { telemetry_message_id: telemetry.id });
           outcome = 'created';
-        } else await editCard(telemetry, cardView(db, setup, 'telemetry', false, unavailable, signupEligibility));
-        if (getScoutSetupById(db, setupId)?.status !== setup.status) continue;
+        } else await editCard(telemetry, await cardView(storage, setup, 'telemetry', false, unavailable, signupEligibility));
+        if ((await storage.getSetup(setupId))?.status !== setup.status) continue;
         return outcome;
       }
-      setup = getScoutSetupById(db, setupId)!;
-      state = ensureScoutReadinessCard(db, setupId);
+      setup = (await storage.getSetup(setupId))!;
+      state = await storage.ensureCard(setupId);
       let control = setup.controlMessageId ? await getMessage(channel, setup.controlMessageId) : undefined;
       if (!control) control = await findCard(channel, client.user.id, setupId);
       if (!control) {
@@ -219,12 +246,12 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         const notify = setup.status === 'roster_ready' && !state.creator_notification_attempted;
         // A deleted older card is proven absent; clear its ID before attempting
         // a replacement so a lost replacement response cannot lead to resends.
-        if (setup.controlMessageId) db.prepare('UPDATE scout_setups SET control_message_id = NULL WHERE id = ?').run(setupId);
-        patchScoutReadinessCard(db, setupId, { control_attempted: 1,
+        if (setup.controlMessageId && !await storage.clearControlMessage(setupId, setup.controlMessageId)) continue;
+        await storage.patchCard(setupId, { control_attempted: 1,
           creator_notification_attempted: notify ? 1 : state.creator_notification_attempted });
-        try { control = await channel.send(cardView(db, setup, 'control', notify, unavailable, signupEligibility)); }
+        try { control = await channel.send(await cardView(storage, setup, 'control', notify, unavailable, signupEligibility)); }
         catch (error) {
-          if (rejectedSend(error)) patchScoutReadinessCard(db, setupId, {
+          if (rejectedSend(error)) await storage.patchCard(setupId, {
             control_attempted: 0, creator_notification_attempted: state.creator_notification_attempted,
           });
           throw error;
@@ -232,27 +259,35 @@ export async function refreshScoutStatusCard(client: Client, db: Database.Databa
         outcome = 'created';
       } else {
         outcome = setup.controlMessageId === control.id ? outcome : 'recovered';
-        await editCard(control, cardView(db, setup, 'control', false, unavailable, signupEligibility));
+        await editCard(control, await cardView(storage, setup, 'control', false, unavailable, signupEligibility));
       }
-      db.prepare('UPDATE scout_setups SET control_message_id = ? WHERE id = ?').run(control.id, setupId);
-      patchScoutReadinessCard(db, setupId, { control_attempted: 1 });
-      if (getScoutSetupById(db, setupId)?.status !== setup.status) continue;
+      if (!await storage.confirmControlMessage(setupId, control.id)) continue;
+      if ((await storage.getSetup(setupId))?.status !== setup.status) continue;
       return outcome;
     }
     throw new Error('Scout card changed repeatedly; retry reconciliation.');
   });
 }
 
-export async function refreshScoutStatusCardSafely(client: Client, db: Database.Database, setupId: number): Promise<boolean> {
-  try { await refreshScoutStatusCard(client, db, setupId); return true; }
+export async function refreshScoutStatusCardSafely(
+  client: Client,
+  dependencies: ScoutCardDependencies,
+  setupId: number,
+): Promise<boolean> {
+  try { await refreshScoutStatusCard(client, dependencies, setupId); return true; }
   catch (error) {
-    const setup = getScoutSetupById(db, setupId);
-    if (setup) await reportOperationalError(client, db, { guildId: setup.guildId, setupId,
+    const setup = await dependencies.storage.getSetup(setupId);
+    if (setup) await dependencies.reportError(client, { guildId: setup.guildId, setupId,
       division: setup.divisionDisplayName, action: 'Scout readiness card recovery' }, error);
     return false;
   }
 }
 
-export async function reconcileScoutStatusCards(client: Client, db: Database.Database): Promise<void> {
-  for (const id of listScoutReadinessSetupIds(db)) await refreshScoutStatusCardSafely(client, db, id);
+export async function reconcileScoutStatusCards(
+  client: Client,
+  dependencies: ScoutCardDependencies,
+): Promise<void> {
+  for (const id of await dependencies.storage.listSetupIds()) {
+    await refreshScoutStatusCardSafely(client, dependencies, id);
+  }
 }

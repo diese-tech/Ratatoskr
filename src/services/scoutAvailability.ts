@@ -13,7 +13,7 @@ import {
   markScoutPlayerUnavailableIfVersion,
 } from '../db/index.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
-import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { reconcileScoutPublishedPresentation } from './scoutPublish.js';
 import { operationalErrorGuidance, reportOperationalError } from './operationalErrors.js';
 

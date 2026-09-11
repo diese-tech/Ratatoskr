@@ -1,4 +1,4 @@
-import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import { randomUUID } from 'node:crypto';
 import {

@@ -309,6 +309,9 @@ test('sqlite storage exposes asynchronous Scout readiness-card lifecycle reads',
       telemetry_message_id: 'telemetry-message',
     });
     storage.legacyDatabase.prepare("UPDATE scout_setups SET status = 'roster_ready' WHERE id = ?").run(setup.id);
+    assert.equal(await storage.scoutReadinessCards.promoteTelemetryToControl(setup.id, 'stale-message'), false);
+    assert.equal((await storage.scoutReadinessCards.getSetup(setup.id))?.controlMessageId, null);
+    assert.equal((await storage.scoutReadinessCards.ensureCard(setup.id)).telemetry_message_id, 'telemetry-message');
     assert.equal(await storage.scoutReadinessCards.promoteTelemetryToControl(setup.id, 'telemetry-message'), true);
     assert.equal((await storage.scoutReadinessCards.getSetup(setup.id))?.controlMessageId, 'telemetry-message');
     assert.equal((await storage.scoutReadinessCards.ensureCard(setup.id)).telemetry_message_id, null);

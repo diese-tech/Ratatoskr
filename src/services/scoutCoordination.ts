@@ -27,7 +27,7 @@ import {
   scheduleScoutNotificationIfCooldownAvailable,
 } from '../db/index.js';
 import { hasScoutDivisionManagementAccess } from './scoutAuthorization.js';
-import { refreshScoutStatusCardSafely } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
 import { reconcileScoutPublishedPresentation } from './scoutPublish.js';
 import { reportOperationalError } from './operationalErrors.js';

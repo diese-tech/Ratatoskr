@@ -2,7 +2,7 @@ import type { Client } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getScoutSetupById, type ScoutSetup } from '../db/index.js';
 import { scoutReviewButtonRow } from './scoutReview.js';
-import { refreshScoutStatusCard, reconcileScoutStatusCards } from './scoutCardLifecycle.js';
+import { refreshScoutStatusCard, reconcileScoutStatusCards } from './scoutCardCompatibility.js';
 
 export function renderScoutControlPanelPrompt(setup: ScoutSetup, notifyCreator = true) {
   return {
