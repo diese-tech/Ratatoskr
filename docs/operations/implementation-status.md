@@ -23,11 +23,11 @@ and injected operational reporting; transitional SQLite wiring remains in a sepa
 compatibility module for lifecycle callers outside this slice. The atomic
 publish/cancel transition still owns its final-readiness snapshot.
 
-Validation passes 292 tests, application and script typechecks, build, dependency
+Validation passes 293 tests, application and script typechecks, build, dependency
 audit and diff check. Coverage includes delayed persistence before Discord send,
 stale telemetry-message promotion, working-card promotion, concurrent setup cards,
-transition rereads, disk restart, missing messages, rejected-send rollback and
-ambiguous-send retention. Fifteen non-test command/service files still import
+transition rereads, terminal-snapshot overwrite prevention, disk restart, missing
+messages, rejected-send rollback and ambiguous-send retention. Fifteen non-test command/service files still import
 `better-sqlite3`, including the explicit compatibility module; the backend-independent
 card lifecycle does not. B5g does not claim the application is Postgres-ready.
 

@@ -190,9 +190,7 @@ export async function refreshScoutStatusCard(
           if (previousSnapshot && JSON.stringify({ ...currentSnapshot, recordedAt: 0 }) === JSON.stringify({ ...previousSnapshot, recordedAt: 0 })) {
             currentSnapshot.recordedAt = previousSnapshot.recordedAt;
           }
-          if ((await storage.getSetup(setupId))?.status === setup.status) {
-            await storage.patchCard(setupId, { snapshot_json: JSON.stringify(currentSnapshot) });
-          }
+          await storage.patchSnapshotIfStatus(setupId, setup.status, JSON.stringify(currentSnapshot));
         } catch (error) {
           const report = await dependencies.reportError(client, { guildId: setup.guildId, setupId,
             division: setup.divisionDisplayName, action: 'Scout readiness eligibility' }, error);

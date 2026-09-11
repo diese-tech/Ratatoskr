@@ -303,6 +303,8 @@ test('sqlite storage exposes asynchronous Scout readiness-card lifecycle reads',
     assert.deepEqual(await pendingIds, [setup.id]);
     assert.equal((await storage.scoutReadinessCards.getSetup(setup.id))?.id, setup.id);
     assert.equal((await storage.scoutReadinessCards.ensureCard(setup.id)).setup_id, setup.id);
+    assert.equal(await storage.scoutReadinessCards.patchSnapshotIfStatus(setup.id, 'posting', '{}'), false);
+    assert.equal(await storage.scoutReadinessCards.patchSnapshotIfStatus(setup.id, 'open', '{}'), true);
 
     await storage.scoutReadinessCards.patchCard(setup.id, {
       telemetry_attempted: 1,

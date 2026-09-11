@@ -37,6 +37,15 @@ export function createSqliteScoutReadinessCardStore(db: Database.Database): Scou
     async patchCard(setupId, changes) {
       patchScoutReadinessCard(db, setupId, changes);
     },
+    async patchSnapshotIfStatus(setupId, expectedStatus, snapshotJson) {
+      const result = db.prepare(`UPDATE scout_readiness_cards
+        SET snapshot_json = ?
+        WHERE setup_id = ? AND EXISTS (
+          SELECT 1 FROM scout_setups
+          WHERE id = scout_readiness_cards.setup_id AND status = ?
+        )`).run(snapshotJson, setupId, expectedStatus);
+      return result.changes === 1;
+    },
     async promoteTelemetryToControl(setupId, telemetryMessageId) {
       return db.transaction(() => {
         const result = db.prepare(`UPDATE scout_setups

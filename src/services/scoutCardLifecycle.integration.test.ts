@@ -748,6 +748,54 @@ test('cancellation retains the last known snapshot when final eligibility cannot
   } finally { f.db.close(); }
 });
 
+test('a delayed open snapshot cannot overwrite the terminal cancellation snapshot', async () => {
+  const f = fixture();
+  let releaseWrite!: () => void;
+  let announceWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const writeStarted = new Promise<void>((resolve) => { announceWrite = resolve; });
+  const sqliteStorage = f.cardDependencies.storage;
+  let delaySnapshot = true;
+  let refreshing: Promise<unknown> | undefined;
+  let cancelling: Promise<unknown> | undefined;
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    f.addMember('first');
+    f.db.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, 'first', 'solo')").run(f.setup.id);
+    f.cardDependencies.storage = {
+      ...sqliteStorage,
+      async patchSnapshotIfStatus(setupId, expectedStatus, snapshotJson) {
+        if (delaySnapshot) {
+          delaySnapshot = false;
+          announceWrite();
+          await writeGate;
+        }
+        return sqliteStorage.patchSnapshotIfStatus(setupId, expectedStatus, snapshotJson);
+      },
+    };
+    refreshing = refreshScoutStatusCardWithDependencies(f.client, f.cardDependencies, f.setup.id);
+    await writeStarted;
+
+    f.addMember('second');
+    f.db.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, 'second', 'mid')").run(f.setup.id);
+    const version = getScoutSetupById(f.db, f.setup.id)!.version;
+    cancelling = handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${f.setup.id}:${version}`), f.db);
+    for (let attempt = 0; attempt < 10 && getScoutSetupById(f.db, f.setup.id)?.status !== 'cancelled'; attempt++) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, f.setup.id))?.players, 2);
+
+    releaseWrite();
+    await Promise.all([refreshing, cancelling]);
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, f.setup.id))?.players, 2);
+  } finally {
+    releaseWrite();
+    await Promise.all([refreshing, cancelling]);
+    f.db.close();
+  }
+});
+
 for (const terminal of ['cancelled', 'published'] as const) {
   test(`${terminal} captures committed signups even while an older card edit is delayed`, async () => {
     const f = fixture();
