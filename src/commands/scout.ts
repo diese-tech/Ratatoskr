@@ -9,15 +9,10 @@ import {
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { divisions } from '../config/guild-structure.js';
-import {
-  ensureScoutConfig,
-  setScoutAuthorizedRoleIds,
-  setScoutOperationsChannel,
-  setScoutTimezone,
-  type ScoutConfig,
-} from '../db/index.js';
+import type { ScoutConfig } from '../db/types.js';
 import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS } from '../domain/index.js';
 import { isValidScoutTimezone, listScoutTimezones } from '../services/scoutConfig.js';
+import type { ScoutConfigurationStore } from '../storage/index.js';
 
 export const SCOUT_CONFIG_ROLES_CUSTOM_ID = 'scout:config:authorized_roles';
 const divisionChoices = divisions.map((division) => ({ name: division.name, value: division.key }));
@@ -105,7 +100,11 @@ function renderScoutConfig(config: ScoutConfig): {
   };
 }
 
-export async function handleScoutCommand(interaction: ChatInputCommandInteraction, db: Database.Database) {
+export async function handleScoutCommand(
+  interaction: ChatInputCommandInteraction,
+  db: Database.Database,
+  configuration: ScoutConfigurationStore,
+) {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
     return;
@@ -137,32 +136,36 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
     return;
   }
 
-  let config = ensureScoutConfig(db, interaction.guild.id);
-  if (timezone) config = setScoutTimezone(db, interaction.guild.id, timezone);
-
   const selectedOperationsChannel = interaction.options.getChannel('operations_channel');
+  const bindEmoji = interaction.options.getBoolean('bind_emoji');
+  await interaction.deferReply(bindEmoji && !selectedOperationsChannel ? {} : { flags: MessageFlags.Ephemeral });
+
   const operationsChannel = selectedOperationsChannel
     ? await interaction.guild.channels.fetch(selectedOperationsChannel.id)
     : null;
-  if (operationsChannel) {
-    if (operationsChannel.type !== ChannelType.GuildText || !operationsChannel.parentId) {
-      await interaction.reply({
-        content: 'The Scout Operations control channel must be a server text channel inside a category.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    config = setScoutOperationsChannel(
-      db,
+  const operationsCategoryId = operationsChannel?.parentId ?? null;
+  if (selectedOperationsChannel
+    && (!operationsChannel || operationsChannel.type !== ChannelType.GuildText || !operationsCategoryId)) {
+    await interaction.editReply({
+      content: 'The Scout Operations control channel must be a server text channel inside a category.',
+    });
+    return;
+  }
+
+  let config = await configuration.ensureScoutConfig(interaction.guild.id);
+  if (timezone) config = await configuration.setScoutTimezone(interaction.guild.id, timezone);
+
+  if (operationsChannel && operationsCategoryId) {
+    config = await configuration.setScoutOperationsChannel(
       interaction.guild.id,
-      operationsChannel.parentId,
+      operationsCategoryId,
       operationsChannel.id,
     );
   }
 
-  if (interaction.options.getBoolean('bind_emoji')) {
+  if (bindEmoji) {
     const { startScoutEmojiBinding } = await import('../services/scoutEmojiBinding.js');
-    await startScoutEmojiBinding(interaction);
+    await startScoutEmojiBinding(interaction, { publicFollowUp: Boolean(selectedOperationsChannel) });
     if (operationsChannel) {
       const { reconcileActiveScoutSignups } = await import('../services/scoutSignups.js');
       const { reconcileScoutControlPanels } = await import('../services/scoutControlPanel.js');
@@ -172,7 +175,7 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
     return;
   }
 
-  await interaction.reply({ ...renderScoutConfig(config), flags: MessageFlags.Ephemeral });
+  await interaction.editReply(renderScoutConfig(config));
   if (operationsChannel) {
     const { reconcileActiveScoutSignups } = await import('../services/scoutSignups.js');
     const { reconcileScoutControlPanels } = await import('../services/scoutControlPanel.js');
@@ -183,7 +186,7 @@ export async function handleScoutCommand(interaction: ChatInputCommandInteractio
 
 export async function handleScoutConfigRoleSelect(
   interaction: RoleSelectMenuInteraction,
-  db: Database.Database,
+  configuration: ScoutConfigurationStore,
 ): Promise<boolean> {
   if (interaction.customId !== SCOUT_CONFIG_ROLES_CUSTOM_ID) return false;
   if (!interaction.guild) return true;
@@ -195,8 +198,9 @@ export async function handleScoutConfigRoleSelect(
     return true;
   }
 
-  const config = setScoutAuthorizedRoleIds(db, interaction.guild.id, interaction.values);
-  await interaction.update(renderScoutConfig(config));
+  await interaction.deferUpdate();
+  const config = await configuration.setScoutAuthorizedRoleIds(interaction.guild.id, interaction.values);
+  await interaction.editReply(renderScoutConfig(config));
   return true;
 }
 

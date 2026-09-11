@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -13,7 +12,7 @@ import type {
   PartialUser,
   User,
 } from 'discord.js';
-import { setScoutEmojiByRole } from '../db/index.js';
+import type { ScoutConfigurationStore } from '../storage/index.js';
 import {
   SCOUT_ROLES,
   SCOUT_SIGNUP_ROLES,
@@ -111,12 +110,22 @@ function bindingComponents(state: ScoutEmojiBindingState) {
   ];
 }
 
-export async function startScoutEmojiBinding(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function startScoutEmojiBinding(
+  interaction: ChatInputCommandInteraction,
+  options: { publicFollowUp?: boolean } = {},
+): Promise<void> {
   if (!interaction.guild) return;
 
   const state = createScoutEmojiBindingState(interaction.guild.id, interaction.user.id);
-  await interaction.reply({ content: bindingMessage(state) });
-  const message = await interaction.fetchReply();
+  let message;
+  if (options.publicFollowUp) {
+    await interaction.editReply({ content: 'Scout configuration saved. The emoji binding prompt is posted below.' });
+    message = await interaction.followUp({ content: bindingMessage(state), fetchReply: true });
+  } else {
+    if (interaction.deferred || interaction.replied) await interaction.editReply({ content: bindingMessage(state) });
+    else await interaction.reply({ content: bindingMessage(state) });
+    message = await interaction.fetchReply();
+  }
   liveBindings.set(message.id, { state, expiresAt: Date.now() + BINDING_TTL_MS });
 
   setTimeout(() => {
@@ -133,7 +142,7 @@ export async function startScoutEmojiBinding(interaction: ChatInputCommandIntera
 export async function tryHandleScoutEmojiBinding(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser,
-  db: Database.Database,
+  storage: ScoutConfigurationStore,
 ): Promise<boolean> {
   const binding = liveBindings.get(reaction.message.id);
   if (!binding || user.bot) return false;
@@ -178,7 +187,7 @@ export async function tryHandleScoutEmojiBinding(
   }
 
   if (result.outcome === 'complete' && result.emojiByRole) {
-    setScoutEmojiByRole(db, guild.id, result.emojiByRole);
+    await storage.setScoutEmojiByRole(guild.id, result.emojiByRole);
     liveBindings.delete(message.id);
     await message.edit({
       content: `${bindingMessage(result.state)}\n✅ Scout role emoji are saved.`,
@@ -194,7 +203,7 @@ export async function tryHandleScoutEmojiBinding(
 
 export async function handleScoutFillSkipButton(
   interaction: ButtonInteraction,
-  db: Database.Database,
+  storage: ScoutConfigurationStore,
 ): Promise<boolean> {
   if (interaction.customId !== SCOUT_SKIP_FILL_CUSTOM_ID) return false;
   const binding = liveBindings.get(interaction.message.id);
@@ -209,8 +218,9 @@ export async function handleScoutFillSkipButton(
     return true;
   }
   if (result.outcome !== 'complete' || !result.emojiByRole) return true;
-  setScoutEmojiByRole(db, binding.state.guildId, result.emojiByRole);
+  await interaction.deferUpdate();
+  await storage.setScoutEmojiByRole(binding.state.guildId, result.emojiByRole);
   liveBindings.delete(interaction.message.id);
-  await interaction.update({ content: `${bindingMessage(result.state)}\n✅ Five scout role emoji are saved; Fill was skipped.`, components: [] });
+  await interaction.editReply({ content: `${bindingMessage(result.state)}\n✅ Five scout role emoji are saved; Fill was skipped.`, components: [] });
   return true;
 }

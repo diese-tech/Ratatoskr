@@ -1,36 +1,36 @@
 # Implementation checkpoint
 
-Authorized scope: the B1-B7 sequence through the active B5c division-storage
-slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.3,
-roadmap #1, and focused Issue #104.
+Authorized scope: the B1-B7 sequence through the active B5d Scout-configuration
+slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.4,
+roadmap #1, and focused Issue #106.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B5c division lifecycle storage boundary
+## Current checkpoint — B5d Scout configuration storage boundary
 
-Done: B5a / #100 and B5b / #102 merged through PRs #101 and #103, ending at
-`5837a72bf81213c33e94d68b36ae99eb9ce9af00`; final automated review plus PR and
-post-merge Ubuntu/Windows CI passed for both. Railway's GitHub deployment records
+Done: B5a-B5c / #100/#102/#104 merged through PRs #101/#103/#105, ending at
+`eda934e84913dcceebcbf843e01c32d3b6de7523`; final automated review plus PR and
+post-merge Ubuntu/Windows CI passed for each. Railway's GitHub deployment records
 reported success, while runtime/startup logs and live Discord behavior remain uninspected.
 
-On `codex/issue-95-b5-division-storage`, B5c adds a backend-independent asynchronous
-`DivisionWorkspaceStore` and SQLite adapter over division records, managed resources,
-Scout routing configuration and active lifecycle blockers. `/division` add/status/
-archive/delete and provisioning now consume that contract. A transitional opaque
-operation scope preserves mutual exclusion with legacy Scout callers that still use
-the SQLite handle. Division ownership, archive/delete safety, centralized Scout
-routing, partial-deletion retries and franchise-role concurrency are unchanged.
+On `codex/issue-95-b5-scout-config-storage`, B5d adds a backend-independent
+asynchronous `ScoutConfigurationStore` and SQLite adapter over the existing ensure,
+authorized-role, operations-channel, timezone and emoji writes. `/scout config`, its
+role selector, reaction emoji completion and Skip Fill continuation consume the store.
+Scout creation, cancellation, roster, publication, notifications, recovery and
+authorization remain on the transitional SQLite handle for later coherent slices.
 
-Validation: 275 tests pass locally, including asynchronous division lifecycle,
-managed-resource parent/purge transitions, shared legacy/new lock scope, and a
-delayed-storage provisioning check. Both typechecks, build, dependency audit and diff check pass.
-Nineteen non-test command/service files still import `better-sqlite3`; B5c does not
-claim the application is Postgres-ready.
+Validation: 282 tests pass locally, including asynchronous configuration creation,
+all existing mutation categories while preserving independent fields, and a delayed
+command, role-select and Skip Fill acknowledgement/write ordering. Both typechecks,
+build, dependency audit and diff check pass. Eighteen non-test command/service files
+still import `better-sqlite3`; B5d does not claim the application is Postgres-ready.
 
-Next: require final-head review plus Ubuntu/Windows CI on PR #105, resolve any findings,
+Next: require final-head review plus Ubuntu/Windows CI on PR #107, resolve any findings,
 then merge only the unchanged reviewed commit under the standing authorization.
-Do not change division behavior, convert Scout, add a Postgres driver, provision
-infrastructure, change production configuration, or cut over persistence in this slice.
+Do not change Scout behavior, convert its transaction-heavy lifecycle, add a Postgres
+driver, provision infrastructure, change production configuration, or cut over
+persistence in this slice.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 

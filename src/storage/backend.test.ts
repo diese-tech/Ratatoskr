@@ -149,3 +149,46 @@ test('sqlite storage exposes asynchronous division lifecycle operations', async 
     await storage.close();
   }
 });
+
+test('sqlite storage exposes asynchronous Scout configuration creation', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+
+  try {
+    const pendingConfig = storage.scoutConfiguration.ensureScoutConfig('guild-1');
+    assert.ok(pendingConfig instanceof Promise);
+    const config = await pendingConfig;
+    assert.equal(config.guildId, 'guild-1');
+    assert.equal(config.timezone, 'America/New_York');
+  } finally {
+    await storage.close();
+  }
+});
+
+test('Scout configuration storage applies every existing mutation without resetting other fields', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+
+  try {
+    const roles = storage.scoutConfiguration.setScoutAuthorizedRoleIds('guild-1', ['staff-a', 'staff-b']);
+    assert.ok(roles instanceof Promise);
+    await roles;
+    await storage.scoutConfiguration.setScoutOperationsChannel('guild-1', 'ops-category', 'ops-channel');
+    await storage.scoutConfiguration.setScoutTimezone('guild-1', 'America/Chicago');
+    const updated = await storage.scoutConfiguration.setScoutEmojiByRole('guild-1', {
+      solo: 'emoji-solo',
+      jungle: 'emoji-jungle',
+      mid: 'emoji-mid',
+      support: 'emoji-support',
+      carry: 'emoji-carry',
+      fill: null,
+    });
+
+    assert.deepEqual(updated.authorizedRoleIds, ['staff-a', 'staff-b']);
+    assert.equal(updated.operationsCategoryId, 'ops-category');
+    assert.equal(updated.operationsChannelId, 'ops-channel');
+    assert.equal(updated.timezone, 'America/Chicago');
+    assert.equal(updated.emojiByRole.support, 'emoji-support');
+    assert.equal(updated.emojiByRole.fill, null);
+  } finally {
+    await storage.close();
+  }
+});

@@ -34,7 +34,7 @@ export async function handleInteraction(interaction: Interaction, storage: Appli
   if (interaction.isRoleSelectMenu()) {
     const { handleScoutCreateRoleSelect } = await import('../services/scoutCreate.js');
     if (await handleScoutCreateRoleSelect(interaction, db)) return;
-    if (await handleScoutConfigRoleSelect(interaction, db)) return;
+    if (await handleScoutConfigRoleSelect(interaction, storage.scoutConfiguration)) return;
   }
 
   if (interaction.isStringSelectMenu()) {
@@ -63,7 +63,7 @@ export async function handleInteraction(interaction: Interaction, storage: Appli
     const { handleScoutAvailabilityButton } = await import('../services/scoutAvailability.js');
     if (await handleScoutAvailabilityButton(interaction, db)) return;
     const { handleScoutFillSkipButton } = await import('../services/scoutEmojiBinding.js');
-    if (await handleScoutFillSkipButton(interaction, db)) return;
+    if (await handleScoutFillSkipButton(interaction, storage.scoutConfiguration)) return;
     const { handleScoutCreateButton } = await import('../services/scoutCreate.js');
     if (await handleScoutCreateButton(interaction, db)) return;
     const { handleScoutReviewButton } = await import('../services/scoutReview.js');
@@ -88,7 +88,7 @@ export async function handleInteraction(interaction: Interaction, storage: Appli
   } else if (interaction.commandName === 'season') {
     await handleSeasonCommand(interaction, storage.seasons);
   } else if (interaction.commandName === 'scout') {
-    await handleScoutCommand(interaction, db);
+    await handleScoutCommand(interaction, db, storage.scoutConfiguration);
   } else if (interaction.commandName === 'server') {
     await handleServerCommand(interaction, storage.managedResources);
   } else if (interaction.commandName === 'help') {

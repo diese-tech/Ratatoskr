@@ -3,9 +3,11 @@ import { closeDatabase, openDatabase } from '../db/client.js';
 import type { DivisionWorkspaceStore } from './divisionWorkspaceStore.js';
 import type { ManagedResourceStore } from './managedResourceStore.js';
 import type { SeasonWorkspaceStore } from './seasonWorkspaceStore.js';
+import type { ScoutConfigurationStore } from './scoutConfigurationStore.js';
 import { createSqliteDivisionWorkspaceStore } from './sqlite/divisionWorkspaceStore.js';
 import { createSqliteManagedResourceStore } from './sqlite/managedResourceStore.js';
 import { createSqliteSeasonWorkspaceStore } from './sqlite/seasonWorkspaceStore.js';
+import { createSqliteScoutConfigurationStore } from './sqlite/scoutConfigurationStore.js';
 
 export type DatabaseBackend = 'sqlite' | 'postgres';
 
@@ -28,6 +30,7 @@ export interface ApplicationStorage {
   readonly operationScope: object;
   readonly divisions: DivisionWorkspaceStore;
   readonly managedResources: ManagedResourceStore;
+  readonly scoutConfiguration: ScoutConfigurationStore;
   readonly seasons: SeasonWorkspaceStore;
   close(): Promise<void>;
 }
@@ -53,6 +56,7 @@ export function openApplicationStorage(options: OpenApplicationStorageOptions = 
     operationScope: db,
     divisions: createSqliteDivisionWorkspaceStore(db, managedResources),
     managedResources,
+    scoutConfiguration: createSqliteScoutConfigurationStore(db),
     seasons: createSqliteSeasonWorkspaceStore(db, managedResources),
     async close() {
       closeDatabase(db);
@@ -64,6 +68,8 @@ export { SeasonAlreadyActiveError } from './seasonWorkspaceStore.js';
 export type { DivisionWorkspaceStore, UpsertDivisionInput } from './divisionWorkspaceStore.js';
 export type { InsertManagedResourceInput, ManagedResourceStore } from './managedResourceStore.js';
 export type { CreateSeasonInput, SeasonWorkspaceStore } from './seasonWorkspaceStore.js';
+export type { ScoutConfigurationStore } from './scoutConfigurationStore.js';
 export { createSqliteManagedResourceStore } from './sqlite/managedResourceStore.js';
 export { createSqliteDivisionWorkspaceStore } from './sqlite/divisionWorkspaceStore.js';
 export { createSqliteSeasonWorkspaceStore } from './sqlite/seasonWorkspaceStore.js';
+export { createSqliteScoutConfigurationStore } from './sqlite/scoutConfigurationStore.js';
