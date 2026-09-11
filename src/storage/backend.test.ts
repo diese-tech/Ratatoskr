@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createScoutSetup, setScoutOperationsChannel } from '../db/index.js';
+import {
+  createScoutSetup,
+  getScoutNotificationByDedupeKey,
+  scheduleScoutNotification,
+  setScoutOperationsChannel,
+} from '../db/index.js';
 import { openApplicationStorage, resolveDatabaseBackend } from './index.js';
 
 test('database backend defaults to sqlite even when DATABASE_URL exists', () => {
@@ -188,6 +193,74 @@ test('Scout configuration storage applies every existing mutation without resett
     assert.equal(updated.timezone, 'America/Chicago');
     assert.equal(updated.emojiByRole.support, 'emoji-support');
     assert.equal(updated.emojiByRole.fill, null);
+  } finally {
+    await storage.close();
+  }
+});
+
+test('sqlite storage exposes asynchronous Scout notification delivery reads', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+
+  try {
+    const division = await storage.divisions.upsertDivision({
+      guildId: 'guild-1',
+      divisionKey: 'vanaheim',
+      displayName: 'Vanaheim',
+      roleId: 'division-role',
+      managerRoleId: 'manager-role',
+      captainRoleId: 'captain-role',
+      categoryId: 'category',
+    });
+    const setup = createScoutSetup(storage.legacyDatabase, {
+      guildId: 'guild-1',
+      divisionId: division.id,
+      divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName,
+      createdBy: 'organizer',
+      signupChannelId: 'signups',
+      resultsChannelId: 'results',
+      operationsChannelId: 'ops',
+      divisionRoleId: 'division-role',
+      emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+      startAt: 2_000_000_000,
+      roleLimit: 2,
+    });
+    const notification = scheduleScoutNotification(storage.legacyDatabase, {
+      setupId: setup.id,
+      kind: 'manual_roster',
+      dedupeKey: `manual:${setup.id}:storage-test`,
+      nonce: 'storage-test',
+      channelId: 'signups',
+      dueAt: 100,
+    }).notification;
+    const pendingDue = storage.scoutNotificationDelivery.listDueNotifications(2_000_000_000, 25);
+    assert.ok(pendingDue instanceof Promise);
+    assert.deepEqual((await pendingDue).map((row) => row.id), [notification.id]);
+    assert.equal((await storage.scoutNotificationDelivery.getSetup(setup.id))?.id, setup.id);
+    assert.equal(await storage.scoutNotificationDelivery.hasCompletion(setup.id), false);
+
+    const claim = storage.scoutNotificationDelivery.claimAttempt(notification.id, 100, {
+      content: 'payload', links: [], allowedUserIds: [],
+    });
+    assert.ok(claim instanceof Promise);
+    assert.equal(await claim, true);
+    assert.deepEqual(
+      (await storage.scoutNotificationDelivery.listAttemptedNotifications()).map((row) => row.id),
+      [notification.id],
+    );
+    assert.equal(await storage.scoutNotificationDelivery.markSent(notification.id, 'message-1', 101), true);
+    assert.equal(getScoutNotificationByDedupeKey(storage.legacyDatabase, notification.dedupeKey)?.state, 'sent');
+
+    const skipped = scheduleScoutNotification(storage.legacyDatabase, {
+      setupId: setup.id,
+      kind: 'manual_roster',
+      dedupeKey: `manual:${setup.id}:skipped-storage-test`,
+      nonce: 'skip-test',
+      channelId: 'signups',
+      dueAt: 102,
+    }).notification;
+    assert.equal(await storage.scoutNotificationDelivery.skip(skipped.id, 'test_reason'), true);
+    assert.equal(getScoutNotificationByDedupeKey(storage.legacyDatabase, skipped.dedupeKey)?.skippedReason, 'test_reason');
   } finally {
     await storage.close();
   }

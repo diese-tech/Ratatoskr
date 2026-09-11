@@ -1,57 +1,51 @@
-import type Database from 'better-sqlite3';
 import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   type Client,
 } from 'discord.js';
-import {
-  claimScoutNotificationAttempt,
-  getScoutCompletion,
-  getScoutCoordination,
-  getScoutSetupById,
-  listAttemptedScoutNotifications,
-  listDueScoutNotifications,
-  listScoutEvents,
-  listScoutGameHosts,
-  listScoutRosterSlots,
-  markScoutNotificationSent,
-  skipScheduledScoutNotification,
-  type ScoutNotification,
-  type ScoutNotificationPayload,
-} from '../db/index.js';
+import type { ScoutNotification, ScoutNotificationPayload, ScoutSetup } from '../db/types.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
+import type { ScoutNotificationDeliveryStore } from '../storage/index.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
-import { reportOperationalError } from './operationalErrors.js';
+import type { OperationContext } from './operationalErrors.js';
 
 type NotificationResolution =
   | { status: 'deliver'; payload: ScoutNotificationPayload }
   | { status: 'skip'; reason: string };
 
-function rosterUrl(setup: NonNullable<ReturnType<typeof getScoutSetupById>>): string | undefined {
+export type ScoutNotificationDeliveryDependencies = {
+  storage: ScoutNotificationDeliveryStore;
+  operationScope: object;
+  reportError: (context: OperationContext, error: unknown) => Promise<void>;
+};
+
+function rosterUrl(setup: ScoutSetup): string | undefined {
   return setup.resultMessageId
     ? `https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`
     : undefined;
 }
 
-function rosterLink(setup: NonNullable<ReturnType<typeof getScoutSetupById>>) {
+function rosterLink(setup: ScoutSetup) {
   const url = rosterUrl(setup);
   return url ? [{ label: 'View roster', url }] : [];
 }
 
-export function resolveScoutNotification(
-  db: Database.Database,
+export async function resolveScoutNotification(
+  storage: ScoutNotificationDeliveryStore,
   notification: ScoutNotification,
-): NotificationResolution {
-  const setup = getScoutSetupById(db, notification.setupId);
+): Promise<NotificationResolution> {
+  const setup = await storage.getSetup(notification.setupId);
   if (!setup) return { status: 'skip', reason: 'missing_setup' };
-  if (getScoutCompletion(db, setup.id)) return { status: 'skip', reason: 'finished' };
+  if (await storage.hasCompletion(setup.id)) return { status: 'skip', reason: 'finished' };
   if (setup.status === 'cancelled') return { status: 'skip', reason: 'cancelled' };
   if (setup.status !== 'published' || !setup.resultMessageId || !setup.signupPostReconciled) {
     return { status: 'skip', reason: 'unpublished' };
   }
-  const slots = listScoutRosterSlots(db, setup.id);
-  const hosts = listScoutGameHosts(db, setup.id);
+  const [slots, hosts] = await Promise.all([
+    storage.listRosterSlots(setup.id),
+    storage.listGameHosts(setup.id),
+  ]);
   const links = rosterLink(setup);
 
   if (notification.kind === 't30' || notification.kind === 'manual_roster') {
@@ -75,7 +69,7 @@ export function resolveScoutNotification(
     };
   }
 
-  const coordination = getScoutCoordination(db, setup.id);
+  const coordination = await storage.getCoordination(setup.id);
   if (notification.kind === 'host_organizer') {
     const host = hosts.find((candidate) => candidate.gameNumber === notification.gameNumber);
     if (!host || !coordination || notification.channelId !== setup.operationsChannelId) {
@@ -109,7 +103,7 @@ export function resolveScoutNotification(
 
   if (notification.kind === 'replacement_notice') {
     const version = Number(notification.dedupeKey.split(':').at(-1));
-    const event = listScoutEvents(db, setup.id)
+    const event = (await storage.listEvents(setup.id))
       .find((candidate) => candidate.setupVersion === version && candidate.eventType === 'player_replaced');
     const incomingUserId = event?.payload.incomingUserId;
     const outgoingUserId = event?.payload.outgoingUserId;
@@ -144,10 +138,10 @@ export function resolveScoutNotification(
   return { status: 'skip', reason: 'unsupported_kind' };
 }
 
-const setupTails = new WeakMap<Database.Database, Map<number, Promise<void>>>();
-async function serializeForSetup(db: Database.Database, setupId: number, work: () => Promise<void>) {
-  let tails = setupTails.get(db);
-  if (!tails) { tails = new Map(); setupTails.set(db, tails); }
+const setupTails = new WeakMap<object, Map<number, Promise<void>>>();
+async function serializeForSetup(scope: object, setupId: number, work: () => Promise<void>) {
+  let tails = setupTails.get(scope);
+  if (!tails) { tails = new Map(); setupTails.set(scope, tails); }
   const previous = tails.get(setupId) ?? Promise.resolve();
   const current = previous.then(work, work);
   tails.set(setupId, current);
@@ -156,16 +150,16 @@ async function serializeForSetup(db: Database.Database, setupId: number, work: (
 
 async function deliverScoutNotification(
   client: Client,
-  db: Database.Database,
+  dependencies: ScoutNotificationDeliveryDependencies,
   notification: ScoutNotification,
   now: number,
 ): Promise<void> {
-  const resolution = resolveScoutNotification(db, notification);
+  const resolution = await resolveScoutNotification(dependencies.storage, notification);
   if (resolution.status === 'skip') {
-    skipScheduledScoutNotification(db, notification.id, resolution.reason);
+    await dependencies.storage.skip(notification.id, resolution.reason);
     return;
   }
-  if (!claimScoutNotificationAttempt(db, notification.id, now, resolution.payload)) return;
+  if (!await dependencies.storage.claimAttempt(notification.id, now, resolution.payload)) return;
   try {
     const channel = await client.channels.fetch(notification.channelId);
     if (!channel?.isSendable()) throw new Error('Scout notification channel is unavailable or not sendable.');
@@ -178,10 +172,10 @@ async function deliverScoutNotification(
       components,
       allowedMentions: { parse: [], users: resolution.payload.allowedUserIds, roles: [] },
     });
-    markScoutNotificationSent(db, notification.id, message.id, now);
+    await dependencies.storage.markSent(notification.id, message.id, now);
   } catch (error) {
-    const setup = getScoutSetupById(db, notification.setupId);
-    await reportOperationalError(client, db, {
+    const setup = await dependencies.storage.getSetup(notification.setupId);
+    await dependencies.reportError({
       guildId: setup?.guildId ?? 'unknown', setupId: notification.setupId,
       division: setup?.divisionDisplayName, action: 'Scout notification delivery',
       next: 'Delivery is uncertain and will not be retried automatically.',
@@ -191,30 +185,32 @@ async function deliverScoutNotification(
 
 export async function processDueScoutNotifications(
   client: Client,
-  db: Database.Database,
+  dependencies: ScoutNotificationDeliveryDependencies,
   now = Math.floor(Date.now() / 1_000),
   limit = 25,
 ): Promise<void> {
-  const due = listDueScoutNotifications(db, now, limit);
+  const due = await dependencies.storage.listDueNotifications(now, limit);
   for (const notification of due) {
-    await serializeForSetup(db, notification.setupId, async () => {
-      const setup = getScoutSetupById(db, notification.setupId);
+    await serializeForSetup(dependencies.operationScope, notification.setupId, async () => {
+      const setup = await dependencies.storage.getSetup(notification.setupId);
       if (!setup) {
-        await deliverScoutNotification(client, db, notification, now);
+        await deliverScoutNotification(client, dependencies, notification, now);
         return;
       }
-      const release = tryAcquireDivisionOperation(db, setup.guildId, setup.divisionKey);
+      const release = tryAcquireDivisionOperation(dependencies.operationScope, setup.guildId, setup.divisionKey);
       if (!release) return;
-      try { await deliverScoutNotification(client, db, notification, now); }
+      try { await deliverScoutNotification(client, dependencies, notification, now); }
       finally { release(); }
     });
   }
 }
 
-export async function reportUncertainScoutNotifications(client: Client, db: Database.Database): Promise<void> {
-  for (const notification of listAttemptedScoutNotifications(db)) {
-    const setup = getScoutSetupById(db, notification.setupId);
-    await reportOperationalError(client, db, {
+export async function reportUncertainScoutNotifications(
+  dependencies: ScoutNotificationDeliveryDependencies,
+): Promise<void> {
+  for (const notification of await dependencies.storage.listAttemptedNotifications()) {
+    const setup = await dependencies.storage.getSetup(notification.setupId);
+    await dependencies.reportError({
       guildId: setup?.guildId ?? 'unknown', setupId: notification.setupId,
       division: setup?.divisionDisplayName, action: 'Scout notification recovery',
       next: `Notification ${notification.kind} is delivery-uncertain and was not resent.`,
@@ -222,12 +218,15 @@ export async function reportUncertainScoutNotifications(client: Client, db: Data
   }
 }
 
-export async function startScoutNotificationWorker(client: Client, db: Database.Database) {
-  await reportUncertainScoutNotifications(client, db);
-  await processDueScoutNotifications(client, db);
+export async function startScoutNotificationWorker(
+  client: Client,
+  dependencies: ScoutNotificationDeliveryDependencies,
+) {
+  await reportUncertainScoutNotifications(dependencies);
+  await processDueScoutNotifications(client, dependencies);
   const interval = setInterval(() => {
-    void processDueScoutNotifications(client, db).catch((error) =>
-      reportOperationalError(client, db, { guildId: 'unknown', action: 'Scout notification worker' }, error));
+    void processDueScoutNotifications(client, dependencies).catch((error) =>
+      dependencies.reportError({ guildId: 'unknown', action: 'Scout notification worker' }, error));
   }, 15_000);
   interval.unref();
   return () => clearInterval(interval);

@@ -1,36 +1,38 @@
 # Implementation checkpoint
 
-Authorized scope: the B1-B7 sequence through the active B5d Scout-configuration
-slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.4,
-roadmap #1, and focused Issue #106.
+Authorized scope: the B1-B7 sequence through the active B5e Scout-notification
+delivery slice; see master tracker #95, `docs/plans/backlog-execution-plan.md` v2.5,
+roadmap #1, and focused Issue #108.
 Commit each meaningful chunk with Done, Validation and Next in the commit body.
 Apply this process to every authorized batch, preserving separate code/deployment/live evidence.
 
-## Current checkpoint — B5d Scout configuration storage boundary
+## Current checkpoint — B5e Scout notification delivery storage boundary
 
-Done: B5a-B5c / #100/#102/#104 merged through PRs #101/#103/#105, ending at
-`eda934e84913dcceebcbf843e01c32d3b6de7523`; final automated review plus PR and
-post-merge Ubuntu/Windows CI passed for each. Railway's GitHub deployment records
-reported success, while runtime/startup logs and live Discord behavior remain uninspected.
+Done: B5a-B5d / #100/#102/#104/#106 merged through PRs #101/#103/#105/#107,
+ending at `ab2d526763e45a6bec9603bd0ec52fe577311e00`. B5d's exact head received
+clean automated review, PR and post-merge Ubuntu/Windows CI passed, and Railway
+deployment record 6384747003 reported success. Runtime/startup logs and live
+Discord behavior remain uninspected.
 
-On `codex/issue-95-b5-scout-config-storage`, B5d adds a backend-independent
-asynchronous `ScoutConfigurationStore` and SQLite adapter over the existing ensure,
-authorized-role, operations-channel, timezone and emoji writes. `/scout config`, its
-role selector, reaction emoji completion and Skip Fill continuation consume the store.
-Scout creation, cancellation, roster, publication, notifications, recovery and
-authorization remain on the transitional SQLite handle for later coherent slices.
+On `codex/issue-95-b5-scout-notification-delivery`, B5e adds an asynchronous
+`ScoutNotificationDeliveryStore` and SQLite adapter for due/attempted notification
+reads, current setup/roster/Host/coordination/event resolution, durable delivery
+claim, skip and sent confirmation. The worker consumes that contract, uses the
+shared operation scope for per-setup/division exclusion, and receives operational
+reporting as a dependency instead of receiving the SQLite handle.
 
-Validation: 282 tests pass locally, including asynchronous configuration creation,
-all existing mutation categories while preserving independent fields, and a delayed
-command, role-select and Skip Fill acknowledgement/write ordering. Both typechecks,
-build, dependency audit and diff check pass. Eighteen non-test command/service files
-still import `better-sqlite3`; B5d does not claim the application is Postgres-ready.
+Validation: 284 tests pass locally, covering asynchronous adapter calls, delayed
+claim-before-send ordering, sent confirmation after Discord success,
+attempted-delivery non-retry reporting, same-setup serialization, and independent
+progress for different setups. Both typechecks, build, dependency audit and diff
+check pass. Seventeen non-test command/service files still import `better-sqlite3`;
+B5e does not claim the application is Postgres-ready.
 
-Next: require final-head review plus Ubuntu/Windows CI on PR #107, resolve any findings,
+Next: run all local gates, open the focused PR, resolve final-head review and CI,
 then merge only the unchanged reviewed commit under the standing authorization.
-Do not change Scout behavior, convert its transaction-heavy lifecycle, add a Postgres
-driver, provision infrastructure, change production configuration, or cut over
-persistence in this slice.
+Do not split scheduling from its existing lifecycle transactions, convert roster
+mutations, add a Postgres driver, provision infrastructure, change production
+configuration, or cut over persistence in this slice.
 
 ## Previous checkpoint — recovered-post management merged and startup verified
 
