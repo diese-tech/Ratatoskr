@@ -9,5 +9,6 @@ export * from './repositories/scoutCoordination.js';
 export * from './repositories/scoutEvents.js';
 export * from './repositories/scoutGameHosts.js';
 export * from './repositories/scoutNotifications.js';
+export * from './repositories/scoutLifecycleCleanups.js';
 export * from './repositories/seasons.js';
 export * from './types.js';

@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import {
   ensureScoutReadinessCard,
   getScoutCompletion,
+  getScoutLifecycleCleanup,
   getScoutSetupById,
   listScoutReadinessSetupIds,
   listScoutRosterSlots,
@@ -18,6 +19,9 @@ export function createSqliteScoutReadinessCardStore(db: Database.Database): Scou
     },
     async getCompletion(setupId) {
       return getScoutCompletion(db, setupId);
+    },
+    async getLifecycleCleanup(setupId) {
+      return getScoutLifecycleCleanup(db, setupId);
     },
     async listSignups(setupId) {
       return listScoutSignups(db, setupId);

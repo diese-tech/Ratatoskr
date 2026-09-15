@@ -15,6 +15,8 @@ import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } fr
 import { reportOperationalError } from './services/operationalErrors.js';
 import { handleInteractionError } from './services/interactionErrors.js';
 import { startScoutNotificationWorker } from './services/scoutNotifications.js';
+import { processDueScoutLifecycleCleanups } from './services/scoutLifecycleCleanup.js';
+import { sqliteScoutLifecycleCleanupDependencies } from './services/scoutLifecycleCleanupCompatibility.js';
 import { refreshScoutStatusCardSafely, type ScoutCardDependencies } from './services/scoutCardLifecycle.js';
 import type { ScoutSignupDependencies } from './services/scoutSignups.js';
 
@@ -103,9 +105,16 @@ client.once('clientReady', async () => {
   console.log('Finished scout posts reconciled.');
   await reconcileScoutControlPanels(client, db);
   console.log('Scout control panels reconciled.');
+  const scoutLifecycleCleanupDependencies = sqliteScoutLifecycleCleanupDependencies(
+    client,
+    db,
+    storage.scoutLifecycleCleanup,
+    storage.operationScope,
+  );
   stopScoutNotificationWorker = await startScoutNotificationWorker(client, {
     storage: storage.scoutNotificationDelivery,
     operationScope: storage.operationScope,
+    beforeNotifications: () => processDueScoutLifecycleCleanups(scoutLifecycleCleanupDependencies),
     reportError: async (context, error) => {
       await reportOperationalError(client, db, context, error);
     },

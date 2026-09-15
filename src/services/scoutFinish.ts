@@ -1,7 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, RESTJSONErrorCodes,
   type ButtonInteraction, type Client } from 'discord.js';
 import type Database from 'better-sqlite3';
-import { finishScoutSetupIfVersion, getScoutCompletion, getScoutSetupById, listPendingScoutCompletions,
+import { finishScoutSetupIfVersion, getScoutCompletion, getScoutLifecycleCleanup, getScoutSetupById, listPendingScoutCompletions,
   listScoutGameHosts, listScoutRosterSlots, markScoutCompletionReconciled, type ScoutSetup } from '../db/index.js';
 import { canManageScoutOperationsSetup } from './scoutCancel.js';
 import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
@@ -45,13 +45,24 @@ async function finishPost(
 }
 
 /** Only edits original posts. A lost edit response is safe to retry; no send is needed. */
-export async function reconcileFinishedScoutPost(client: Client, db: Database.Database, setupId: number): Promise<string | undefined> {
+export async function reconcileFinishedScoutPost(
+  client: Client,
+  db: Database.Database,
+  setupId: number,
+  options: { reportFailure?: boolean; refreshStatusCard?: boolean } = {},
+): Promise<string | undefined> {
   const setup = getScoutSetupById(db, setupId);
   const completion = getScoutCompletion(db, setupId);
   if (!setup || !completion) return undefined;
+  const lifecycleCleanup = getScoutLifecycleCleanup(db, setupId);
   try {
     if (!completion.posts_reconciled) {
-      const finished = `✅ **This scout is finished. Roster changes are closed.**`;
+      const finished = [
+        '✅ **This scout is finished. Roster changes are closed.**',
+        lifecycleCleanup?.action === 'finished'
+          ? `Finished by <@${lifecycleCleanup.actorUserId}> automatically.`
+          : '',
+      ].filter(Boolean).join('\n');
       await finishPost(client, setup, setup.signupChannelId, setup.signupMessageId,
         `${renderScoutSignupPost(setup)}\n\n${finished}`,
         [scoutResultLinkRow(setup, 'View final roster')]);
@@ -61,11 +72,12 @@ export async function reconcileFinishedScoutPost(client: Client, db: Database.Da
       markScoutCompletionReconciled(db, setupId);
     }
   } catch (error) {
+    if (options.reportFailure === false) throw error;
     const report = await reportOperationalError(client, db, { guildId: setup.guildId, setupId,
       division: setup.divisionDisplayName, action: 'Finished Scout post cleanup' }, error);
     return operationalErrorGuidance(report);
   } finally {
-    await refreshScoutStatusCardSafely(client, db, setupId);
+    if (options.refreshStatusCard !== false) await refreshScoutStatusCardSafely(client, db, setupId);
   }
   return undefined;
 }

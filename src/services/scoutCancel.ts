@@ -19,6 +19,7 @@ import {
   getDivisionByKey,
   listDivisions,
   getScoutConfig,
+  getScoutLifecycleCleanup,
   getScoutSetupById,
   listCancelledScoutSetupsNeedingSignupPostReconciliation,
   listCancellableScoutSetups,
@@ -90,14 +91,22 @@ export async function reconcileCancelledScoutSignupPost(
   client: Client,
   db: Database.Database,
   setup: ScoutSetup,
+  options: { reportFailure?: boolean; refreshStatusCard?: boolean } = {},
 ): Promise<string | undefined> {
+  const lifecycleCleanup = getScoutLifecycleCleanup(db, setup.id);
   try {
     try {
       const channel = await client.channels.fetch(setup.signupChannelId);
       if (!channel?.isTextBased() || !setup.signupMessageId) throw new Error('The original signup post is unavailable.');
       const message = await channel.messages.fetch(setup.signupMessageId);
       await message.edit({
-        content: `${renderScoutSignupPost(setup)}\n\n🚫 **This scout setup was cancelled.**`,
+        content: [
+          renderScoutSignupPost(setup),
+          '🚫 **This scout setup was cancelled.**',
+          lifecycleCleanup?.action === 'cancelled'
+            ? `Cancelled by <@${lifecycleCleanup.actorUserId}> automatically.`
+            : '',
+        ].filter(Boolean).join('\n\n'),
         components: [],
         allowedMentions: { parse: [] },
       });
@@ -114,10 +123,11 @@ export async function reconcileCancelledScoutSignupPost(
     }
     return undefined;
   } catch (error) {
+    if (options.reportFailure === false) throw error;
     const report = await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout cancellation recovery' }, error);
     return operationalErrorGuidance(report);
   } finally {
-    await refreshScoutStatusCardSafely(client, db, setup.id);
+    if (options.refreshStatusCard !== false) await refreshScoutStatusCardSafely(client, db, setup.id);
   }
 }
 

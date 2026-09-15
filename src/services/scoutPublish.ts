@@ -155,15 +155,26 @@ async function attachRecoveredScoutResult(
 export async function reconcilePendingScoutPublishes(client: Client, db: Database.Database): Promise<void> {
   for (const setup of listScoutPublishesNeedingReconciliation(db)) {
     try {
-      const resultMessage = await findRecoverableResultMessage(client, setup);
-      if (!resultMessage) {
-        throw new Error('Publication is claimed but the result send is delivery-uncertain; no automatic resend was attempted.');
-      }
-      await attachRecoveredScoutResult(client, db, setup, resultMessage);
+      await reconcileScoutPublishedDelivery(client, db, setup.id);
     } catch (error) {
       await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout publication recovery' }, error);
     }
   }
+}
+
+export async function reconcileScoutPublishedDelivery(
+  client: Client,
+  db: Database.Database,
+  setupId: number,
+): Promise<void> {
+  const setup = getScoutSetupById(db, setupId);
+  if (!setup || setup.status !== 'published'
+    || (setup.resultMessageId && setup.signupPostReconciled)) return;
+  const resultMessage = await findRecoverableResultMessage(client, setup);
+  if (!resultMessage) {
+    throw new Error('Publication is claimed but the result send is delivery-uncertain; no automatic resend was attempted.');
+  }
+  await attachRecoveredScoutResult(client, db, setup, resultMessage);
 }
 
 export function managementRow(setupId: number, version: number) {

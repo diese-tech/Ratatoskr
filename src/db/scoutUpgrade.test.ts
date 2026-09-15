@@ -21,7 +21,7 @@ function withoutFoundationSlotColumns(rows: unknown[]): unknown[] {
   });
 }
 
-for (const version of [14, 15, 16, 17]) test(`v${version} disk upgrade preserves active, pending and historical Scout routing and rows`, () => {
+for (const version of [14, 15, 16, 17, 18]) test(`v${version} disk upgrade preserves active, pending and historical Scout routing and rows`, () => {
   const directory = mkdtempSync(join(tmpdir(), 'ratatoskr-upgrade-'));
   const path = join(directory, `v${version}.db`);
   const legacy = new Database(path);
@@ -53,6 +53,9 @@ for (const version of [14, 15, 16, 17]) test(`v${version} disk upgrade preserves
           index === 4 || index === 6 ? 1 : 0,
         );
       legacy.prepare("INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, 'player', 'solo')").run(id);
+      if (version >= 18) {
+        legacy.prepare("INSERT INTO scout_coordination (setup_id, organizer_user_id) VALUES (?, 'staff')").run(id);
+      }
       if (['roster_ready', 'published'].includes(status)) {
         legacy.prepare("INSERT INTO scout_roster_slots (setup_id, game_number, team, role, user_id) VALUES (?, 1, 'team_one', 'solo', 'player')").run(id);
       }
@@ -76,7 +79,7 @@ for (const version of [14, 15, 16, 17]) test(`v${version} disk upgrade preserves
   try {
     const upgradedRows = tables.map((table) => {
       const rows = upgraded.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
-      return table === 'scout_roster_slots' ? withoutFoundationSlotColumns(rows) : rows;
+      return table === 'scout_roster_slots' && version < 18 ? withoutFoundationSlotColumns(rows) : rows;
     });
     assert.deepEqual(upgradedRows, snapshot);
     if (version === 14) assert.deepEqual(upgraded.prepare('SELECT * FROM scout_roster_updates').all(), []);
@@ -104,6 +107,8 @@ for (const version of [14, 15, 16, 17]) test(`v${version} disk upgrade preserves
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 16').get());
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 17').get());
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 18').get());
+    assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 19').get());
+    assert.deepEqual(upgraded.prepare('SELECT * FROM scout_lifecycle_cleanups').all(), []);
     assert.deepEqual(upgraded.pragma('foreign_key_check'), []);
     assert.equal((upgraded.pragma('integrity_check') as any[])[0].integrity_check, 'ok');
   } finally {

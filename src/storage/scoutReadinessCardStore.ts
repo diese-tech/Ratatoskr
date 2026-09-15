@@ -1,12 +1,13 @@
 import type { ScoutCompletion } from '../db/repositories/scoutCompletions.js';
 import type { ScoutReadinessCard } from '../db/repositories/scoutReadinessCards.js';
-import type { ScoutRosterSlotRecord, ScoutSetup, ScoutSignup } from '../db/types.js';
+import type { ScoutLifecycleCleanup, ScoutRosterSlotRecord, ScoutSetup, ScoutSignup } from '../db/types.js';
 
 export type ScoutReadinessCardPatch = Partial<Omit<ScoutReadinessCard, 'setup_id'>>;
 
 export interface ScoutReadinessCardStore {
   getSetup(setupId: number): Promise<ScoutSetup | undefined>;
   getCompletion(setupId: number): Promise<ScoutCompletion | undefined>;
+  getLifecycleCleanup(setupId: number): Promise<ScoutLifecycleCleanup | undefined>;
   listSignups(setupId: number): Promise<ScoutSignup[]>;
   listRosterSlots(setupId: number): Promise<ScoutRosterSlotRecord[]>;
   listWithdrawnUserIds(setupId: number): Promise<string[]>;

@@ -21,6 +21,7 @@ import {
 import { SCOUT_ROLES, SCOUT_TEAMS } from '../domain/index.js';
 import {
   processDueScoutNotifications,
+  processScoutNotificationWorkerTick,
   reportUncertainScoutNotifications,
   resolveScoutNotification,
 } from './scoutNotifications.js';
@@ -306,4 +307,18 @@ test('publication after the T-30 cutoff records a durable skipped reminder', () 
   } finally {
     closeDatabase(db);
   }
+});
+
+test('the shared worker processes lifecycle deadlines before due notifications', async () => {
+  const order: string[] = [];
+  const storage = {
+    async listDueNotifications() { order.push('notifications'); return []; },
+  } as unknown as ScoutNotificationDeliveryStore;
+  await processScoutNotificationWorkerTick({} as Client, {
+    storage,
+    operationScope: {},
+    beforeNotifications: async () => { order.push('cleanup'); },
+    reportError: async () => undefined,
+  }, 12_800);
+  assert.deepEqual(order, ['cleanup', 'notifications']);
 });
