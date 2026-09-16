@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Collection, MessageFlags, type ButtonInteraction, type Client, type UserSelectMenuInteraction, type StringSelectMenuInteraction } from 'discord.js';
 import { openDatabase, upsertDivision, createScoutSetup, setScoutSetupSignupMessage,
+  closeDueScoutSetup,
   listScoutRosterSlots, getScoutSetupById, tryCreateInitialScoutRoster, addScoutSignup,
   claimScoutPublish, setScoutResultMessage, getScoutRosterUpdate,
   replacePublishedScoutRosterSlotIfVersion, listDivisionScoutLifecycleBlockers, expandScoutRosterToTwoGamesIfVersion,
@@ -113,6 +114,44 @@ test('first publication sends a separate roster into signups and preserves the o
     await handleScoutPublishButton(retry as unknown as ButtonInteraction, f.db);
     assert.equal(f.messages.size, 2, 'a stale confirmation cannot create another roster');
   } finally { f.db.close(); }
+});
+
+test('startup roster recovery does not send a queued notice after automatic finish', async () => {
+  const f = publishedFixture();
+  try {
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    f.db.prepare(`INSERT INTO scout_roster_updates
+      (setup_id, version, notice, message_reconciled)
+      VALUES (?, ?, 'Stale queued notice', 1)`).run(setup.id, setup.version);
+    assert.equal(closeDueScoutSetup(f.db, setup.id, setup.startAt + 10_800, 'bot').status, 'finished');
+    const before = f.messages.size;
+
+    await reconcilePendingScoutRosterUpdates(f.client, f.db);
+
+    assert.equal(f.messages.size, before);
+    assert.equal(getScoutRosterUpdate(f.db, setup.id), undefined);
+  } finally {
+    f.db.close();
+  }
+});
+
+test('startup roster recovery does not send a queued notice past an unprocessed deadline', async () => {
+  const f = publishedFixture();
+  try {
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    f.db.prepare('UPDATE scout_setups SET start_at = 1 WHERE id = ?').run(setup.id);
+    f.db.prepare(`INSERT INTO scout_roster_updates
+      (setup_id, version, notice, message_reconciled)
+      VALUES (?, ?, 'Stale queued notice', 1)`).run(setup.id, setup.version);
+    const before = f.messages.size;
+
+    await reconcilePendingScoutRosterUpdates(f.client, f.db);
+
+    assert.equal(f.messages.size, before);
+    assert.equal(getScoutRosterUpdate(f.db, setup.id), undefined);
+  } finally {
+    f.db.close();
+  }
 });
 
 test('published Swap opens a private selector with exactly one acknowledgement', async () => {

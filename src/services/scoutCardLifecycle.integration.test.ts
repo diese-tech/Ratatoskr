@@ -20,11 +20,13 @@ import {
 import { refreshScoutStatusCard as refreshScoutStatusCardWithDependencies } from './scoutCardLifecycle.js';
 import { refreshScoutStatusCard, refreshScoutStatusCardSafely, reconcileScoutStatusCards } from './scoutCardCompatibility.js';
 import { reportOperationalError } from './operationalErrors.js';
-import { createSqliteScoutReadinessCardStore, createSqliteScoutSignupStore } from '../storage/index.js';
+import { createSqliteScoutLifecycleCleanupStore, createSqliteScoutReadinessCardStore, createSqliteScoutSignupStore } from '../storage/index.js';
 import { handleScoutReviewButton } from './scoutReview.js';
 import { handleScoutPublishButton, handleScoutPublishedSlotSelect, handleScoutPublishedUserSelect } from './scoutPublish.js';
 import { handleScoutCancelButton } from './scoutCancel.js';
 import { handleScoutFinishButton, reconcileFinishedScoutPosts } from './scoutFinish.js';
+import { processDueScoutLifecycleCleanups } from './scoutLifecycleCleanup.js';
+import { sqliteScoutLifecycleCleanupDependencies } from './scoutLifecycleCleanupCompatibility.js';
 
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
@@ -140,6 +142,146 @@ test('creation shows open seats and reactions promote the same working card in p
     assert.match(ready.content, /9\/10 seated/);
     assert.match(ready.content, /needs Support/);
   } finally { f.db.close(); }
+});
+
+test('automatic cancellation puts the existing Scout Ops card in its final attributed state without pinging', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    const cleanup = createSqliteScoutLifecycleCleanupStore(f.db);
+
+    assert.equal(
+      (await cleanup.closeDueSetup(setup.id, setup.startAt + 10_800, 'bot')).status,
+      'cancelled',
+    );
+    f.db.prepare('UPDATE scout_setups SET signup_post_reconciled = 1 WHERE id = ?').run(setup.id);
+    await cleanup.markDiscordReconciled(setup.id, setup.startAt + 10_800);
+    await refreshScoutStatusCard(f.client, f.db, setup.id);
+
+    assert.equal(f.ops.all.size, 1);
+    assert.match(card.content, /Cancelled by <@bot> automatically\./);
+    assert.doesNotMatch(card.content, /automatically at/);
+    assert.doesNotMatch(card.content, /<@staff>/);
+    assert.deepEqual(card.components, []);
+  } finally {
+    f.db.close();
+  }
+});
+
+test('automatic finish keeps the current finished-by card presentation without timing filler', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    f.db.prepare(`UPDATE scout_setups
+      SET status = 'published', result_message_id = 'roster', signup_post_reconciled = 1
+      WHERE id = ?`).run(setup.id);
+    const cleanup = createSqliteScoutLifecycleCleanupStore(f.db);
+
+    assert.equal(
+      (await cleanup.closeDueSetup(setup.id, setup.startAt + 10_800, 'bot')).status,
+      'finished',
+    );
+    f.db.prepare('UPDATE scout_completions SET posts_reconciled = 1 WHERE setup_id = ?').run(setup.id);
+    await cleanup.markDiscordReconciled(setup.id, setup.startAt + 10_800);
+    await refreshScoutStatusCard(f.client, f.db, setup.id);
+
+    assert.match(card.content, /Finished by <@bot> automatically\./);
+    assert.doesNotMatch(card.content, /automatically at/);
+    assert.doesNotMatch(card.content, /<@staff>/);
+  } finally {
+    f.db.close();
+  }
+});
+
+test('automatic cancellation edits existing Discord surfaces without sending a new notification', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const before = f.sent.length;
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    f.addMember('late-signup');
+    await f.signupDependencies.storage.addSignup(setup.id, 'late-signup', 'solo');
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 0);
+    const storage = createSqliteScoutLifecycleCleanupStore(f.db);
+
+    await processDueScoutLifecycleCleanups(
+      sqliteScoutLifecycleCleanupDependencies(f.client, f.db, storage, f.db),
+      setup.startAt + 10_800,
+    );
+
+    assert.equal(f.sent.length, before);
+    assert.match(f.signups.all.get(setup.signupMessageId)!.content, /Cancelled by <@bot> automatically\./);
+    assert.match(f.ops.all.first()!.content, /Cancelled by <@bot> automatically\./);
+    assert.match(f.ops.all.first()!.content, /1\/10 unique eligible players/);
+    assert.deepEqual(f.ops.all.first()!.components, []);
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 1);
+    assert.equal((await storage.getCleanup(setup.id))?.discordState, 'reconciled');
+  } finally {
+    f.db.close();
+  }
+});
+
+test('automatic finish completes pending roster repair without sending its queued notice', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    const roster = await f.signups.send({ content: 'published roster', components: [], allowedMentions: { parse: [] } });
+    f.db.prepare(`UPDATE scout_setups
+      SET status = 'published', result_message_id = ?, signup_post_reconciled = 1
+      WHERE id = ?`).run(roster.id, setup.id);
+    f.db.prepare(`INSERT INTO scout_roster_updates
+      (setup_id, version, notice) VALUES (?, ?, 'Queued roster change notice')`).run(setup.id, setup.version);
+    const before = f.sent.length;
+    const storage = createSqliteScoutLifecycleCleanupStore(f.db);
+
+    await processDueScoutLifecycleCleanups(
+      sqliteScoutLifecycleCleanupDependencies(f.client, f.db, storage, f.db),
+      setup.startAt + 10_800,
+    );
+
+    assert.equal(f.sent.length, before);
+    assert.equal(f.db.prepare('SELECT 1 FROM scout_roster_updates WHERE setup_id = ?').get(setup.id), undefined);
+    assert.match(roster.content, /Finished by <@bot> automatically\./);
+    assert.match(f.signups.all.get(setup.signupMessageId)!.content, /Finished by <@bot> automatically\./);
+    assert.match(f.ops.all.first()!.content, /Finished by <@bot> automatically\./);
+    assert.equal((await storage.getCleanup(setup.id))?.discordState, 'reconciled');
+  } finally {
+    f.db.close();
+  }
+});
+
+test('automatic finish retains an uncertain roster notice marker for operator recovery', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    const roster = await f.signups.send({ content: 'published roster', components: [], allowedMentions: { parse: [] } });
+    f.db.prepare(`UPDATE scout_setups
+      SET status = 'published', result_message_id = ?, signup_post_reconciled = 1
+      WHERE id = ?`).run(roster.id, setup.id);
+    f.db.prepare(`INSERT INTO scout_roster_updates
+      (setup_id, version, notice, message_reconciled, notice_attempted)
+      VALUES (?, ?, 'Uncertain roster change notice', 1, 1)`).run(setup.id, setup.version);
+    const before = f.sent.length;
+    const storage = createSqliteScoutLifecycleCleanupStore(f.db);
+    const dependencies = sqliteScoutLifecycleCleanupDependencies(f.client, f.db, storage, f.db);
+
+    await processDueScoutLifecycleCleanups(dependencies, setup.startAt + 10_800);
+    await processDueScoutLifecycleCleanups(dependencies, setup.startAt + 10_815);
+
+    assert.ok(getScoutCompletion(f.db, setup.id));
+    assert.equal(f.sent.length, before);
+    assert.ok(f.db.prepare('SELECT 1 FROM scout_roster_updates WHERE setup_id = ?').get(setup.id));
+    assert.equal((await storage.getCleanup(setup.id))?.discordState, 'reconciled');
+    assert.match(roster.content, /Finished by <@bot> automatically\./);
+  } finally {
+    f.db.close();
+  }
 });
 
 test('a recovered past-dated signup card can officially cancel its setup and keep historical counts', async () => {

@@ -17,6 +17,7 @@ type NotificationResolution =
 export type ScoutNotificationDeliveryDependencies = {
   storage: ScoutNotificationDeliveryStore;
   operationScope: object;
+  beforeNotifications?: (now: number) => Promise<boolean | void>;
   reportError: (context: OperationContext, error: unknown) => Promise<void>;
 };
 
@@ -218,14 +219,24 @@ export async function reportUncertainScoutNotifications(
   }
 }
 
+export async function processScoutNotificationWorkerTick(
+  client: Client,
+  dependencies: ScoutNotificationDeliveryDependencies,
+  now = Math.floor(Date.now() / 1_000),
+): Promise<void> {
+  const readyForNotifications = await dependencies.beforeNotifications?.(now);
+  if (readyForNotifications === false) return;
+  await processDueScoutNotifications(client, dependencies, now);
+}
+
 export async function startScoutNotificationWorker(
   client: Client,
   dependencies: ScoutNotificationDeliveryDependencies,
 ) {
   await reportUncertainScoutNotifications(dependencies);
-  await processDueScoutNotifications(client, dependencies);
+  await processScoutNotificationWorkerTick(client, dependencies);
   const interval = setInterval(() => {
-    void processDueScoutNotifications(client, dependencies).catch((error) =>
+    void processScoutNotificationWorkerTick(client, dependencies).catch((error) =>
       dependencies.reportError({ guildId: 'unknown', action: 'Scout notification worker' }, error));
   }, 15_000);
   interval.unref();

@@ -15,6 +15,8 @@ import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } fr
 import { reportOperationalError } from './services/operationalErrors.js';
 import { handleInteractionError } from './services/interactionErrors.js';
 import { startScoutNotificationWorker } from './services/scoutNotifications.js';
+import { processDueScoutLifecycleCleanups } from './services/scoutLifecycleCleanup.js';
+import { sqliteScoutLifecycleCleanupDependencies } from './services/scoutLifecycleCleanupCompatibility.js';
 import { refreshScoutStatusCardSafely, type ScoutCardDependencies } from './services/scoutCardLifecycle.js';
 import type { ScoutSignupDependencies } from './services/scoutSignups.js';
 
@@ -93,6 +95,14 @@ client.once('clientReady', async () => {
   console.log('Pending scout signup posts reconciled.');
   await reconcilePendingScoutPublishes(client, db);
   console.log('Pending scout publishes reconciled.');
+  const scoutLifecycleCleanupDependencies = sqliteScoutLifecycleCleanupDependencies(
+    client,
+    db,
+    storage.scoutLifecycleCleanup,
+    storage.operationScope,
+  );
+  await processDueScoutLifecycleCleanups(scoutLifecycleCleanupDependencies);
+  console.log('Due scout lifecycles reconciled.');
   await reconcilePendingScoutRosterUpdates(client, db);
   console.log('Pending published roster updates reconciled.');
   await reconcileActiveScoutSignups(client, scoutSignupDependencies);
@@ -106,6 +116,7 @@ client.once('clientReady', async () => {
   stopScoutNotificationWorker = await startScoutNotificationWorker(client, {
     storage: storage.scoutNotificationDelivery,
     operationScope: storage.operationScope,
+    beforeNotifications: (now) => processDueScoutLifecycleCleanups(scoutLifecycleCleanupDependencies, now),
     reportError: async (context, error) => {
       await reportOperationalError(client, db, context, error);
     },

@@ -513,4 +513,43 @@ export const migrations: Migration[] = [
         ON scout_notifications(setup_id, kind, game_number, attempted_at);
     `,
   },
+  {
+    id: 19,
+    name: 'scout_automatic_lifecycle_cleanup',
+    sql: `
+      CREATE TABLE scout_lifecycle_cleanups (
+        setup_id INTEGER PRIMARY KEY REFERENCES scout_setups(id) ON DELETE CASCADE,
+        action TEXT NOT NULL CHECK (action IN ('cancelled', 'finished')),
+        status_before TEXT NOT NULL CHECK (status_before IN ('open', 'roster_ready', 'published')),
+        reason TEXT NOT NULL CHECK (reason = 'automatic_deadline'),
+        scheduled_start_at INTEGER NOT NULL,
+        deadline_at INTEGER NOT NULL,
+        processed_at INTEGER NOT NULL,
+        actor_user_id TEXT NOT NULL,
+        discord_state TEXT NOT NULL DEFAULT 'pending' CHECK (discord_state IN ('pending', 'reconciled')),
+        discord_reconciled_at INTEGER,
+        alert_attempted_at INTEGER,
+        alert_reference TEXT,
+        last_error_at INTEGER
+      );
+
+      CREATE INDEX idx_scout_lifecycle_cleanups_discord_state
+        ON scout_lifecycle_cleanups(discord_state, deadline_at, setup_id);
+
+      CREATE TABLE scout_lifecycle_recovery_attempts (
+        setup_id INTEGER PRIMARY KEY REFERENCES scout_setups(id) ON DELETE CASCADE,
+        last_attempted_at INTEGER NOT NULL
+      );
+    `,
+  },
+  {
+    id: 20,
+    name: 'scout_lifecycle_staff_alert_delivery',
+    sql: `
+      ALTER TABLE scout_lifecycle_cleanups ADD COLUMN alert_delivered_at INTEGER;
+      ALTER TABLE scout_lifecycle_recovery_attempts ADD COLUMN alert_reference TEXT;
+      ALTER TABLE scout_lifecycle_recovery_attempts ADD COLUMN alert_attempted_at INTEGER;
+      ALTER TABLE scout_lifecycle_recovery_attempts ADD COLUMN alert_delivered_at INTEGER;
+    `,
+  },
 ];

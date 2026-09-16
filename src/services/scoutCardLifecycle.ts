@@ -75,13 +75,18 @@ async function cardView(
   unavailable?: string,
   signupEligibility?: ScoutSignupEligibility,
 ) {
-  const completion = await storage.getCompletion(setup.id);
+  const [completion, lifecycleCleanup] = await Promise.all([
+    storage.getCompletion(setup.id),
+    storage.getLifecycleCleanup(setup.id),
+  ]);
   if (completion) {
     return {
       content: [
         `**✓ ${setup.divisionDisplayName} Scout finished**`,
         `<t:${setup.startAt}:t>`,
-        `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>.`,
+        lifecycleCleanup?.action === 'finished'
+          ? `Finished by <@${completion.finished_by}> automatically.`
+          : `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>.`,
         completion.posts_reconciled ? '' : 'Discord post cleanup is pending. Retry after access is restored.',
       ].filter(Boolean).join('\n'),
       components: completion.posts_reconciled
@@ -135,12 +140,13 @@ async function cardView(
     : setup.status === 'published' ? 'published' : 'cancelled';
   const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
   return { content: [
-    kind === 'control' ? `<@${setup.createdBy}>` : '',
+    kind === 'control' && !terminal ? `<@${setup.createdBy}>` : '',
     `**${setup.divisionDisplayName} Scout ${status}**`,
     `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
     setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
     unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
     readiness,
+    lifecycleCleanup?.action === 'cancelled' ? `Cancelled by <@${lifecycleCleanup.actorUserId}> automatically.` : '',
     setup.status === 'cancelled' && !setup.signupPostReconciled ? 'Cancelled in the records; public post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
     setup.status === 'roster_ready' ? 'Review and balance the roster here, then publish it to the signup channel.' : '',
     setup.status === 'published' && setup.resultMessageId

@@ -53,6 +53,7 @@ test('unexpected failure acknowledges privately before staff lookup and reports 
 function fixture() {
   const db = openDatabase(':memory:');
   const sent: any[] = [];
+  const attempted: any[] = [];
   const roles = new Collection<string, any>([
     ['guild', { id: 'guild', permissions: new PermissionsBitField() }],
     ['staff', { id: 'staff', permissions: new PermissionsBitField() }],
@@ -71,12 +72,12 @@ function fixture() {
       ? sendAllowed ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] : []
       : target.id === 'staff' || (target.id === 'guild' && publicChannel) || (target.id === 'player' && playersAllowed)
         ? [PermissionFlagsBits.ViewChannel] : []),
-    send: async (payload: any) => { if (failSend) throw new Error('Forbidden'); sent.push(payload); },
+    send: async (payload: any) => { attempted.push(payload); if (failSend) throw new Error('Forbidden'); sent.push(payload); },
   };
   const client = { user: bot, channels: { fetch: async (id: string) => { assert.equal(id, 'staff-ops'); return missing ? null : channel; } } } as unknown as Client;
   insertManagedResource(db, { guildId: 'guild', discordResourceId: 'staff-ops', resourceType: 'text_channel', scaffoldDomain: 'server', logicalKey: 'server:channel:admin:staff_ops:text_channel' });
   insertManagedResource(db, { guildId: 'guild', discordResourceId: 'staff', resourceType: 'role', scaffoldDomain: 'server', logicalKey: 'server:role:valkyries' });
-  return { db, client, sent, channel,
+  return { db, client, sent, attempted, channel,
     set: (which: string) => { publicChannel = which === 'public'; playersAllowed = which === 'players'; sendAllowed = which !== 'denied'; failSend = which === 'failure'; missing = which === 'missing'; } };
 }
 
@@ -102,6 +103,38 @@ test('operational report shares a reference, redacts credentials and suppresses 
     assert.equal(f.sent.length, 1);
     assert.match(operationalErrorGuidance(report), /Staff were notified/);
   } finally { if (before === undefined) delete process.env.DISCORD_TOKEN; else process.env.DISCORD_TOKEN = before; f.db.close(); }
+});
+
+test('a lifecycle staff report retries failed delivery with a stable reference and nonce', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  try {
+    const context = { guildId: 'guild', action: 'Automatic Scout cancellation cleanup', setupId: 12 };
+    const options = { reference: 'lifecycle-reference', retryUndelivered: true } as const;
+    f.set('missing');
+    const failed = await reportOperationalError(f.client, f.db, context, new Error('Discord edit failed'), options);
+    assert.equal(failed.staffDelivered, false);
+    assert.equal(failed.reference, options.reference);
+
+    f.set('failure');
+    const uncertain = await reportOperationalError(f.client, f.db, context, new Error('Discord edit failed'), options);
+    assert.equal(uncertain.staffDelivered, false);
+
+    f.set('available');
+    const delivered = await reportOperationalError(f.client, f.db, context, new Error('Discord edit failed'), options);
+    assert.equal(delivered.staffDelivered, true);
+    assert.equal(failed.staffDelivered, false, 'a prior failed result stays truthful after a later retry');
+    assert.equal(delivered.reference, options.reference);
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.attempted.length, 2);
+    assert.equal(f.sent[0].enforceNonce, true);
+    assert.match(f.sent[0].nonce, /^[a-f0-9]{24}$/);
+    assert.equal(f.attempted[0].nonce, f.attempted[1].nonce);
+    assert.match(f.sent[0].content, /Reference: lifecycle-reference/);
+
+    await reportOperationalError(f.client, f.db, context, new Error('Discord edit failed'), options);
+    assert.equal(f.sent.length, 1);
+  } finally { f.db.close(); }
 });
 
 for (const failure of ['public', 'players', 'denied', 'failure', 'missing', 'wrong-guild', 'unbound']) {

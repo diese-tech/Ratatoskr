@@ -29,6 +29,8 @@ import {
   markPublishedScoutSignupPostReconciled,
   getScoutRosterUpdate,
   getScoutCompletion,
+  getScoutLifecycleCleanup,
+  SCOUT_LIFECYCLE_DELAY_SECONDS,
   listScoutRosterUpdates,
   markScoutRosterUpdateEdited,
   markScoutRosterNoticeAttempted,
@@ -155,15 +157,26 @@ async function attachRecoveredScoutResult(
 export async function reconcilePendingScoutPublishes(client: Client, db: Database.Database): Promise<void> {
   for (const setup of listScoutPublishesNeedingReconciliation(db)) {
     try {
-      const resultMessage = await findRecoverableResultMessage(client, setup);
-      if (!resultMessage) {
-        throw new Error('Publication is claimed but the result send is delivery-uncertain; no automatic resend was attempted.');
-      }
-      await attachRecoveredScoutResult(client, db, setup, resultMessage);
+      await reconcileScoutPublishedDelivery(client, db, setup.id);
     } catch (error) {
       await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Scout publication recovery' }, error);
     }
   }
+}
+
+export async function reconcileScoutPublishedDelivery(
+  client: Client,
+  db: Database.Database,
+  setupId: number,
+): Promise<void> {
+  const setup = getScoutSetupById(db, setupId);
+  if (!setup || setup.status !== 'published'
+    || (setup.resultMessageId && setup.signupPostReconciled)) return;
+  const resultMessage = await findRecoverableResultMessage(client, setup);
+  if (!resultMessage) {
+    throw new Error('Publication is claimed but the result send is delivery-uncertain; no automatic resend was attempted.');
+  }
+  await attachRecoveredScoutResult(client, db, setup, resultMessage);
 }
 
 export function managementRow(setupId: number, version: number) {
@@ -646,7 +659,12 @@ async function withPublishedDivisionGuard(
 }
 
 // Must run under the same division guard as live published edits.
-async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Database, setupId: number): Promise<void> {
+async function reconcileScoutRosterUpdateLocked(
+  client: Client,
+  db: Database.Database,
+  setupId: number,
+  options: { deliverNotice?: boolean } = {},
+): Promise<void> {
   const pending = getScoutRosterUpdate(db, setupId);
   if (!pending) return;
   const setup = getScoutSetupById(db, setupId);
@@ -665,6 +683,11 @@ async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Dat
     });
     markScoutRosterUpdateEdited(db, setupId, pending.version);
   }
+  if (options.deliverNotice === false) {
+    if (pending.notice.trim() && pending.notice_attempted) return;
+    completeScoutRosterUpdate(db, setupId, pending.version);
+    return;
+  }
   if (!pending.notice.trim()) {
     completeScoutRosterUpdate(db, setupId, pending.version);
     return;
@@ -682,8 +705,9 @@ export async function reconcileScoutPublishedPresentation(
   client: Client,
   db: Database.Database,
   setupId: number,
+  options: { deliverNotice?: boolean } = {},
 ): Promise<void> {
-  await reconcileScoutRosterUpdateLocked(client, db, setupId);
+  await reconcileScoutRosterUpdateLocked(client, db, setupId, options);
 }
 
 async function finishPublishedUpdate(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
@@ -710,7 +734,13 @@ export async function reconcilePendingScoutRosterUpdates(client: Client, db: Dat
     if (!setup) continue;
     const release = tryAcquireDivisionOperation(db, setup.guildId, setup.divisionKey);
     if (!release) continue;
-    try { await reconcileScoutRosterUpdateLocked(client, db, setup.id); }
+    try {
+      const automaticFinish = getScoutLifecycleCleanup(db, setup.id)?.action === 'finished';
+      const deadlineReached = Math.floor(Date.now() / 1_000)
+        >= setup.startAt + SCOUT_LIFECYCLE_DELAY_SECONDS;
+      await reconcileScoutRosterUpdateLocked(client, db, setup.id,
+        automaticFinish || deadlineReached ? { deliverNotice: false } : {});
+    }
     catch (error) { await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Published roster recovery' }, error); }
     finally { release(); }
   }

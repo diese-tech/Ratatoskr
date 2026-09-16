@@ -81,6 +81,23 @@ export type ScoutConfig = {
 
 export type ScoutSetupStatus = 'posting' | 'open' | 'roster_ready' | 'published' | 'cancelled' | 'posting_failed';
 
+export type ScoutLifecycleCleanup = {
+  setupId: number;
+  action: 'cancelled' | 'finished';
+  statusBefore: 'open' | 'roster_ready' | 'published';
+  reason: 'automatic_deadline';
+  scheduledStartAt: number;
+  deadlineAt: number;
+  processedAt: number;
+  actorUserId: string;
+  discordState: 'pending' | 'reconciled';
+  discordReconciledAt: number | null;
+  alertAttemptedAt: number | null;
+  alertReference: string | null;
+  alertDeliveredAt: number | null;
+  lastErrorAt: number | null;
+};
+
 export type ScoutSetup = {
   id: number;
   guildId: string;
