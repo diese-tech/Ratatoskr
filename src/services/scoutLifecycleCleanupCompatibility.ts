@@ -39,7 +39,7 @@ export function sqliteScoutLifecycleCleanupDependencies(
     },
     async reconcileFinished(setupId) {
       await reconcileScoutPublishedDelivery(client, db, setupId);
-      await reconcileScoutPublishedPresentation(client, db, setupId);
+      await reconcileScoutPublishedPresentation(client, db, setupId, { deliverNotice: false });
       await reconcileFinishedScoutPost(client, db, setupId, {
         reportFailure: false,
         refreshStatusCard: false,

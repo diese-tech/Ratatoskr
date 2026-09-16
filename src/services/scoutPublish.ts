@@ -657,7 +657,12 @@ async function withPublishedDivisionGuard(
 }
 
 // Must run under the same division guard as live published edits.
-async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Database, setupId: number): Promise<void> {
+async function reconcileScoutRosterUpdateLocked(
+  client: Client,
+  db: Database.Database,
+  setupId: number,
+  options: { deliverNotice?: boolean } = {},
+): Promise<void> {
   const pending = getScoutRosterUpdate(db, setupId);
   if (!pending) return;
   const setup = getScoutSetupById(db, setupId);
@@ -676,6 +681,10 @@ async function reconcileScoutRosterUpdateLocked(client: Client, db: Database.Dat
     });
     markScoutRosterUpdateEdited(db, setupId, pending.version);
   }
+  if (options.deliverNotice === false) {
+    completeScoutRosterUpdate(db, setupId, pending.version);
+    return;
+  }
   if (!pending.notice.trim()) {
     completeScoutRosterUpdate(db, setupId, pending.version);
     return;
@@ -693,8 +702,9 @@ export async function reconcileScoutPublishedPresentation(
   client: Client,
   db: Database.Database,
   setupId: number,
+  options: { deliverNotice?: boolean } = {},
 ): Promise<void> {
-  await reconcileScoutRosterUpdateLocked(client, db, setupId);
+  await reconcileScoutRosterUpdateLocked(client, db, setupId, options);
 }
 
 async function finishPublishedUpdate(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {

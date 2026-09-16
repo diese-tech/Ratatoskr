@@ -220,7 +220,7 @@ test('automatic cancellation edits existing Discord surfaces without sending a n
   }
 });
 
-test('automatic finish completes pending roster repair before final Discord presentation', async () => {
+test('automatic finish completes pending roster repair without sending its queued notice', async () => {
   const f = fixture();
   try {
     await ensurePostedScoutSetup(f.client, f.db, f.setup);
@@ -230,7 +230,7 @@ test('automatic finish completes pending roster repair before final Discord pres
       SET status = 'published', result_message_id = ?, signup_post_reconciled = 1
       WHERE id = ?`).run(roster.id, setup.id);
     f.db.prepare(`INSERT INTO scout_roster_updates
-      (setup_id, version, notice) VALUES (?, ?, '')`).run(setup.id, setup.version);
+      (setup_id, version, notice) VALUES (?, ?, 'Queued roster change notice')`).run(setup.id, setup.version);
     const before = f.sent.length;
     const storage = createSqliteScoutLifecycleCleanupStore(f.db);
 
