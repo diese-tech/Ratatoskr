@@ -94,6 +94,7 @@ export type ScoutLifecycleCleanup = {
   discordReconciledAt: number | null;
   alertAttemptedAt: number | null;
   alertReference: string | null;
+  alertDeliveredAt: number | null;
   lastErrorAt: number | null;
 };
 

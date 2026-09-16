@@ -59,6 +59,7 @@ test('lifecycle cleanup cancels an open Scout only at its fixed three-hour deadl
       discordReconciledAt: null,
       alertAttemptedAt: null,
       alertReference: null,
+      alertDeliveredAt: null,
       lastErrorAt: null,
     });
     assert.equal(getScoutNotificationByDedupeKey(storage.legacyDatabase, notification.dedupeKey)?.state, 'skipped');

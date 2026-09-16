@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ChannelType, PermissionFlagsBits, escapeMarkdown, type Client, type GuildTextBasedChannel } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getActiveManagedResourceByLogicalKey } from '../db/index.js';
@@ -55,23 +55,31 @@ async function validatedStaffChannel(client: Client, db: Database.Database, guil
 }
 
 /** Concise safe Discord summary; redacted error detail stays in process logs. */
-export async function reportOperationalError(client: Client, db: Database.Database, context: OperationContext, error: unknown): Promise<Report> {
+export async function reportOperationalError(
+  client: Client,
+  db: Database.Database,
+  context: OperationContext,
+  error: unknown,
+  options?: { reference: string; retryUndelivered: true },
+): Promise<Report> {
   const failure = error instanceof Error ? error : new Error(String(error));
   const code = (failure as Error & { code?: unknown }).code;
-  const key = `${context.guildId}:${context.action}:${context.setupId ?? ''}:${failure.name}:${String(code ?? '')}`;
+  const key = `${context.guildId}:${context.action}:${context.setupId ?? ''}:${failure.name}:${String(code ?? '')}:${options?.reference ?? ''}`;
   let records = recent.get(db);
   if (!records) { records = new Map(); recent.set(db, records); }
   const previous = records.get(key);
   const repeated = previous && Date.now() - previous.at < 60_000;
-  const report = repeated ? previous : { reference: randomUUID(), staffDelivered: false, at: Date.now() };
+  const report = repeated ? previous : { reference: options?.reference ?? randomUUID(), staffDelivered: false, at: Date.now() };
   safeLog({ event: 'operation_failed', reference: report.reference, timestamp: new Date().toISOString(),
     context: { ...context, action: redactOperationalText(context.action), division: context.division ? redactOperationalText(context.division) : undefined,
       next: context.next ? redactOperationalText(context.next) : undefined },
     error: { name: redactOperationalText(failure.name), message: redactOperationalText(failure.message),
       stack: redactOperationalText(failure.stack ?? ''), code: redactOperationalText(String(code ?? '')) } });
-  if (repeated) return report;
+  if (repeated && (report.staffDelivered || !options?.retryUndelivered)) {
+    return { reference: report.reference, staffDelivered: report.staffDelivered };
+  }
   if (records.size >= 200) records.delete(records.keys().next().value!);
-  records.set(key, report); // Suppress duplicate concurrent alerts before the send.
+  records.set(key, report); // Suppress ordinary duplicate alerts before the send.
   try {
     const channel = await validatedStaffChannel(client, db, context.guildId);
     const safe = (text: string) => escapeMarkdown(redactOperationalText(text).replace(/[\r\n]/g, ' ')).slice(0, 300);
@@ -84,13 +92,15 @@ export async function reportOperationalError(client: Client, db: Database.Databa
       `Time: ${new Date().toISOString()}`,
       safe(context.next ?? 'Review the matching Railway log and current setup state before retrying.'),
       `Reference: ${report.reference}`,
-    ].filter(Boolean).join('\n'), allowedMentions: { parse: [] } });
+    ].filter(Boolean).join('\n'), allowedMentions: { parse: [] },
+      ...(options ? { nonce: createHash('sha256').update(options.reference).digest('hex').slice(0, 24), enforceNonce: true } : {}),
+    });
     report.staffDelivered = true;
   } catch (deliveryError) {
     safeLog({ event: 'staff_report_unavailable', reference: report.reference,
       reason: redactOperationalText(deliveryError instanceof Error ? deliveryError.message : String(deliveryError)) });
   }
-  return report;
+  return { reference: report.reference, staffDelivered: report.staffDelivered };
 }
 
 export function operationalErrorGuidance(report: Report): string {

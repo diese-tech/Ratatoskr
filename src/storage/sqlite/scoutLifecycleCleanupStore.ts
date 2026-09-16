@@ -6,8 +6,9 @@ import {
   getScoutSetupById,
   listDueScoutLifecycleSetups,
   listPendingScoutLifecycleCleanups,
+  markScoutLifecycleCleanupAlertDelivered,
   markScoutLifecycleCleanupReconciled,
-  recordScoutLifecycleCleanupAlertReference,
+  markScoutLifecycleRecoveryAlertDelivered,
   recordScoutLifecycleCleanupFailure,
   recordScoutLifecycleRecoveryAttempt,
 } from '../../db/index.js';
@@ -38,11 +39,14 @@ export function createSqliteScoutLifecycleCleanupStore(
     async recordDiscordFailure(setupId, failedAt) {
       return recordScoutLifecycleCleanupFailure(db, setupId, failedAt);
     },
-    async recordAlertReference(setupId, reference) {
-      recordScoutLifecycleCleanupAlertReference(db, setupId, reference);
+    async markDiscordAlertDelivered(setupId, reference, deliveredAt) {
+      return markScoutLifecycleCleanupAlertDelivered(db, setupId, reference, deliveredAt);
     },
-    async claimRecoveryAlert(setupId, attemptedAt, actorUserId) {
-      return claimScoutLifecycleRecoveryAlert(db, setupId, attemptedAt, actorUserId);
+    async claimRecoveryAlert(setupId, attemptedAt) {
+      return claimScoutLifecycleRecoveryAlert(db, setupId, attemptedAt);
+    },
+    async markRecoveryAlertDelivered(setupId, reference, deliveredAt, actorUserId) {
+      return markScoutLifecycleRecoveryAlertDelivered(db, setupId, reference, deliveredAt, actorUserId);
     },
     async recordRecoveryAttempt(setupId, attemptedAt) {
       recordScoutLifecycleRecoveryAttempt(db, setupId, attemptedAt);

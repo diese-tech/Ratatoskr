@@ -542,4 +542,14 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 20,
+    name: 'scout_lifecycle_staff_alert_delivery',
+    sql: `
+      ALTER TABLE scout_lifecycle_cleanups ADD COLUMN alert_delivered_at INTEGER;
+      ALTER TABLE scout_lifecycle_recovery_attempts ADD COLUMN alert_reference TEXT;
+      ALTER TABLE scout_lifecycle_recovery_attempts ADD COLUMN alert_attempted_at INTEGER;
+      ALTER TABLE scout_lifecycle_recovery_attempts ADD COLUMN alert_delivered_at INTEGER;
+    `,
+  },
 ];

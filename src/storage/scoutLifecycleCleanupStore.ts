@@ -8,8 +8,9 @@ export interface ScoutLifecycleCleanupStore {
   listPendingCleanups(limit?: number): Promise<ScoutLifecycleCleanup[]>;
   closeDueSetup(setupId: number, now: number, actorUserId: string): Promise<CloseDueScoutSetupOutcome>;
   markDiscordReconciled(setupId: number, reconciledAt: number): Promise<boolean>;
-  recordDiscordFailure(setupId: number, failedAt: number): Promise<boolean>;
-  recordAlertReference(setupId: number, reference: string): Promise<void>;
-  claimRecoveryAlert(setupId: number, attemptedAt: number, actorUserId: string): Promise<boolean>;
+  recordDiscordFailure(setupId: number, failedAt: number): Promise<string | null>;
+  markDiscordAlertDelivered(setupId: number, reference: string, deliveredAt: number): Promise<boolean>;
+  claimRecoveryAlert(setupId: number, attemptedAt: number): Promise<string | null>;
+  markRecoveryAlertDelivered(setupId: number, reference: string, deliveredAt: number, actorUserId: string): Promise<boolean>;
   recordRecoveryAttempt(setupId: number, attemptedAt: number): Promise<void>;
 }

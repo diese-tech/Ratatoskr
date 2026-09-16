@@ -58,6 +58,9 @@ export function sqliteScoutLifecycleCleanupDependencies(
     async refreshStatusCard(setupId) {
       await refreshScoutStatusCard(client, db, setupId);
     },
-    reportError: (context, error) => reportOperationalError(client, db, context, error),
+    reportError: (context, error, reference) => reportOperationalError(client, db, context, error, {
+      reference,
+      retryUndelivered: true,
+    }),
   };
 }

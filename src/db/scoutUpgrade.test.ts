@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { migrations } from './migrations.js';
 import { openDatabase } from './client.js';
+import { createScoutSetup } from './repositories/scoutSetups.js';
 
 function withoutFoundationSlotColumns(rows: unknown[]): unknown[] {
   return rows.map((item) => {
@@ -108,6 +109,7 @@ for (const version of [14, 15, 16, 17, 18]) test(`v${version} disk upgrade prese
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 17').get());
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 18').get());
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 19').get());
+    assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 20').get());
     assert.deepEqual(upgraded.prepare('SELECT * FROM scout_lifecycle_cleanups').all(), []);
     assert.deepEqual(upgraded.prepare('SELECT * FROM scout_lifecycle_recovery_attempts').all(), []);
     assert.deepEqual(upgraded.pragma('foreign_key_check'), []);
@@ -116,4 +118,48 @@ for (const version of [14, 15, 16, 17, 18]) test(`v${version} disk upgrade prese
     upgraded.close();
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('v19 lifecycle alert references remain retryable after the delivery-state upgrade', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ratatoskr-lifecycle-alert-upgrade-'));
+  const path = join(directory, 'v19.db');
+  const legacy = new Database(path);
+  try {
+    legacy.pragma('foreign_keys = ON');
+    legacy.exec('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+    for (const migration of migrations.filter((item) => item.id <= 19)) {
+      legacy.exec(migration.sql);
+      legacy.prepare('INSERT INTO schema_migrations (id, name) VALUES (?, ?)').run(migration.id, migration.name);
+    }
+    legacy.prepare("INSERT INTO divisions (guild_id, division_key, display_name) VALUES ('guild', 'vanaheim', 'Vanaheim')").run();
+    const setup = createScoutSetup(legacy, {
+      guildId: 'guild', divisionId: 1, divisionKey: 'vanaheim', divisionDisplayName: 'Vanaheim',
+      createdBy: 'organizer', signupChannelId: 'signups', resultsChannelId: 'results',
+      operationsChannelId: 'ops', divisionRoleId: 'division-role',
+      emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+      startAt: 2_000, roleLimit: 2,
+    });
+    legacy.prepare(`INSERT INTO scout_lifecycle_cleanups
+      (setup_id, action, status_before, reason, scheduled_start_at, deadline_at,
+        processed_at, actor_user_id, alert_attempted_at, alert_reference)
+      VALUES (?, 'cancelled', 'open', 'automatic_deadline', 2000, 12800,
+        12800, 'ratatoskr', 12800, 'cleanup-reference')`).run(setup.id);
+    legacy.prepare(`INSERT INTO scout_lifecycle_recovery_attempts (setup_id, last_attempted_at)
+      VALUES (?, 12800)`).run(setup.id);
+  } finally { legacy.close(); }
+
+  try {
+    const upgraded = openDatabase(path);
+    try {
+      assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 20').get());
+      assert.deepEqual(upgraded.prepare(`SELECT alert_reference, alert_delivered_at
+        FROM scout_lifecycle_cleanups`).get(), {
+        alert_reference: 'cleanup-reference', alert_delivered_at: null,
+      });
+      assert.deepEqual(upgraded.prepare(`SELECT alert_reference, alert_attempted_at, alert_delivered_at
+        FROM scout_lifecycle_recovery_attempts`).get(), {
+        alert_reference: null, alert_attempted_at: null, alert_delivered_at: null,
+      });
+    } finally { upgraded.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

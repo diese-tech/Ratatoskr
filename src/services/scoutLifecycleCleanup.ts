@@ -12,7 +12,7 @@ export type ScoutLifecycleCleanupDependencies = {
   reconcileCancelled: (setupId: number) => Promise<void>;
   reconcileFinished: (setupId: number) => Promise<void>;
   refreshStatusCard: (setupId: number) => Promise<void>;
-  reportError: (context: OperationContext, error: unknown) => Promise<{ reference: string }>;
+  reportError: (context: OperationContext, error: unknown, reference: string) => Promise<{ reference: string; staffDelivered: boolean }>;
 };
 
 async function reconcileCleanup(
@@ -35,8 +35,8 @@ async function reconcileCleanup(
       await dependencies.refreshStatusCard(setup.id);
       await dependencies.storage.markDiscordReconciled(setup.id, now);
     } catch (error) {
-      const shouldAlert = await dependencies.storage.recordDiscordFailure(setup.id, now);
-      if (shouldAlert) {
+      const reference = await dependencies.storage.recordDiscordFailure(setup.id, now);
+      if (reference) {
         const report = await dependencies.reportError({
           guildId: setup.guildId,
           setupId: setup.id,
@@ -45,8 +45,10 @@ async function reconcileCleanup(
             ? 'Automatic Scout cancellation cleanup'
             : 'Automatic Scout finish cleanup',
           next: 'Ratatoskr will retry the existing Discord post and card edits automatically.',
-        }, error);
-        await dependencies.storage.recordAlertReference(setup.id, report.reference);
+        }, error, reference);
+        if (report.staffDelivered) {
+          await dependencies.storage.markDiscordAlertDelivered(setup.id, reference, now);
+        }
       }
     }
   } finally {
@@ -77,14 +79,18 @@ export async function processDueScoutLifecycleCleanups(
         try { await dependencies.recoverPostingSetup(setup.id); } catch { /* The unresolved state is reported below. */ }
         const current = await dependencies.storage.getSetup(setup.id);
         if (current?.status === 'posting' || current?.status === 'posting_failed') {
-          if (await dependencies.storage.claimRecoveryAlert(setup.id, now, dependencies.actorUserId)) {
-            await dependencies.reportError({
+          const reference = await dependencies.storage.claimRecoveryAlert(setup.id, now);
+          if (reference) {
+            const report = await dependencies.reportError({
               guildId: setup.guildId,
               setupId: setup.id,
               division: setup.divisionDisplayName,
               action: 'Automatic Scout lifecycle recovery',
               next: 'The setup remains in publication recovery and was not automatically closed.',
-            }, new Error(`Overdue Scout setup remains ${current.status}.`));
+            }, new Error(`Overdue Scout setup remains ${current.status}.`), reference);
+            if (report.staffDelivered) {
+              await dependencies.storage.markRecoveryAlertDelivered(setup.id, reference, now, dependencies.actorUserId);
+            }
           }
           continue;
         }
