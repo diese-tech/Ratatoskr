@@ -9,6 +9,7 @@ import {
   markScoutLifecycleCleanupReconciled,
   recordScoutLifecycleCleanupAlertReference,
   recordScoutLifecycleCleanupFailure,
+  recordScoutLifecycleRecoveryAttempt,
 } from '../../db/index.js';
 import type { ScoutLifecycleCleanupStore } from '../scoutLifecycleCleanupStore.js';
 
@@ -42,6 +43,9 @@ export function createSqliteScoutLifecycleCleanupStore(
     },
     async claimRecoveryAlert(setupId, attemptedAt, actorUserId) {
       return claimScoutLifecycleRecoveryAlert(db, setupId, attemptedAt, actorUserId);
+    },
+    async recordRecoveryAttempt(setupId, attemptedAt) {
+      recordScoutLifecycleRecoveryAttempt(db, setupId, attemptedAt);
     },
   };
 }

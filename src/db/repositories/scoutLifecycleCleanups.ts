@@ -54,9 +54,20 @@ export function listPendingScoutLifecycleCleanups(
 ): ScoutLifecycleCleanup[] {
   const rows = db.prepare(`SELECT * FROM scout_lifecycle_cleanups
     WHERE discord_state = 'pending'
-    ORDER BY deadline_at, setup_id
+    ORDER BY COALESCE(last_error_at, 0), deadline_at, setup_id
     LIMIT ?`).all(limit) as ScoutLifecycleCleanupRow[];
   return rows.map(toScoutLifecycleCleanup);
+}
+
+export function recordScoutLifecycleRecoveryAttempt(
+  db: Database.Database,
+  setupId: number,
+  attemptedAt: number,
+): void {
+  db.prepare(`INSERT INTO scout_lifecycle_recovery_attempts (setup_id, last_attempted_at)
+    VALUES (?, ?)
+    ON CONFLICT(setup_id) DO UPDATE SET last_attempted_at = excluded.last_attempted_at`)
+    .run(setupId, attemptedAt);
 }
 
 export function markScoutLifecycleCleanupReconciled(
@@ -133,13 +144,15 @@ export function listDueScoutLifecycleSetups(
   now: number,
   limit = 25,
 ): ScoutSetup[] {
-  const ids = db.prepare(`SELECT id FROM scout_setups
-    WHERE start_at + ? <= ?
-      AND (status IN ('posting', 'posting_failed', 'open', 'roster_ready')
-        OR (status = 'published'
+  const ids = db.prepare(`SELECT scout_setups.id FROM scout_setups
+    LEFT JOIN scout_lifecycle_recovery_attempts AS recovery
+      ON recovery.setup_id = scout_setups.id
+    WHERE scout_setups.start_at + ? <= ?
+      AND (scout_setups.status IN ('posting', 'posting_failed', 'open', 'roster_ready')
+        OR (scout_setups.status = 'published'
           AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)))
-    ORDER BY CASE WHEN status IN ('open', 'roster_ready', 'published') THEN 0 ELSE 1 END,
-      start_at + ?, id
+    ORDER BY CASE WHEN scout_setups.status IN ('open', 'roster_ready', 'published') THEN 0 ELSE 1 END,
+      COALESCE(recovery.last_attempted_at, 0), scout_setups.start_at + ?, scout_setups.id
     LIMIT ?`).all(CLEANUP_DELAY_SECONDS, now, CLEANUP_DELAY_SECONDS, limit) as { id: number }[];
   return ids.map((row) => getScoutSetupById(db, row.id)!).filter(Boolean);
 }

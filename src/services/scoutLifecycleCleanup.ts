@@ -73,6 +73,7 @@ export async function processDueScoutLifecycleCleanups(
     }
     try {
       if (setup.status === 'posting' || setup.status === 'posting_failed') {
+        await dependencies.storage.recordRecoveryAttempt(setup.id, now);
         try { await dependencies.recoverPostingSetup(setup.id); } catch { /* The unresolved state is reported below. */ }
         const current = await dependencies.storage.getSetup(setup.id);
         if (current?.status === 'posting' || current?.status === 'posting_failed') {

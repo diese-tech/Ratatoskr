@@ -11,4 +11,5 @@ export interface ScoutLifecycleCleanupStore {
   recordDiscordFailure(setupId: number, failedAt: number): Promise<boolean>;
   recordAlertReference(setupId: number, reference: string): Promise<void>;
   claimRecoveryAlert(setupId: number, attemptedAt: number, actorUserId: string): Promise<boolean>;
+  recordRecoveryAttempt(setupId: number, attemptedAt: number): Promise<void>;
 }

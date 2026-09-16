@@ -535,6 +535,11 @@ export const migrations: Migration[] = [
 
       CREATE INDEX idx_scout_lifecycle_cleanups_discord_state
         ON scout_lifecycle_cleanups(discord_state, deadline_at, setup_id);
+
+      CREATE TABLE scout_lifecycle_recovery_attempts (
+        setup_id INTEGER PRIMARY KEY REFERENCES scout_setups(id) ON DELETE CASCADE,
+        last_attempted_at INTEGER NOT NULL
+      );
     `,
   },
 ];

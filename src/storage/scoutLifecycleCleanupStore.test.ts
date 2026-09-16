@@ -101,6 +101,66 @@ test('due lifecycle paging prioritizes closable setups ahead of retained recover
   }
 });
 
+test('posting recovery paging advances past previously attempted failures', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+  try {
+    const division = await storage.divisions.upsertDivision({
+      guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim',
+    });
+    const ids: number[] = [];
+    for (let index = 0; index < 26; index += 1) {
+      const setup = createScoutSetup(storage.legacyDatabase, {
+        guildId: 'guild', divisionId: division.id, divisionKey: division.divisionKey,
+        divisionDisplayName: division.displayName, createdBy: 'organizer', signupChannelId: 'signups',
+        resultsChannelId: 'results', operationsChannelId: 'ops', divisionRoleId: 'division-role',
+        emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+        startAt: 2_000, roleLimit: 2,
+      });
+      storage.legacyDatabase.prepare("UPDATE scout_setups SET status = 'posting_failed' WHERE id = ?")
+        .run(setup.id);
+      ids.push(setup.id);
+    }
+    const firstPage = await storage.scoutLifecycleCleanup.listDueSetups(12_800, 25);
+    assert.deepEqual(firstPage.map((setup) => setup.id), ids.slice(0, 25));
+    for (const setup of firstPage) {
+      await storage.scoutLifecycleCleanup.recordRecoveryAttempt(setup.id, 12_800);
+    }
+    assert.equal((await storage.scoutLifecycleCleanup.listDueSetups(12_815, 1))[0]?.id, ids[25]);
+  } finally {
+    await storage.close();
+  }
+});
+
+test('pending Discord cleanup paging advances past failing rows', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+  try {
+    const division = await storage.divisions.upsertDivision({
+      guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim',
+    });
+    const ids: number[] = [];
+    for (let index = 0; index < 26; index += 1) {
+      const setup = createScoutSetup(storage.legacyDatabase, {
+        guildId: 'guild', divisionId: division.id, divisionKey: division.divisionKey,
+        divisionDisplayName: division.displayName, createdBy: 'organizer', signupChannelId: 'signups',
+        resultsChannelId: 'results', operationsChannelId: 'ops', divisionRoleId: 'division-role',
+        emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+        startAt: 2_000, roleLimit: 2,
+      });
+      setScoutSetupSignupMessage(storage.legacyDatabase, setup.id, `signup-${index}`);
+      await storage.scoutLifecycleCleanup.closeDueSetup(setup.id, 12_800, 'ratatoskr');
+      ids.push(setup.id);
+    }
+    const firstPage = await storage.scoutLifecycleCleanup.listPendingCleanups(25);
+    assert.deepEqual(firstPage.map((cleanup) => cleanup.setupId), ids.slice(0, 25));
+    for (const cleanup of firstPage) {
+      await storage.scoutLifecycleCleanup.recordDiscordFailure(cleanup.setupId, 12_800);
+    }
+    assert.equal((await storage.scoutLifecycleCleanup.listPendingCleanups(1))[0]?.setupId, ids[25]);
+  } finally {
+    await storage.close();
+  }
+});
+
 test('an overdue two-game roster-ready Scout cancels as one setup', async () => {
   const storage = openApplicationStorage({ sqlitePath: ':memory:' });
   try {

@@ -109,6 +109,7 @@ for (const version of [14, 15, 16, 17, 18]) test(`v${version} disk upgrade prese
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 18').get());
     assert.ok(upgraded.prepare('SELECT id FROM schema_migrations WHERE id = 19').get());
     assert.deepEqual(upgraded.prepare('SELECT * FROM scout_lifecycle_cleanups').all(), []);
+    assert.deepEqual(upgraded.prepare('SELECT * FROM scout_lifecycle_recovery_attempts').all(), []);
     assert.deepEqual(upgraded.pragma('foreign_key_check'), []);
     assert.equal((upgraded.pragma('integrity_check') as any[])[0].integrity_check, 'ok');
   } finally {
