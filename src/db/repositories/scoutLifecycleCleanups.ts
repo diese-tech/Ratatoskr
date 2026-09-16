@@ -3,7 +3,7 @@ import type { ScoutLifecycleCleanup, ScoutSetup } from '../types.js';
 import { appendScoutEvent } from './scoutEvents.js';
 import { getScoutSetupById } from './scoutSetups.js';
 
-const CLEANUP_DELAY_SECONDS = 3 * 60 * 60;
+export const SCOUT_LIFECYCLE_DELAY_SECONDS = 3 * 60 * 60;
 
 type ScoutLifecycleCleanupRow = {
   setup_id: number;
@@ -119,7 +119,7 @@ export function claimScoutLifecycleRecoveryAlert(
   return db.transaction(() => {
     const setup = getScoutSetupById(db, setupId);
     if (!setup || !['posting', 'posting_failed'].includes(setup.status)
-      || attemptedAt < setup.startAt + CLEANUP_DELAY_SECONDS) return false;
+      || attemptedAt < setup.startAt + SCOUT_LIFECYCLE_DELAY_SECONDS) return false;
     if (db.prepare(`SELECT 1 FROM scout_events
       WHERE setup_id = ? AND event_type = 'scout_automatic_cleanup_recovery_alerted'`).get(setupId)) return false;
     appendScoutEvent(db, {
@@ -131,7 +131,7 @@ export function claimScoutLifecycleRecoveryAlert(
         reason: 'automatic_deadline',
         unresolvedStatus: setup.status,
         scheduledStartAt: setup.startAt,
-        deadlineAt: setup.startAt + CLEANUP_DELAY_SECONDS,
+        deadlineAt: setup.startAt + SCOUT_LIFECYCLE_DELAY_SECONDS,
         attemptedAt,
       },
     });
@@ -153,7 +153,7 @@ export function listDueScoutLifecycleSetups(
           AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)))
     ORDER BY CASE WHEN scout_setups.status IN ('open', 'roster_ready', 'published') THEN 0 ELSE 1 END,
       COALESCE(recovery.last_attempted_at, 0), scout_setups.start_at + ?, scout_setups.id
-    LIMIT ?`).all(CLEANUP_DELAY_SECONDS, now, CLEANUP_DELAY_SECONDS, limit) as { id: number }[];
+    LIMIT ?`).all(SCOUT_LIFECYCLE_DELAY_SECONDS, now, SCOUT_LIFECYCLE_DELAY_SECONDS, limit) as { id: number }[];
   return ids.map((row) => getScoutSetupById(db, row.id)!).filter(Boolean);
 }
 
@@ -170,7 +170,7 @@ export function closeDueScoutSetup(
   return db.transaction((): CloseDueScoutSetupOutcome => {
     const setup = getScoutSetupById(db, setupId);
     if (!setup) return { status: 'missing' };
-    const deadlineAt = setup.startAt + CLEANUP_DELAY_SECONDS;
+    const deadlineAt = setup.startAt + SCOUT_LIFECYCLE_DELAY_SECONDS;
     if (now < deadlineAt) return { status: 'not_due' };
     const existingCleanup = getScoutLifecycleCleanup(db, setupId);
     if (existingCleanup) return { status: 'already_final' };

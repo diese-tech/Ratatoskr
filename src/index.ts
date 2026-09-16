@@ -95,6 +95,14 @@ client.once('clientReady', async () => {
   console.log('Pending scout signup posts reconciled.');
   await reconcilePendingScoutPublishes(client, db);
   console.log('Pending scout publishes reconciled.');
+  const scoutLifecycleCleanupDependencies = sqliteScoutLifecycleCleanupDependencies(
+    client,
+    db,
+    storage.scoutLifecycleCleanup,
+    storage.operationScope,
+  );
+  await processDueScoutLifecycleCleanups(scoutLifecycleCleanupDependencies);
+  console.log('Due scout lifecycles reconciled.');
   await reconcilePendingScoutRosterUpdates(client, db);
   console.log('Pending published roster updates reconciled.');
   await reconcileActiveScoutSignups(client, scoutSignupDependencies);
@@ -105,12 +113,6 @@ client.once('clientReady', async () => {
   console.log('Finished scout posts reconciled.');
   await reconcileScoutControlPanels(client, db);
   console.log('Scout control panels reconciled.');
-  const scoutLifecycleCleanupDependencies = sqliteScoutLifecycleCleanupDependencies(
-    client,
-    db,
-    storage.scoutLifecycleCleanup,
-    storage.operationScope,
-  );
   stopScoutNotificationWorker = await startScoutNotificationWorker(client, {
     storage: storage.scoutNotificationDelivery,
     operationScope: storage.operationScope,

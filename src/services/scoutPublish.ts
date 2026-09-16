@@ -29,6 +29,8 @@ import {
   markPublishedScoutSignupPostReconciled,
   getScoutRosterUpdate,
   getScoutCompletion,
+  getScoutLifecycleCleanup,
+  SCOUT_LIFECYCLE_DELAY_SECONDS,
   listScoutRosterUpdates,
   markScoutRosterUpdateEdited,
   markScoutRosterNoticeAttempted,
@@ -732,7 +734,13 @@ export async function reconcilePendingScoutRosterUpdates(client: Client, db: Dat
     if (!setup) continue;
     const release = tryAcquireDivisionOperation(db, setup.guildId, setup.divisionKey);
     if (!release) continue;
-    try { await reconcileScoutRosterUpdateLocked(client, db, setup.id); }
+    try {
+      const automaticFinish = getScoutLifecycleCleanup(db, setup.id)?.action === 'finished';
+      const deadlineReached = Math.floor(Date.now() / 1_000)
+        >= setup.startAt + SCOUT_LIFECYCLE_DELAY_SECONDS;
+      await reconcileScoutRosterUpdateLocked(client, db, setup.id,
+        automaticFinish || deadlineReached ? { deliverNotice: false } : {});
+    }
     catch (error) { await reportOperationalError(client, db, { guildId: setup.guildId, setupId: setup.id, division: setup.divisionDisplayName, action: 'Published roster recovery' }, error); }
     finally { release(); }
   }
