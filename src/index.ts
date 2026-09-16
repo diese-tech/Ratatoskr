@@ -114,7 +114,7 @@ client.once('clientReady', async () => {
   stopScoutNotificationWorker = await startScoutNotificationWorker(client, {
     storage: storage.scoutNotificationDelivery,
     operationScope: storage.operationScope,
-    beforeNotifications: () => processDueScoutLifecycleCleanups(scoutLifecycleCleanupDependencies),
+    beforeNotifications: (now) => processDueScoutLifecycleCleanups(scoutLifecycleCleanupDependencies, now),
     reportError: async (context, error) => {
       await reportOperationalError(client, db, context, error);
     },

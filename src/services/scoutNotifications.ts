@@ -17,7 +17,7 @@ type NotificationResolution =
 export type ScoutNotificationDeliveryDependencies = {
   storage: ScoutNotificationDeliveryStore;
   operationScope: object;
-  beforeNotifications?: () => Promise<void>;
+  beforeNotifications?: (now: number) => Promise<boolean | void>;
   reportError: (context: OperationContext, error: unknown) => Promise<void>;
 };
 
@@ -224,7 +224,8 @@ export async function processScoutNotificationWorkerTick(
   dependencies: ScoutNotificationDeliveryDependencies,
   now = Math.floor(Date.now() / 1_000),
 ): Promise<void> {
-  await dependencies.beforeNotifications?.();
+  const readyForNotifications = await dependencies.beforeNotifications?.(now);
+  if (readyForNotifications === false) return;
   await processDueScoutNotifications(client, dependencies, now);
 }
 

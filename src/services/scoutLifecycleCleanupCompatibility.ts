@@ -1,6 +1,7 @@
 import type { Client } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
+  closeDueScoutSetup,
   getScoutSetupById,
 } from '../db/index.js';
 import type { ScoutLifecycleCleanupStore } from '../storage/index.js';
@@ -14,6 +15,7 @@ import {
   reconcileScoutPublishedDelivery,
   reconcileScoutPublishedPresentation,
 } from './scoutPublish.js';
+import { withFinalScoutReadiness } from './scoutReadiness.js';
 
 export function sqliteScoutLifecycleCleanupDependencies(
   client: Client,
@@ -26,6 +28,14 @@ export function sqliteScoutLifecycleCleanupDependencies(
     storage,
     operationScope,
     actorUserId: client.user.id,
+    async closeDueSetup(setupId, now, actorUserId) {
+      const setup = getScoutSetupById(db, setupId);
+      if (setup && ['open', 'roster_ready'].includes(setup.status)) {
+        return withFinalScoutReadiness(client, db, setupId,
+          () => closeDueScoutSetup(db, setupId, now, actorUserId));
+      }
+      return closeDueScoutSetup(db, setupId, now, actorUserId);
+    },
     async recoverPostingSetup(setupId) {
       const setup = getScoutSetupById(db, setupId);
       if (setup?.status === 'posting') await ensurePostedScoutSetup(client, db, setup);

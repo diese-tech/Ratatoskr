@@ -6,6 +6,7 @@ import test from 'node:test';
 import { createScoutSetup, listScoutEvents, setScoutSetupSignupMessage } from '../db/index.js';
 import { openApplicationStorage } from '../storage/index.js';
 import { processDueScoutLifecycleCleanups } from './scoutLifecycleCleanup.js';
+import { tryAcquireDivisionOperation } from './divisionOperation.js';
 
 test('the lifecycle worker closes and reconciles an overdue open Scout once', async () => {
   const application = openApplicationStorage({ sqlitePath: ':memory:' });
@@ -38,6 +39,46 @@ test('the lifecycle worker closes and reconciles an overdue open Scout once', as
 
     assert.deepEqual(reconciled, [`cancel:${setup.id}`, `card:${setup.id}`]);
     assert.equal((await application.scoutLifecycleCleanup.getCleanup(setup.id))?.discordState, 'reconciled');
+  } finally {
+    await application.close();
+  }
+});
+
+test('the lifecycle worker reports an overdue setup as blocked while its division lock is busy', async () => {
+  const application = openApplicationStorage({ sqlitePath: ':memory:' });
+  try {
+    const division = await application.divisions.upsertDivision({
+      guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim',
+    });
+    const setup = createScoutSetup(application.legacyDatabase, {
+      guildId: 'guild', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'organizer', signupChannelId: 'signups',
+      resultsChannelId: 'results', operationsChannelId: 'ops', divisionRoleId: 'division-role',
+      emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+      startAt: 2_000, roleLimit: 2,
+    });
+    setScoutSetupSignupMessage(application.legacyDatabase, setup.id, 'signup');
+    const release = tryAcquireDivisionOperation(
+      application.operationScope,
+      setup.guildId,
+      setup.divisionKey,
+    )!;
+    try {
+      const readyForNotifications = await processDueScoutLifecycleCleanups({
+        storage: application.scoutLifecycleCleanup,
+        operationScope: application.operationScope,
+        actorUserId: 'ratatoskr',
+        recoverPostingSetup: async () => undefined,
+        reconcileCancelled: async () => undefined,
+        reconcileFinished: async () => undefined,
+        refreshStatusCard: async () => undefined,
+        reportError: async () => ({ reference: 'unused' }),
+      }, 12_800);
+      assert.equal(readyForNotifications, false);
+      assert.equal((await application.scoutLifecycleCleanup.getSetup(setup.id))?.status, 'open');
+    } finally {
+      release();
+    }
   } finally {
     await application.close();
   }

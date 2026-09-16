@@ -203,6 +203,9 @@ test('automatic cancellation edits existing Discord surfaces without sending a n
     await ensurePostedScoutSetup(f.client, f.db, f.setup);
     const before = f.sent.length;
     const setup = getScoutSetupById(f.db, f.setup.id)!;
+    f.addMember('late-signup');
+    await f.signupDependencies.storage.addSignup(setup.id, 'late-signup', 'solo');
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 0);
     const storage = createSqliteScoutLifecycleCleanupStore(f.db);
 
     await processDueScoutLifecycleCleanups(
@@ -213,7 +216,9 @@ test('automatic cancellation edits existing Discord surfaces without sending a n
     assert.equal(f.sent.length, before);
     assert.match(f.signups.all.get(setup.signupMessageId)!.content, /Cancelled by <@bot> automatically\./);
     assert.match(f.ops.all.first()!.content, /Cancelled by <@bot> automatically\./);
+    assert.match(f.ops.all.first()!.content, /1\/10 unique eligible players/);
     assert.deepEqual(f.ops.all.first()!.components, []);
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 1);
     assert.equal((await storage.getCleanup(setup.id))?.discordState, 'reconciled');
   } finally {
     f.db.close();

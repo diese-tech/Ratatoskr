@@ -7,6 +7,7 @@ export type ScoutLifecycleCleanupDependencies = {
   storage: ScoutLifecycleCleanupStore;
   operationScope: object;
   actorUserId: string;
+  closeDueSetup?: ScoutLifecycleCleanupStore['closeDueSetup'];
   recoverPostingSetup: (setupId: number) => Promise<void>;
   reconcileCancelled: (setupId: number) => Promise<void>;
   reconcileFinished: (setupId: number) => Promise<void>;
@@ -57,15 +58,19 @@ export async function processDueScoutLifecycleCleanups(
   dependencies: ScoutLifecycleCleanupDependencies,
   now = Math.floor(Date.now() / 1_000),
   limit = 25,
-): Promise<void> {
+): Promise<boolean> {
   const due = await dependencies.storage.listDueSetups(now, limit);
+  let readyForNotifications = true;
   for (const setup of due) {
     const release = tryAcquireDivisionOperation(
       dependencies.operationScope,
       setup.guildId,
       setup.divisionKey,
     );
-    if (!release) continue;
+    if (!release) {
+      readyForNotifications = false;
+      continue;
+    }
     try {
       if (setup.status === 'posting' || setup.status === 'posting_failed') {
         try { await dependencies.recoverPostingSetup(setup.id); } catch { /* The unresolved state is reported below. */ }
@@ -83,7 +88,11 @@ export async function processDueScoutLifecycleCleanups(
           continue;
         }
       }
-      await dependencies.storage.closeDueSetup(setup.id, now, dependencies.actorUserId);
+      await (dependencies.closeDueSetup ?? dependencies.storage.closeDueSetup)(
+        setup.id,
+        now,
+        dependencies.actorUserId,
+      );
     } finally {
       release();
     }
@@ -91,4 +100,5 @@ export async function processDueScoutLifecycleCleanups(
   for (const cleanup of await dependencies.storage.listPendingCleanups(limit)) {
     await reconcileCleanup(dependencies, cleanup, now);
   }
+  return readyForNotifications;
 }
