@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createScoutSetup, listScoutEvents, setScoutSetupSignupMessage } from '../db/index.js';
+import { appendScoutEvent, createScoutSetup, listScoutEvents, setScoutSetupSignupMessage } from '../db/index.js';
 import { openApplicationStorage } from '../storage/index.js';
 import { processDueScoutLifecycleCleanups } from './scoutLifecycleCleanup.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
@@ -268,6 +268,52 @@ test('an unresolved publication recovery retries a failed staff alert before rec
     assert.equal(references.length, 2);
     assert.ok(references[0]);
     assert.equal(references[1], references[0]);
+    assert.equal(listScoutEvents(application.legacyDatabase, setup.id)
+      .filter((event) => event.eventType === 'scout_automatic_cleanup_recovery_alerted').length, 1);
+  } finally {
+    await application.close();
+  }
+});
+
+test('a legacy recovery-alert event does not suppress unconfirmed staff delivery', async () => {
+  const application = openApplicationStorage({ sqlitePath: ':memory:' });
+  try {
+    const division = await application.divisions.upsertDivision({
+      guildId: 'guild', divisionKey: 'jotunheim', displayName: 'Jotunheim',
+    });
+    const setup = createScoutSetup(application.legacyDatabase, {
+      guildId: 'guild', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'organizer', signupChannelId: 'signups',
+      resultsChannelId: 'results', operationsChannelId: 'ops', divisionRoleId: 'division-role',
+      emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+      startAt: 2_000, roleLimit: 2,
+    });
+    appendScoutEvent(application.legacyDatabase, {
+      setupId: setup.id,
+      setupVersion: setup.version,
+      eventType: 'scout_automatic_cleanup_recovery_alerted',
+      actorUserId: 'ratatoskr',
+      payload: { attemptedAt: 12_800 },
+    });
+    let alertAttempts = 0;
+    const dependencies = {
+      storage: application.scoutLifecycleCleanup,
+      operationScope: application.operationScope,
+      actorUserId: 'ratatoskr',
+      recoverPostingSetup: async () => undefined,
+      reconcileCancelled: async () => undefined,
+      reconcileFinished: async () => undefined,
+      refreshStatusCard: async () => undefined,
+      reportError: async (_context: unknown, _error: unknown, reference: string) => {
+        alertAttempts += 1;
+        return { reference, staffDelivered: true };
+      },
+    };
+
+    await processDueScoutLifecycleCleanups(dependencies, 12_860);
+    await processDueScoutLifecycleCleanups(dependencies, 12_875);
+
+    assert.equal(alertAttempts, 1);
     assert.equal(listScoutEvents(application.legacyDatabase, setup.id)
       .filter((event) => event.eventType === 'scout_automatic_cleanup_recovery_alerted').length, 1);
   } finally {

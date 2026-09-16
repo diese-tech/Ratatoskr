@@ -134,8 +134,6 @@ export function claimScoutLifecycleRecoveryAlert(
     const setup = getScoutSetupById(db, setupId);
     if (!setup || !['posting', 'posting_failed'].includes(setup.status)
       || attemptedAt < setup.startAt + SCOUT_LIFECYCLE_DELAY_SECONDS) return null;
-    if (db.prepare(`SELECT 1 FROM scout_events
-      WHERE setup_id = ? AND event_type = 'scout_automatic_cleanup_recovery_alerted'`).get(setupId)) return null;
     const row = db.prepare(`SELECT alert_reference, alert_attempted_at, alert_delivered_at
       FROM scout_lifecycle_recovery_attempts WHERE setup_id = ?`)
       .get(setupId) as {
@@ -177,21 +175,25 @@ export function markScoutLifecycleRecoveryAlertDelivered(
       WHERE setup_id = ? AND alert_reference = ? AND alert_delivered_at IS NULL`)
       .run(deliveredAt, setupId, reference);
     if (updated.changes !== 1) return false;
-    appendScoutEvent(db, {
-      setupId,
-      setupVersion: setup.version,
-      eventType: 'scout_automatic_cleanup_recovery_alerted',
-      actorUserId,
-      payload: {
-        reason: 'automatic_deadline',
-        unresolvedStatus: setup.status,
-        scheduledStartAt: setup.startAt,
-        deadlineAt: setup.startAt + SCOUT_LIFECYCLE_DELAY_SECONDS,
-        attemptedAt: row.alert_attempted_at,
-        deliveredAt,
-        reference,
-      },
-    });
+    // v19 recorded this event before staff delivery; it cannot prove delivery after upgrade.
+    if (!db.prepare(`SELECT 1 FROM scout_events
+      WHERE setup_id = ? AND event_type = 'scout_automatic_cleanup_recovery_alerted'`).get(setupId)) {
+      appendScoutEvent(db, {
+        setupId,
+        setupVersion: setup.version,
+        eventType: 'scout_automatic_cleanup_recovery_alerted',
+        actorUserId,
+        payload: {
+          reason: 'automatic_deadline',
+          unresolvedStatus: setup.status,
+          scheduledStartAt: setup.startAt,
+          deadlineAt: setup.startAt + SCOUT_LIFECYCLE_DELAY_SECONDS,
+          attemptedAt: row.alert_attempted_at,
+          deliveredAt,
+          reference,
+        },
+      });
+    }
     return true;
   })();
 }
