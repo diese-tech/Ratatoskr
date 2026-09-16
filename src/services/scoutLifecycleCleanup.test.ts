@@ -84,6 +84,45 @@ test('the lifecycle worker reports an overdue setup as blocked while its divisio
   }
 });
 
+test('the lifecycle worker defers notifications until every overdue closable page is drained', async () => {
+  const application = openApplicationStorage({ sqlitePath: ':memory:' });
+  try {
+    const division = await application.divisions.upsertDivision({
+      guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim',
+    });
+    for (let index = 0; index < 26; index += 1) {
+      const setup = createScoutSetup(application.legacyDatabase, {
+        guildId: 'guild', divisionId: division.id, divisionKey: division.divisionKey,
+        divisionDisplayName: division.displayName, createdBy: 'organizer', signupChannelId: 'signups',
+        resultsChannelId: 'results', operationsChannelId: 'ops', divisionRoleId: 'division-role',
+        emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+        startAt: 2_000, roleLimit: 2,
+      });
+      setScoutSetupSignupMessage(application.legacyDatabase, setup.id, `signup-${index}`);
+    }
+    const dependencies = {
+      storage: application.scoutLifecycleCleanup,
+      operationScope: application.operationScope,
+      actorUserId: 'ratatoskr',
+      recoverPostingSetup: async () => undefined,
+      reconcileCancelled: async () => undefined,
+      reconcileFinished: async () => undefined,
+      refreshStatusCard: async () => undefined,
+      reportError: async () => ({ reference: 'unused' }),
+    };
+
+    assert.equal(await processDueScoutLifecycleCleanups(dependencies, 12_800, 25), false);
+    assert.equal(
+      (await application.scoutLifecycleCleanup.listDueSetups(12_800, 1))[0]?.status,
+      'open',
+    );
+    assert.equal(await processDueScoutLifecycleCleanups(dependencies, 12_800, 25), true);
+    assert.deepEqual(await application.scoutLifecycleCleanup.listDueSetups(12_800, 1), []);
+  } finally {
+    await application.close();
+  }
+});
+
 test('restart catch-up uses the original scheduled deadline', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'ratatoskr-lifecycle-cleanup-'));
   const path = join(directory, 'restart.db');

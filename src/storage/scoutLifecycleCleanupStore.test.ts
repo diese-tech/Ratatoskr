@@ -67,6 +67,40 @@ test('lifecycle cleanup cancels an open Scout only at its fixed three-hour deadl
   }
 });
 
+test('due lifecycle paging prioritizes closable setups ahead of retained recovery rows', async () => {
+  const storage = openApplicationStorage({ sqlitePath: ':memory:' });
+  try {
+    const division = await storage.divisions.upsertDivision({
+      guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim',
+    });
+    for (let index = 0; index < 25; index += 1) {
+      const recovery = createScoutSetup(storage.legacyDatabase, {
+        guildId: 'guild', divisionId: division.id, divisionKey: division.divisionKey,
+        divisionDisplayName: division.displayName, createdBy: 'organizer', signupChannelId: 'signups',
+        resultsChannelId: 'results', operationsChannelId: 'ops', divisionRoleId: 'division-role',
+        emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+        startAt: 2_000, roleLimit: 2,
+      });
+      storage.legacyDatabase.prepare("UPDATE scout_setups SET status = 'posting_failed' WHERE id = ?")
+        .run(recovery.id);
+    }
+    const closable = createScoutSetup(storage.legacyDatabase, {
+      guildId: 'guild', divisionId: division.id, divisionKey: division.divisionKey,
+      divisionDisplayName: division.displayName, createdBy: 'organizer', signupChannelId: 'signups',
+      resultsChannelId: 'results', operationsChannelId: 'ops', divisionRoleId: 'division-role',
+      emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
+      startAt: 2_000, roleLimit: 2,
+    });
+    setScoutSetupSignupMessage(storage.legacyDatabase, closable.id, 'closable-signup');
+
+    const due = await storage.scoutLifecycleCleanup.listDueSetups(12_800, 25);
+    assert.equal(due[0]?.id, closable.id);
+    assert.equal(due.filter((setup) => ['open', 'roster_ready', 'published'].includes(setup.status)).length, 1);
+  } finally {
+    await storage.close();
+  }
+});
+
 test('an overdue two-game roster-ready Scout cancels as one setup', async () => {
   const storage = openApplicationStorage({ sqlitePath: ':memory:' });
   try {

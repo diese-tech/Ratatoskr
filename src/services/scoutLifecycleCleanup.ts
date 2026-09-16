@@ -97,6 +97,10 @@ export async function processDueScoutLifecycleCleanups(
       release();
     }
   }
+  const remaining = await dependencies.storage.listDueSetups(now, 1);
+  if (remaining.some((setup) => ['open', 'roster_ready', 'published'].includes(setup.status))) {
+    readyForNotifications = false;
+  }
   for (const cleanup of await dependencies.storage.listPendingCleanups(limit)) {
     await reconcileCleanup(dependencies, cleanup, now);
   }

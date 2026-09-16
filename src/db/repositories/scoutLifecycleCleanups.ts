@@ -138,7 +138,8 @@ export function listDueScoutLifecycleSetups(
       AND (status IN ('posting', 'posting_failed', 'open', 'roster_ready')
         OR (status = 'published'
           AND NOT EXISTS (SELECT 1 FROM scout_completions WHERE setup_id = scout_setups.id)))
-    ORDER BY start_at + ?, id
+    ORDER BY CASE WHEN status IN ('open', 'roster_ready', 'published') THEN 0 ELSE 1 END,
+      start_at + ?, id
     LIMIT ?`).all(CLEANUP_DELAY_SECONDS, now, CLEANUP_DELAY_SECONDS, limit) as { id: number }[];
   return ids.map((row) => getScoutSetupById(db, row.id)!).filter(Boolean);
 }
