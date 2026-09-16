@@ -255,6 +255,35 @@ test('automatic finish completes pending roster repair without sending its queue
   }
 });
 
+test('automatic finish retains an uncertain roster notice marker for operator recovery', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    const roster = await f.signups.send({ content: 'published roster', components: [], allowedMentions: { parse: [] } });
+    f.db.prepare(`UPDATE scout_setups
+      SET status = 'published', result_message_id = ?, signup_post_reconciled = 1
+      WHERE id = ?`).run(roster.id, setup.id);
+    f.db.prepare(`INSERT INTO scout_roster_updates
+      (setup_id, version, notice, message_reconciled, notice_attempted)
+      VALUES (?, ?, 'Uncertain roster change notice', 1, 1)`).run(setup.id, setup.version);
+    const before = f.sent.length;
+    const storage = createSqliteScoutLifecycleCleanupStore(f.db);
+    const dependencies = sqliteScoutLifecycleCleanupDependencies(f.client, f.db, storage, f.db);
+
+    await processDueScoutLifecycleCleanups(dependencies, setup.startAt + 10_800);
+    await processDueScoutLifecycleCleanups(dependencies, setup.startAt + 10_815);
+
+    assert.ok(getScoutCompletion(f.db, setup.id));
+    assert.equal(f.sent.length, before);
+    assert.ok(f.db.prepare('SELECT 1 FROM scout_roster_updates WHERE setup_id = ?').get(setup.id));
+    assert.equal((await storage.getCleanup(setup.id))?.discordState, 'reconciled');
+    assert.match(roster.content, /Finished by <@bot> automatically\./);
+  } finally {
+    f.db.close();
+  }
+});
+
 test('a recovered past-dated signup card can officially cancel its setup and keep historical counts', async () => {
   const f = fixture();
   try {

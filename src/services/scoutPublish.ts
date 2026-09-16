@@ -682,6 +682,7 @@ async function reconcileScoutRosterUpdateLocked(
     markScoutRosterUpdateEdited(db, setupId, pending.version);
   }
   if (options.deliverNotice === false) {
+    if (pending.notice.trim() && pending.notice_attempted) return;
     completeScoutRosterUpdate(db, setupId, pending.version);
     return;
   }
