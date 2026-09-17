@@ -31,6 +31,13 @@ import { sqliteScoutLifecycleCleanupDependencies } from './scoutLifecycleCleanup
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
 
+function cardDisplayText(card: any): string {
+  return [card.content, ...(card.embeds ?? []).flatMap((embed: any) => {
+    const data = embed.toJSON?.() ?? embed;
+    return [data.title, data.description];
+  })].filter(Boolean).join('\n');
+}
+
 function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
   const db = openDatabase(path);
   const members = new Collection<string, any>();
@@ -81,9 +88,9 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
       send: async (payload: any) => {
         if (id === 'ops' && rejectSend) { const code = rejectSend; rejectSend = undefined; throw { code }; }
         const message: any = { id: String(++nextId), author: client.user, content: payload.content, channelId: id, guildId: 'guild', guild,
-          url: `https://discord.com/channels/guild/${id}/${nextId}`, components: payload.components,
+          url: `https://discord.com/channels/guild/${id}/${nextId}`, components: payload.components, embeds: payload.embeds ?? [],
           reactions: { cache: new Collection(), removeAll: async () => undefined },
-          edit: async (next: any) => { message.content = next.content; message.components = next.components; return message; },
+          edit: async (next: any) => { message.content = next.content; message.components = next.components; message.embeds = next.embeds ?? []; return message; },
           delete: async () => { if (loseDelete) throw { code: 50013 }; messages.delete(message.id); },
           react: async (role: string) => { message.reactions.cache.set(role, { emoji: { id: role }, partial: false, message,
             client, users: { fetch: async () => new Collection(), remove: async () => undefined } }); },
@@ -125,22 +132,165 @@ test('creation shows open seats and reactions promote the same working card in p
   try {
     await ensurePostedScoutSetup(f.client, f.db, f.setup);
     const original = f.ops.all.first()!;
-    assert.match(original.content, /0\/10 seated/);
+    assert.match(cardDisplayText(original), /0\/10 seated/);
     assert.ok(original.components.flatMap((row: any) => row.toJSON().components)
       .some((component: any) => component.custom_id === `scout:cancel:${f.setup.id}:0`));
     await f.react('solo-0', 'solo'); await f.react('solo-0', 'mid');
-    assert.equal(f.ops.all.size, 1); assert.match(original.content, /1\/10 seated/);
+    assert.equal(f.ops.all.size, 1); assert.match(cardDisplayText(original), /1\/10 seated/);
     await f.fill();
     assert.equal(f.ops.all.size, 1);
     assert.ok(f.ops.all.has(original.id), 'the working card is promoted in place');
     const ready = f.ops.all.first()!;
-    assert.match(ready.content, /ready to publish/i); assert.match(ready.content, /10\/10 seated/);
+    assert.match(cardDisplayText(ready), /roster ready/i); assert.match(cardDisplayText(ready), /10\/10 seated/);
     assert.equal(f.sent.filter((entry) => entry.channel === 'ops' && entry.payload.allowedMentions.users.length).length, 0);
     await f.react('extra-solo', 'solo');
-    assert.match(ready.content, /Unseated signups \(1\)/);
+    assert.match(cardDisplayText(ready), /Unseated signups \(1\)/);
     await f.react('support-0', 'support', true);
-    assert.match(ready.content, /9\/10 seated/);
-    assert.match(ready.content, /needs Support/);
+    assert.match(cardDisplayText(ready), /9\/10 seated/);
+    assert.match(cardDisplayText(ready), /needs Support/);
+  } finally { f.db.close(); }
+});
+
+test('an open Scout Ops card is one embed with its working roster and controls', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    assert.equal(card.content, '');
+    assert.equal(card.embeds.length, 1);
+    const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
+    assert.match(embed.title, /Vanaheim Scout · collecting signups/);
+    assert.match(embed.description, /Start: <t:/);
+    assert.match(embed.description, /0\/10 seated/);
+    assert.match(embed.description, /Unseated signups \(0\)/);
+    assert.ok(card.components.flatMap((row: any) => row.toJSON().components)
+      .some((component: any) => component.custom_id === `scout:cancel:${f.setup.id}:0`));
+  } finally { f.db.close(); }
+});
+
+test('a legacy text-only Scout Ops card migrates in place and stays idempotent', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    const cardId = card.id;
+    card.content = cardDisplayText(card);
+    card.embeds = [];
+    const originalEdit = card.edit;
+    let edits = 0;
+    card.edit = async (payload: any) => { edits++; return originalEdit(payload); };
+
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    assert.equal(card.id, cardId);
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(card.content, '');
+    assert.equal(card.embeds.length, 1);
+    assert.equal(edits, 1);
+
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    assert.equal(edits, 1);
+  } finally { f.db.close(); }
+});
+
+test('a failed legacy-card edit retries on the same message without duplicate sends', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    card.content = cardDisplayText(card);
+    card.embeds = [];
+    const originalEdit = card.edit;
+    let first = true;
+    card.edit = async (payload: any) => {
+      if (first) { first = false; throw new Error('Discord edit response lost'); }
+      return originalEdit(payload);
+    };
+    const sent = f.sent.length;
+
+    await assert.rejects(refreshScoutStatusCard(f.client, f.db, f.setup.id), /edit response lost/);
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(f.sent.length, sent);
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(f.sent.length, sent);
+    assert.equal(card.embeds.length, 1);
+    assert.equal(card.content, '');
+  } finally { f.db.close(); }
+});
+
+test('eligibility changes update the existing embed even when controls stay the same', async () => {
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    const initialControls = JSON.stringify(card.components);
+    f.addMember('support-player', []);
+    await f.react('support-player', 'support');
+
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(card.content, '');
+    assert.equal(JSON.stringify(card.components), initialControls);
+    const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
+    assert.match(embed.description, /<@support-player> · Support — missing <@&eligible>/);
+  } finally { f.db.close(); }
+});
+
+test('publishing keeps the Ops message and collapses it into one filled embed', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    const cardId = card.id;
+    await f.fill();
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`), f.db);
+
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(card.id, cardId);
+    assert.equal(card.content, '');
+    assert.equal(card.embeds.length, 1);
+    const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
+    assert.match(embed.title, /Scout filled/);
+    assert.match(embed.description, /<t:2000000000:t>/);
+    assert.equal(card.components[0].toJSON().components[0].label, 'View roster');
+  } finally { f.db.close(); }
+});
+
+test('replacement-needed status edits the filled Ops card into a distinct embed', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    await f.fill();
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`), f.db);
+    const card = f.ops.all.first()!;
+    const cardId = card.id;
+    const slot = listScoutRosterSlots(f.db, f.setup.id)[0]!;
+    f.db.prepare('UPDATE scout_roster_slots SET replacement_needed = 1 WHERE id = ?').run(slot.id);
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(card.id, cardId);
+    assert.equal(card.embeds.length, 1);
+    assert.match(cardDisplayText(card), /replacement needed/);
+    assert.match(cardDisplayText(card), /Order (Solo|Jungle|Mid|Support|Carry)/);
+    assert.equal(card.components[0].toJSON().components[0].label, 'View roster');
+  } finally { f.db.close(); }
+});
+
+test('a published Scout awaiting roster-message recovery still has one Ops embed', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    f.db.prepare("UPDATE scout_setups SET status = 'published', result_message_id = NULL WHERE id = ?")
+      .run(f.setup.id);
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(card.content, '');
+    assert.equal(card.embeds.length, 1);
+    const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
+    assert.match(embed.title, /Vanaheim Scout published/);
+    assert.match(embed.description, /Start: <t:/);
   } finally { f.db.close(); }
 });
 
@@ -161,13 +311,55 @@ test('automatic cancellation puts the existing Scout Ops card in its final attri
     await refreshScoutStatusCard(f.client, f.db, setup.id);
 
     assert.equal(f.ops.all.size, 1);
-    assert.match(card.content, /Cancelled by <@bot> automatically\./);
-    assert.doesNotMatch(card.content, /automatically at/);
-    assert.doesNotMatch(card.content, /<@staff>/);
+    assert.match(cardDisplayText(card), /Cancelled by <@bot> automatically\./);
+    assert.doesNotMatch(cardDisplayText(card), /automatically at/);
+    assert.doesNotMatch(cardDisplayText(card), /<@staff>/);
     assert.deepEqual(card.components, []);
   } finally {
     f.db.close();
   }
+});
+
+test('cancelled Scout keeps its card and snapshot but shows no signup counts', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    await f.react('historical-player', 'solo');
+    const card = f.ops.all.first()!;
+    const cardId = card.id;
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 1);
+
+    assert.equal(cancelScoutSetupIfVersion(f.db, setup.id, setup.version), 'cancelled');
+    await refreshScoutStatusCard(f.client, f.db, setup.id);
+
+    assert.equal(f.ops.all.size, 1);
+    assert.equal(f.ops.all.first()!.id, cardId);
+    assert.equal(card.embeds?.length, 1);
+    const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
+    assert.match(embed.title, /Scout cancelled/);
+    assert.match(embed.description, /Start: <t:/);
+    assert.doesNotMatch(JSON.stringify(embed), /1\/10|Solo|Fill|Last recorded signup snapshot/);
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 1);
+  } finally { f.db.close(); }
+});
+
+test('cancelled Scout without a saved snapshot is still a compact count-free embed', async () => {
+  const f = fixture();
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    const card = f.ops.all.first()!;
+    f.db.prepare('UPDATE scout_readiness_cards SET snapshot_json = NULL WHERE setup_id = ?').run(f.setup.id);
+    const setup = getScoutSetupById(f.db, f.setup.id)!;
+    assert.equal(cancelScoutSetupIfVersion(f.db, setup.id, setup.version), 'cancelled');
+    await refreshScoutStatusCard(f.client, f.db, setup.id);
+
+    assert.equal(card.embeds.length, 1);
+    assert.match(cardDisplayText(card), /Scout cancelled/);
+    assert.match(cardDisplayText(card), /Signup: https:\/\/discord.com/);
+    assert.doesNotMatch(cardDisplayText(card), /seated|unique eligible|Fill|snapshot/i);
+    assert.equal(ensureScoutReadinessCard(f.db, setup.id).snapshot_json, null);
+  } finally { f.db.close(); }
 });
 
 test('automatic finish keeps the current finished-by card presentation without timing filler', async () => {
@@ -189,9 +381,12 @@ test('automatic finish keeps the current finished-by card presentation without t
     await cleanup.markDiscordReconciled(setup.id, setup.startAt + 10_800);
     await refreshScoutStatusCard(f.client, f.db, setup.id);
 
-    assert.match(card.content, /Finished by <@bot> automatically\./);
-    assert.doesNotMatch(card.content, /automatically at/);
-    assert.doesNotMatch(card.content, /<@staff>/);
+    assert.equal(card.content, '');
+    assert.equal(card.embeds.length, 1);
+    const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
+    assert.match(embed.title, /Scout finished/);
+    assert.match(embed.description, /Finished by <@bot> automatically\./);
+    assert.doesNotMatch(embed.description, /automatically at|<@staff>/);
   } finally {
     f.db.close();
   }
@@ -215,8 +410,8 @@ test('automatic cancellation edits existing Discord surfaces without sending a n
 
     assert.equal(f.sent.length, before);
     assert.match(f.signups.all.get(setup.signupMessageId)!.content, /Cancelled by <@bot> automatically\./);
-    assert.match(f.ops.all.first()!.content, /Cancelled by <@bot> automatically\./);
-    assert.match(f.ops.all.first()!.content, /1\/10 unique eligible players/);
+    assert.match(cardDisplayText(f.ops.all.first()!), /Cancelled by <@bot> automatically\./);
+    assert.doesNotMatch(cardDisplayText(f.ops.all.first()!), /1\/10|unique eligible players/);
     assert.deepEqual(f.ops.all.first()!.components, []);
     assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 1);
     assert.equal((await storage.getCleanup(setup.id))?.discordState, 'reconciled');
@@ -248,7 +443,7 @@ test('automatic finish completes pending roster repair without sending its queue
     assert.equal(f.db.prepare('SELECT 1 FROM scout_roster_updates WHERE setup_id = ?').get(setup.id), undefined);
     assert.match(roster.content, /Finished by <@bot> automatically\./);
     assert.match(f.signups.all.get(setup.signupMessageId)!.content, /Finished by <@bot> automatically\./);
-    assert.match(f.ops.all.first()!.content, /Finished by <@bot> automatically\./);
+    assert.match(cardDisplayText(f.ops.all.first()!), /Finished by <@bot> automatically\./);
     assert.equal((await storage.getCleanup(setup.id))?.discordState, 'reconciled');
   } finally {
     f.db.close();
@@ -284,7 +479,7 @@ test('automatic finish retains an uncertain roster notice marker for operator re
   }
 });
 
-test('a recovered past-dated signup card can officially cancel its setup and keep historical counts', async () => {
+test('a recovered past-dated signup card can officially cancel its setup and preserve its snapshot', async () => {
   const f = fixture();
   try {
     f.db.prepare('UPDATE scout_setups SET start_at = 1 WHERE id = ?').run(f.setup.id);
@@ -305,8 +500,9 @@ test('a recovered past-dated signup card can officially cancel its setup and kee
     await handleScoutCancelButton(f.interaction(confirm), f.db);
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.signupPostReconciled, true);
-    assert.match(card.content, /cancelled/);
-    assert.match(card.content, /1\/10 unique/);
+    assert.match(cardDisplayText(card), /cancelled/);
+    assert.doesNotMatch(cardDisplayText(card), /1\/10 unique/);
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, f.setup.id))?.players, 1);
     assert.deepEqual(card.components, []);
     assert.match(f.signups.all.first()!.content, /cancelled/);
     await reconcileScoutStatusCards(f.client, f.db);
@@ -324,7 +520,11 @@ for (const code of [10008, 50013]) test(`cancellation of an old missing or inacc
     await handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${f.setup.id}:0`), f.db);
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.signupPostReconciled, code === 10008);
-    assert.match(f.ops.all.first()!.content, /cancelled/, 'the staff card closes even while public cleanup must retry');
+    assert.match(cardDisplayText(f.ops.all.first()!), /cancelled/, 'the staff card closes even while public cleanup must retry');
+    if (code === 50013) {
+      assert.match(cardDisplayText(f.ops.all.first()!), /public post cleanup is pending/);
+      assert.equal(f.ops.all.first()!.components[0].toJSON().components[0].label, 'Retry post cleanup');
+    }
   } finally { f.db.close(); }
 });
 
@@ -335,11 +535,11 @@ test('eligibility loss gain and departure refresh existing cards without deletin
     const card = f.ops.all.first()!;
     f.addMember('player', []);
     await refreshScoutMemberReadiness(f.client, f.signupDependencies, 'guild', { userId: 'player' });
-    assert.match(card.content, /0\/10 seated/); assert.equal(listScoutSignups(f.db, f.setup.id).length, 1);
+    assert.match(cardDisplayText(card), /0\/10 seated/); assert.equal(listScoutSignups(f.db, f.setup.id).length, 1);
     f.addMember('player'); await refreshScoutMemberReadiness(f.client, f.signupDependencies, 'guild', { userId: 'player' });
-    assert.match(card.content, /1\/10 seated/);
+    assert.match(cardDisplayText(card), /1\/10 seated/);
     f.members.delete('player'); await refreshScoutMemberReadiness(f.client, f.signupDependencies, 'guild', { userId: 'player' });
-    assert.match(card.content, /0\/10 seated/);
+    assert.match(cardDisplayText(card), /0\/10 seated/);
   } finally { f.db.close(); }
 });
 
@@ -351,9 +551,29 @@ test('working card explains why an unseated signup is ineligible', async () => {
     await f.react('support-player', 'support');
 
     const card = f.ops.all.first()!;
-    assert.match(card.content, /Unseated signups \(0\)/);
-    assert.match(card.content, /Ineligible signups \(1\)/);
-    assert.match(card.content, /<@support-player> · Support — missing <@&eligible>/);
+    assert.match(cardDisplayText(card), /Unseated signups \(0\)/);
+    assert.match(cardDisplayText(card), /Ineligible signups \(1\)/);
+    assert.match(cardDisplayText(card), /<@support-player> · Support — missing <@&eligible>/);
+  } finally { f.db.close(); }
+});
+
+test('long ineligible signup lists keep a reason and omission marker within embed limits', async () => {
+  const f = fixture(':memory:', 'eligible');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    for (let index = 0; index < 40; index++) {
+      const userId = `ineligible-player-${String(index).padStart(18, '0')}`;
+      f.addMember(userId, []);
+      f.db.prepare('INSERT INTO scout_signups (setup_id, user_id, role) VALUES (?, ?, ?)')
+        .run(f.setup.id, userId, SCOUT_ROLES[index % SCOUT_ROLES.length]);
+    }
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+
+    const card = f.ops.all.first()!;
+    assert.equal(card.embeds.length, 1);
+    assert.ok(card.embeds[0].description.length <= 4_096);
+    assert.match(cardDisplayText(card), /missing <@&eligible>/);
+    assert.match(cardDisplayText(card), /additional ineligible signup\(s\) omitted/);
   } finally { f.db.close(); }
 });
 
@@ -407,14 +627,14 @@ test('two-game draft renders both complete games and publication collapses Ops t
     await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill(4);
     await handleScoutReviewButton(f.interaction(`scout:buildtwoconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`) as ButtonInteraction, f.db);
     const card = f.ops.all.first()!;
-    assert.equal((card.content.match(/10\/10 seated/g) ?? []).length, 2);
-    assert.match(card.content, /Unseated signups \(0\)/);
+    assert.equal((cardDisplayText(card).match(/10\/10 seated/g) ?? []).length, 2);
+    assert.match(cardDisplayText(card), /Unseated signups \(0\)/);
     await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`) as ButtonInteraction, f.db);
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'published');
-    assert.match(card.content, /Scout filled/);
-    const content = card.content;
+    assert.match(cardDisplayText(card), /Scout filled/);
+    const presentation = cardDisplayText(card);
     f.members.clear(); await reconcileScoutStatusCards(f.client, f.db);
-    assert.equal(card.content, content);
+    assert.equal(cardDisplayText(card), presentation);
     assert.equal(card.components[1].toJSON().components[0].label, 'Finish scout');
   } finally { f.db.close(); }
 });
@@ -457,8 +677,8 @@ test('recovered published cards expose player edits and finishing durably closes
     await handleScoutFinishButton(confirmInteraction, f.db);
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.finished_by, 'staff');
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, 1);
-    assert.match(card.content, /finished/);
-    assert.match(card.content, /View final roster|Scout finished/);
+    assert.match(cardDisplayText(card), /finished/);
+    assert.match(cardDisplayText(card), /Scout finished/);
     assert.match(signup.content, /finished/i); assert.match(roster.content, /finished/i);
     assert.equal(card.components[0].toJSON().components[0].label, 'View final roster');
     assert.equal(roster.components[0].toJSON().components[0].label, 'View original signup');
@@ -559,7 +779,7 @@ for (const code of [10008, 50013]) test(`finished post cleanup handles Discord $
   await handleScoutFinishButton(f.interaction(`scout:finishconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`), f.db);
   assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, code === 10008 ? 1 : 0);
   assert.equal(listDivisionScoutLifecycleBlockers(f.db, 'guild', f.setup.divisionId).length, code === 10008 ? 0 : 1);
-  assert.match(f.ops.all.first()!.content, /finished/);
+  assert.match(cardDisplayText(f.ops.all.first()!), /finished/);
   f.db.close();
   const reopened = openDatabase(path);
   try {
@@ -690,12 +910,13 @@ test('concurrent setups retain isolated cards and an open cancellation preserves
     await Promise.all([f.react('one', 'solo'), f.react('two', 'mid', false, other.id)]);
     assert.equal(f.ops.all.size, 2);
     const firstCardId = ensureScoutReadinessCard(f.db, f.setup.id).telemetry_message_id!;
-    assert.match(f.ops.all.get(firstCardId).content, /1\/10 seated/);
+    assert.match(cardDisplayText(f.ops.all.get(firstCardId)), /1\/10 seated/);
     cancelScoutSetupIfVersion(f.db, f.setup.id, getScoutSetupById(f.db, f.setup.id)!.version);
     await refreshScoutStatusCard(f.client, f.db, f.setup.id);
     assert.equal(f.ops.all.size, 2);
-    assert.match(f.ops.all.get(firstCardId).content, /cancelled/);
-    assert.match(f.ops.all.get(firstCardId).content, /Last recorded signup snapshot/);
+    assert.match(cardDisplayText(f.ops.all.get(firstCardId)), /cancelled/);
+    assert.doesNotMatch(cardDisplayText(f.ops.all.get(firstCardId)), /Last recorded signup snapshot|1\/10/);
+    assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, f.setup.id))?.players, 1);
     assert.equal(getScoutSetupById(f.db, other.id)?.status, 'open');
   } finally { f.db.close(); }
 });
@@ -707,15 +928,15 @@ test('eligibility gain can trigger readiness and a missing role shows an actiona
     await ensurePostedScoutSetup(f.client, f.db, f.setup);
     f.addMember('carry-1', []); await f.fill();
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'open');
-    assert.match(f.ops.all.first()!.content, /9\/10 seated/);
+    assert.match(cardDisplayText(f.ops.all.first()!), /9\/10 seated/);
     f.addMember('carry-1'); await refreshScoutMemberReadiness(f.client, f.signupDependencies, 'guild', { userId: 'carry-1' });
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'roster_ready');
     f.roleCache.delete('eligible');
     await refreshScoutMemberReadiness(
       f.client, f.signupDependencies, 'guild', { eligibilityRoleId: 'eligible' },
     );
-    assert.match(f.ops.all.first()!.content, /Live eligibility could not be verified/);
-    assert.ok(!f.ops.all.first()!.content.includes('A complete roster can be formed'));
+    assert.match(cardDisplayText(f.ops.all.first()!), /Live eligibility could not be verified/);
+    assert.ok(!cardDisplayText(f.ops.all.first()!).includes('A complete roster can be formed'));
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 10);
   } finally { f.db.close(); }
 });
@@ -737,8 +958,8 @@ test('startup reconciliation rebuilds persisted signups and the working roster f
       listScoutSignups(f.db, f.setup.id).map(({ userId, role }) => ({ userId, role })),
       [{ userId: 'offline-support', role: 'support' }],
     );
-    assert.match(f.ops.all.first()!.content, /1\/10 seated/);
-    assert.match(f.ops.all.first()!.content, /Support: <@offline-support>/);
+    assert.match(cardDisplayText(f.ops.all.first()!), /1\/10 seated/);
+    assert.match(cardDisplayText(f.ops.all.first()!), /Support: <@offline-support>/);
   } finally {
     f.db.close();
   }
@@ -758,9 +979,9 @@ test('eligibility warning plus a large working roster stays within Discord limit
       f.client, f.signupDependencies, 'guild', { eligibilityRoleId: 'eligible' },
     );
 
-    const content = f.ops.all.first()!.content;
-    assert.match(content, /Live eligibility could not be verified/);
-    assert.ok(content.length <= 2_000);
+    const embed = f.ops.all.first()!.embeds[0];
+    assert.match(embed.description, /Live eligibility could not be verified/);
+    assert.ok(embed.description.length <= 4_096);
   } finally { f.db.close(); }
 });
 
@@ -775,7 +996,7 @@ test('a rejected first working-card send retries and later readiness stays on th
     await f.fill();
     assert.equal(f.ops.all.size, 1);
     await refreshScoutStatusCard(f.client, f.db, f.setup.id);
-    assert.match(f.ops.all.first()!.content, /ready to publish/);
+    assert.match(cardDisplayText(f.ops.all.first()!), /roster ready/);
     assert.equal(f.sent.filter((entry) => entry.channel === 'ops').length, 1);
   } finally { f.db.close(); }
 });
@@ -862,11 +1083,11 @@ test('a signup reaction awaits durable async storage before roster and card refr
     const handling = f.react('delayed', 'solo');
     await writeStarted;
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 0);
-    assert.match(card.content, /0\/10 seated/);
+    assert.match(cardDisplayText(card), /0\/10 seated/);
     releaseWrite();
     await handling;
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 1);
-    assert.match(card.content, /1\/10 seated/);
+    assert.match(cardDisplayText(card), /1\/10 seated/);
   } finally {
     releaseWrite();
     f.db.close();
@@ -883,7 +1104,7 @@ test('cancellation retains the last known snapshot when final eligibility cannot
     await handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`), f.db);
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'cancelled');
     assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).snapshot_json, saved);
-    assert.match(f.ops.all.first()!.content, /Last recorded signup snapshot/);
+    assert.doesNotMatch(cardDisplayText(f.ops.all.first()!), /Last recorded signup snapshot|1\/10/);
     f.roleCache.set('eligible', { id: 'eligible' }); f.members.clear();
     await reconcileScoutStatusCards(f.client, f.db);
     assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).snapshot_json, saved);
@@ -965,11 +1186,11 @@ for (const terminal of ['cancelled', 'published'] as const) {
       // The final snapshot is durable before Discord card delivery can finish.
       assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, f.setup.id))?.players, count);
       release(); await Promise.all(pending);
-      if (terminal === 'published') assert.match(card.content, /Scout filled/);
-      else assert.match(card.content, new RegExp(`${count}/10 unique`));
-      const content = card.content;
+      if (terminal === 'published') assert.match(cardDisplayText(card), /Scout filled/);
+      else assert.doesNotMatch(cardDisplayText(card), new RegExp(`${count}/10 unique`));
+      const presentation = cardDisplayText(card);
       f.members.clear(); await reconcileScoutStatusCards(f.client, f.db);
-      assert.equal(card.content, content);
+      assert.equal(cardDisplayText(card), presentation);
     } finally { release(); await Promise.all(pending); f.db.close(); }
   });
 }

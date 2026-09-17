@@ -188,6 +188,7 @@ export type ScoutNotificationPayload = {
   content: string;
   links: { label: string; url: string }[];
   allowedUserIds: string[];
+  embed?: { title: string; description: string; color: number };
 };
 
 export type ScoutNotification = {

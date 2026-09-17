@@ -79,7 +79,12 @@ export async function resolveScoutNotification(
     return {
       status: 'deliver',
       payload: {
-        content: `<@${coordination.organizerUserId}> · **Organizer needed for the <t:${setup.startAt}:t> ${setup.divisionDisplayName} Scout.**\nRequested by Game ${host.gameNumber} Lobby Host <@${host.lobbyHostUserId}>.`,
+        content: `<@${coordination.organizerUserId}>`,
+        embed: {
+          title: `${setup.divisionDisplayName} Scout · Organizer needed`,
+          description: `<t:${setup.startAt}:t>\nRequested by Game ${host.gameNumber} Lobby Host <@${host.lobbyHostUserId}>.`,
+          color: 0xf59e0b,
+        },
         links,
         allowedUserIds: [coordination.organizerUserId],
       },
@@ -95,7 +100,12 @@ export async function resolveScoutNotification(
     return {
       status: 'deliver',
       payload: {
-        content: `<@${coordination.organizerUserId}> · ⚠️ **Replacement needed · <t:${setup.startAt}:t> ${setup.divisionDisplayName} Scout**\n<@${slot.userId}> can no longer play **${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} · ${SCOUT_ROLE_LABELS[slot.role]}**.`,
+        content: `<@${coordination.organizerUserId}>`,
+        embed: {
+          title: `⚠️ ${setup.divisionDisplayName} Scout · replacement needed`,
+          description: `<t:${setup.startAt}:t>\n<@${slot.userId}> can no longer play **${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} · ${SCOUT_ROLE_LABELS[slot.role]}**.`,
+          color: 0xf59e0b,
+        },
         links,
         allowedUserIds: [coordination.organizerUserId],
       },
@@ -170,6 +180,7 @@ async function deliverScoutNotification(
       : [];
     const message = await channel.send({
       content: resolution.payload.content,
+      embeds: resolution.payload.embed ? [resolution.payload.embed] : [],
       components,
       allowedMentions: { parse: [], users: resolution.payload.allowedUserIds, roles: [] },
     });

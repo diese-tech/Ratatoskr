@@ -81,14 +81,18 @@ async function cardView(
   ]);
   if (completion) {
     return {
-      content: [
-        `**✓ ${setup.divisionDisplayName} Scout finished**`,
+      content: '',
+      embeds: [{
+        title: `✓ ${setup.divisionDisplayName} Scout finished`,
+        description: [
         `<t:${setup.startAt}:t>`,
         lifecycleCleanup?.action === 'finished'
           ? `Finished by <@${completion.finished_by}> automatically.`
           : `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>.`,
         completion.posts_reconciled ? '' : 'Discord post cleanup is pending. Retry after access is restored.',
-      ].filter(Boolean).join('\n'),
+        ].filter(Boolean).join('\n'),
+        color: 0x22c55e,
+      }],
       components: completion.posts_reconciled
         ? [scoutResultLinkRow(setup, 'View final roster')]
         : [scoutResultLinkRow(setup, 'View final roster'), scoutFinishButtonRow(setup.id, setup.version, true)],
@@ -102,11 +106,8 @@ async function cardView(
       signupEligibility ? Promise.resolve([]) : storage.listSignups(setup.id),
     ]);
     const unavailableUsers = new Set(withdrawnUserIds);
-    const prefixes = [
-      notify ? `<@${setup.createdBy}>` : '',
-      unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '',
-    ].filter(Boolean);
-    const prefixLength = prefixes.join('\n').length + (prefixes.length ? 1 : 0);
+    const warning = unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '';
+    const prefixLength = warning.length + (warning ? 1 : 0);
     const view = buildScoutWorkingRosterView(
       setup,
       slots,
@@ -115,53 +116,85 @@ async function cardView(
       signupEligibility?.ineligibleSignups,
       2_000 - prefixLength,
     );
+    const [, ...workingRosterLines] = view.content.split('\n');
     return {
       ...view,
-      content: [...prefixes, view.content].join('\n'),
+      content: notify ? `<@${setup.createdBy}>` : '',
+      embeds: [{
+        title: `${setup.divisionDisplayName} Scout · ${setup.status === 'roster_ready' ? 'roster ready' : 'collecting signups'}`,
+        description: [warning, workingRosterLines.join('\n')].filter(Boolean).join('\n'),
+        color: setup.status === 'roster_ready' ? 0x0d9488 : 0x3b82f6,
+      }],
       allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] },
     };
   }
   if (setup.status === 'published' && setup.resultMessageId) {
     const replacementSlots = (await storage.listRosterSlots(setup.id)).filter((slot) => slot.replacementNeeded);
     return {
-      content: replacementSlots.length
-        ? [
-          `**⚠️ ${setup.divisionDisplayName} Scout · replacement needed**`,
-          `<t:${setup.startAt}:t> · ${replacementSlots.map((slot) => `${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]}`).join(', ')}`,
-        ].join('\n')
-        : `**✓ ${setup.divisionDisplayName} Scout filled**\n<t:${setup.startAt}:t>`,
+      content: '',
+      embeds: [{
+        title: replacementSlots.length
+          ? `⚠️ ${setup.divisionDisplayName} Scout · replacement needed`
+          : `✓ ${setup.divisionDisplayName} Scout filled`,
+        description: replacementSlots.length
+          ? `<t:${setup.startAt}:t> · ${replacementSlots.map((slot) => `${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]}`).join(', ')}`
+          : `<t:${setup.startAt}:t>`,
+        color: replacementSlots.length ? 0xf59e0b : 0x22c55e,
+      }],
       components: [scoutResultLinkRow(setup), scoutFinishButtonRow(setup.id, setup.version)],
       allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
     };
   }
+  if (setup.status === 'cancelled') {
+    return {
+      content: '',
+      embeds: [{
+        title: `🚫 ${setup.divisionDisplayName} Scout cancelled`,
+        description: [
+          `Start: <t:${setup.startAt}:F>`,
+          lifecycleCleanup?.action === 'cancelled' ? `Cancelled by <@${lifecycleCleanup.actorUserId}> automatically.` : '',
+          !setup.signupPostReconciled ? 'Cancelled in the records; public post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
+          setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
+        ].filter(Boolean).join('\n'),
+        color: 0x6b7280,
+      }],
+      components: setup.signupPostReconciled ? [] : [scoutCancelButtonRow(setup.id, setup.version, true)],
+      allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
+    };
+  }
   const saved = readScoutReadinessSnapshot((await storage.ensureCard(setup.id)).snapshot_json);
-  const terminal = ['published', 'cancelled'].includes(setup.status);
+  const terminal = setup.status === 'published';
   const status = setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
-    : setup.status === 'published' ? 'published' : 'cancelled';
+    : setup.status === 'published' ? 'published' : 'posting';
   const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
-  return { content: [
-    kind === 'control' && !terminal ? `<@${setup.createdBy}>` : '',
-    `**${setup.divisionDisplayName} Scout ${status}**`,
-    `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
-    setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
-    unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
-    readiness,
-    lifecycleCleanup?.action === 'cancelled' ? `Cancelled by <@${lifecycleCleanup.actorUserId}> automatically.` : '',
-    setup.status === 'cancelled' && !setup.signupPostReconciled ? 'Cancelled in the records; public post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
-    setup.status === 'roster_ready' ? 'Review and balance the roster here, then publish it to the signup channel.' : '',
-    setup.status === 'published' && setup.resultMessageId
-      ? `Roster: https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`
-      : setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
-  ].filter(Boolean).join('\n'),
-  components: setup.status === 'cancelled' && !setup.signupPostReconciled ? [scoutCancelButtonRow(setup.id, setup.version, true)]
-    : setup.status === 'published' ? [managementRow(setup.id, setup.version), scoutFinishButtonRow(setup.id, setup.version)]
+  return { content: kind === 'control' && !terminal ? `<@${setup.createdBy}>` : '',
+  embeds: [{
+    title: `${setup.divisionDisplayName} Scout ${status}`,
+    description: [
+      `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
+      setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
+      unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
+      readiness,
+      setup.status === 'roster_ready' ? 'Review and balance the roster here, then publish it to the signup channel.' : '',
+      setup.status === 'published' && setup.resultMessageId
+        ? `Roster: https://discord.com/channels/${setup.guildId}/${setup.resultsChannelId}/${setup.resultMessageId}`
+        : setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
+    ].filter(Boolean).join('\n'),
+    color: 0x3b82f6,
+  }],
+  components: setup.status === 'published' ? [managementRow(setup.id, setup.version), scoutFinishButtonRow(setup.id, setup.version)]
     : setup.status === 'open' ? [scoutCancelButtonRow(setup.id, setup.version)]
     : [],
   allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] } };
 }
 
 async function editCard(message: Message, view: Awaited<ReturnType<typeof cardView>>): Promise<void> {
-  if (message.content === view.content && JSON.stringify(message.components) === JSON.stringify(view.components)) return;
+  const embeds = 'embeds' in view ? view.embeds ?? [] : [];
+  const sameEmbeds = message.embeds.length === embeds.length && embeds.every((embed, index) =>
+    message.embeds[index]?.title === embed.title &&
+    message.embeds[index]?.description === embed.description &&
+    message.embeds[index]?.color === embed.color);
+  if (message.content === view.content && sameEmbeds && JSON.stringify(message.components) === JSON.stringify(view.components)) return;
   await message.edit(view);
 }
 

@@ -79,6 +79,93 @@ function setupFixture(id: number): ScoutSetup {
   };
 }
 
+test('replacement-needed Ops alert is one embed with only the Organizer ping in content', async () => {
+  const setup = setupFixture(1);
+  const notification = {
+    ...notificationFixture(1, 1),
+    kind: 'availability_alert' as const,
+    channelId: setup.operationsChannelId!,
+    dedupeKey: 'availability:1:42',
+  };
+  const storage = {
+    async getSetup() { return setup; },
+    async hasCompletion() { return false; },
+    async listRosterSlots() { return [{ id: 42, userId: 'missing-player', gameNumber: 1, team: 'team_one', role: 'jungle', replacementNeeded: true }]; },
+    async listGameHosts() { return []; },
+    async getCoordination() { return { organizerUserId: 'organizer' }; },
+  } as unknown as ScoutNotificationDeliveryStore;
+
+  const resolved = await resolveScoutNotification(storage, notification);
+  assert.equal(resolved.status, 'deliver');
+  if (resolved.status === 'deliver') {
+    assert.equal(resolved.payload.content, '<@organizer>');
+    assert.deepEqual(resolved.payload.allowedUserIds, ['organizer']);
+    assert.match(resolved.payload.embed?.title ?? '', /Division 1 Scout · replacement needed/);
+    assert.match(resolved.payload.embed?.description ?? '', /<@missing-player> can no longer play/);
+  }
+});
+
+test('Lobby Host escalation is one Ops embed and keeps the Organizer ping', async () => {
+  const setup = setupFixture(1);
+  const notification = {
+    ...notificationFixture(1, 1),
+    kind: 'host_organizer' as const,
+    gameNumber: 1 as const,
+    channelId: setup.operationsChannelId!,
+  };
+  const storage = {
+    async getSetup() { return setup; },
+    async hasCompletion() { return false; },
+    async listRosterSlots() { return []; },
+    async listGameHosts() { return [{ gameNumber: 1, lobbyHostUserId: 'host' }]; },
+    async getCoordination() { return { organizerUserId: 'organizer' }; },
+  } as unknown as ScoutNotificationDeliveryStore;
+
+  const resolved = await resolveScoutNotification(storage, notification);
+  assert.equal(resolved.status, 'deliver');
+  if (resolved.status === 'deliver') {
+    assert.equal(resolved.payload.content, '<@organizer>');
+    assert.deepEqual(resolved.payload.allowedUserIds, ['organizer']);
+    assert.match(resolved.payload.embed?.title ?? '', /Division 1 Scout · Organizer needed/);
+    assert.match(resolved.payload.embed?.description ?? '', /Requested by Game 1 Lobby Host <@host>/);
+  }
+});
+
+test('replacement-needed Ops delivery sends its recorded embed and only pings the Organizer', async () => {
+  const setup = setupFixture(1);
+  const notification = {
+    ...notificationFixture(1, 1),
+    kind: 'availability_alert' as const,
+    channelId: setup.operationsChannelId!,
+    dedupeKey: 'availability:1:42',
+  };
+  let claimed: any;
+  let sent: any;
+  const storage = {
+    async listDueNotifications() { return [notification]; },
+    async getSetup() { return setup; },
+    async hasCompletion() { return false; },
+    async listRosterSlots() { return [{ id: 42, userId: 'missing-player', gameNumber: 1, team: 'team_one', role: 'jungle', replacementNeeded: true }]; },
+    async listGameHosts() { return []; },
+    async getCoordination() { return { organizerUserId: 'organizer' }; },
+    async claimAttempt(_id: number, _now: number, payload: any) { claimed = payload; return true; },
+    async markSent() { return true; },
+  } as unknown as ScoutNotificationDeliveryStore;
+  const client = { channels: { fetch: async () => ({
+    isSendable: () => true,
+    send: async (payload: any) => { sent = payload; return { id: 'sent-alert' }; },
+  }) } } as unknown as Client;
+
+  await processDueScoutNotifications(client, {
+    storage, operationScope: {}, reportError: async () => undefined,
+  }, 100);
+
+  assert.equal(sent.content, '<@organizer>');
+  assert.deepEqual(sent.allowedMentions, { parse: [], users: ['organizer'], roles: [] });
+  assert.deepEqual(sent.embeds, [claimed.embed]);
+  assert.equal(sent.components[0].toJSON().components[0].label, 'View roster');
+});
+
 test('T-30 resolves the complete current roster and all per-game Hosts, then skips a finished scout', async () => {
   const db = openDatabase(':memory:');
   try {
@@ -109,6 +196,7 @@ test('T-30 resolves the complete current roster and all per-game Hosts, then ski
     assert.equal(resolved.status, 'deliver');
     if (resolved.status === 'deliver') {
       assert.equal(resolved.payload.allowedUserIds.length, 10);
+      assert.equal(resolved.payload.embed, undefined, 'signup-channel T-30 remains a text notification');
       assert.match(resolved.payload.content, /starts in 30 minutes/);
       assert.match(resolved.payload.content, /Lobby Host/);
       assert.match(resolved.payload.content, /<@solo-0>/);
