@@ -142,6 +142,7 @@ test('creation shows open seats and reactions promote the same working card in p
     assert.ok(f.ops.all.has(original.id), 'the working card is promoted in place');
     const ready = f.ops.all.first()!;
     assert.match(cardDisplayText(ready), /roster ready/i); assert.match(cardDisplayText(ready), /10\/10 seated/);
+    assert.match(cardDisplayText(ready), /Created by <@staff>/);
     assert.equal(f.sent.filter((entry) => entry.channel === 'ops' && entry.payload.allowedMentions.users.length).length, 0);
     await f.react('extra-solo', 'solo');
     assert.match(cardDisplayText(ready), /Unseated signups \(1\)/);
@@ -163,6 +164,7 @@ test('an open Scout Ops card is one embed with its working roster and controls',
     assert.match(embed.description, /Start: <t:/);
     assert.match(embed.description, /0\/10 seated/);
     assert.match(embed.description, /Unseated signups \(0\)/);
+    assert.match(embed.description, /Created by <@staff>/);
     assert.ok(card.components.flatMap((row: any) => row.toJSON().components)
       .some((component: any) => component.custom_id === `scout:cancel:${f.setup.id}:0`));
   } finally { f.db.close(); }
@@ -251,6 +253,7 @@ test('publishing keeps the Ops message and collapses it into one filled embed', 
     const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
     assert.match(embed.title, /Scout filled/);
     assert.match(embed.description, /<t:2000000000:t>/);
+    assert.match(embed.description, /Created by <@staff>/);
     assert.equal(card.components[0].toJSON().components[0].label, 'View roster');
   } finally { f.db.close(); }
 });
@@ -272,6 +275,7 @@ test('replacement-needed status edits the filled Ops card into a distinct embed'
     assert.equal(card.embeds.length, 1);
     assert.match(cardDisplayText(card), /replacement needed/);
     assert.match(cardDisplayText(card), /Order (Solo|Jungle|Mid|Support|Carry)/);
+    assert.match(cardDisplayText(card), /Created by <@staff>/);
     assert.equal(card.components[0].toJSON().components[0].label, 'View roster');
   } finally { f.db.close(); }
 });
@@ -291,6 +295,7 @@ test('a published Scout awaiting roster-message recovery still has one Ops embed
     const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
     assert.match(embed.title, /Vanaheim Scout published/);
     assert.match(embed.description, /Start: <t:/);
+    assert.match(embed.description, /Created by <@staff>/);
   } finally { f.db.close(); }
 });
 
@@ -339,6 +344,7 @@ test('cancelled Scout keeps its card and snapshot but shows no signup counts', a
     const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
     assert.match(embed.title, /Scout cancelled/);
     assert.match(embed.description, /Start: <t:/);
+    assert.match(embed.description, /Created by <@staff>/);
     assert.doesNotMatch(JSON.stringify(embed), /1\/10|Solo|Fill|Last recorded signup snapshot/);
     assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 1);
   } finally { f.db.close(); }
@@ -679,6 +685,7 @@ test('recovered published cards expose player edits and finishing durably closes
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, 1);
     assert.match(cardDisplayText(card), /finished/);
     assert.match(cardDisplayText(card), /Scout finished/);
+    assert.match(cardDisplayText(card), /Created by <@staff>/);
     assert.match(signup.content, /finished/i); assert.match(roster.content, /finished/i);
     assert.equal(card.components[0].toJSON().components[0].label, 'View final roster');
     assert.equal(roster.components[0].toJSON().components[0].label, 'View original signup');
