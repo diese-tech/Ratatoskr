@@ -1048,6 +1048,38 @@ test('component recovery paginates and ignores unrelated visible marker text', a
   } finally { f.db.close(); }
 });
 
+test("card recovery never adopts another setup's card whose version number equals this setup's id", async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture();
+  try {
+    // Setup A (id 1): publish it, then bump its version to 2 so its persistent
+    // control card's button custom IDs embed "...:1:2" -- its version number
+    // now numerically equals the id Setup B is about to get.
+    await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill();
+    await handleScoutPublishButton(
+      f.interaction(`scout:publishconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`), f.db);
+    f.db.prepare('UPDATE scout_setups SET version = 2 WHERE id = ?').run(f.setup.id);
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    const setupACard = f.ops.all.first()!;
+    assert.match(JSON.stringify(setupACard.components), new RegExp(`scout:[a-z]+:${f.setup.id}:2(?::|")`));
+
+    // Setup B (id 2): its own telemetry send response is lost, and that real
+    // (but unconfirmed) message is then removed from history entirely, so
+    // the only Ops message a version/id mix-up could latch onto is Setup A's.
+    const setupB = f.makeSetup();
+    const before = new Set(f.ops.all.keys());
+    f.loseSend();
+    await ensurePostedScoutSetup(f.client, f.db, setupB);
+    const lostId = [...f.ops.all.keys()].find((id) => !before.has(id))!;
+    f.ops.all.delete(lostId);
+
+    await assert.rejects(refreshScoutStatusCard(f.client, f.db, setupB.id), /telemetry send is uncertain/);
+
+    assert.equal(ensureScoutReadinessCard(f.db, setupB.id).telemetry_message_id, null);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.controlMessageId, setupACard.id);
+  } finally { f.db.close(); }
+});
+
 test('a delayed staff-card edit does not block subsequent signup persistence', async () => {
   const f = fixture();
   let release!: () => void;

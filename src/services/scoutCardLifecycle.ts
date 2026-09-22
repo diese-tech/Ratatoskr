@@ -48,7 +48,12 @@ const rejectedSend = (error: unknown) => new Set<number>([
 ]).has(Number((error as { code?: number })?.code));
 function hasSetupScopedControl(message: Message, setupId: number): boolean {
   const serialized = JSON.stringify(message.components);
-  return new RegExp(`scout:(?:[^\"\\\\:]+:){1,3}${setupId}(?::|\")`).test(serialized);
+  // Verb segments must not start with a digit, so a numeric argument (most
+  // commonly another setup's version number) can never be absorbed into the
+  // wildcard verb match and mistaken for this setupId -- e.g. a button
+  // customId "scout:pingroster:17:21" must not match setupId 21 just
+  // because setup 17 happens to be on version 21.
+  return new RegExp(`scout:(?:[^\"\\\\:0-9][^\"\\\\:]*:){1,3}${setupId}(?::|\")`).test(serialized);
 }
 
 async function getMessage(channel: TextBasedChannel, messageId: string): Promise<Message | undefined> {
