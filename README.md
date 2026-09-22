@@ -18,7 +18,7 @@ Ratatoskr currently provides:
 - **Operational reporting** — surface actionable reconciliation failures to staff instead of silently losing state.
 - **Private help** — `/help` provides a plain-language quickstart for the shipped command surface.
 
-For the full Scout operator workflow and permissions, see [`docs/operations/scout-workflow.md`](docs/operations/scout-workflow.md).
+For the full Scout operator workflow and permissions, see [`docs/operations/scout-workflow.md`](docs/operations/scout-workflow.md). For how to assign roles (including division Manager/Captain access), see [`docs/operations/roles-and-permissions.md`](docs/operations/roles-and-permissions.md).
 
 ## Command surface
 

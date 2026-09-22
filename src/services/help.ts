@@ -53,6 +53,16 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     ],
   },
   {
+    title: '🎖️ Division Captain Access',
+    entries: [
+      {
+        usage: 'Give both `Captain` + the division role',
+        description:
+          "`<Division> Captain` (e.g. Vanaheim Captain) is granted automatically, never assigned by hand. Give a player the server-wide `Captain` role AND their division role (e.g. `Vanaheim`), and Ratatoskr adds `<Division> Captain` within moments. Assigning `<Division> Captain` directly will be removed again on the next role change, since the two prerequisite roles aren't both present. Full details: `docs/operations/roles-and-permissions.md`.",
+      },
+    ],
+  },
+  {
     title: '🛡️ Admin Setup Commands',
     entries: [
       {
