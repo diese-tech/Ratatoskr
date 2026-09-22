@@ -142,6 +142,7 @@ test('creation shows open seats and reactions promote the same working card in p
     assert.ok(f.ops.all.has(original.id), 'the working card is promoted in place');
     const ready = f.ops.all.first()!;
     assert.match(cardDisplayText(ready), /roster ready/i); assert.match(cardDisplayText(ready), /10\/10 seated/);
+    assert.match(cardDisplayText(ready), /Created by <@staff>/);
     assert.equal(f.sent.filter((entry) => entry.channel === 'ops' && entry.payload.allowedMentions.users.length).length, 0);
     await f.react('extra-solo', 'solo');
     assert.match(cardDisplayText(ready), /Unseated signups \(1\)/);
@@ -163,6 +164,7 @@ test('an open Scout Ops card is one embed with its working roster and controls',
     assert.match(embed.description, /Start: <t:/);
     assert.match(embed.description, /0\/10 seated/);
     assert.match(embed.description, /Unseated signups \(0\)/);
+    assert.match(embed.description, /Created by <@staff>/);
     assert.ok(card.components.flatMap((row: any) => row.toJSON().components)
       .some((component: any) => component.custom_id === `scout:cancel:${f.setup.id}:0`));
   } finally { f.db.close(); }
@@ -251,6 +253,7 @@ test('publishing keeps the Ops message and collapses it into one filled embed', 
     const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
     assert.match(embed.title, /Scout filled/);
     assert.match(embed.description, /<t:2000000000:t>/);
+    assert.match(embed.description, /Created by <@staff>/);
     assert.equal(card.components[0].toJSON().components[0].label, 'View roster');
   } finally { f.db.close(); }
 });
@@ -272,6 +275,7 @@ test('replacement-needed status edits the filled Ops card into a distinct embed'
     assert.equal(card.embeds.length, 1);
     assert.match(cardDisplayText(card), /replacement needed/);
     assert.match(cardDisplayText(card), /Order (Solo|Jungle|Mid|Support|Carry)/);
+    assert.match(cardDisplayText(card), /Created by <@staff>/);
     assert.equal(card.components[0].toJSON().components[0].label, 'View roster');
   } finally { f.db.close(); }
 });
@@ -291,6 +295,7 @@ test('a published Scout awaiting roster-message recovery still has one Ops embed
     const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
     assert.match(embed.title, /Vanaheim Scout published/);
     assert.match(embed.description, /Start: <t:/);
+    assert.match(embed.description, /Created by <@staff>/);
   } finally { f.db.close(); }
 });
 
@@ -313,7 +318,7 @@ test('automatic cancellation puts the existing Scout Ops card in its final attri
     assert.equal(f.ops.all.size, 1);
     assert.match(cardDisplayText(card), /Cancelled by <@bot> automatically\./);
     assert.doesNotMatch(cardDisplayText(card), /automatically at/);
-    assert.doesNotMatch(cardDisplayText(card), /<@staff>/);
+    assert.doesNotMatch(cardDisplayText(card), /Cancelled by <@staff>/);
     assert.deepEqual(card.components, []);
   } finally {
     f.db.close();
@@ -339,6 +344,7 @@ test('cancelled Scout keeps its card and snapshot but shows no signup counts', a
     const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
     assert.match(embed.title, /Scout cancelled/);
     assert.match(embed.description, /Start: <t:/);
+    assert.match(embed.description, /Created by <@staff>/);
     assert.doesNotMatch(JSON.stringify(embed), /1\/10|Solo|Fill|Last recorded signup snapshot/);
     assert.equal(readScoutReadinessSnapshot(ensureScoutReadinessCard(f.db, setup.id))?.players, 1);
   } finally { f.db.close(); }
@@ -386,7 +392,7 @@ test('automatic finish keeps the current finished-by card presentation without t
     const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
     assert.match(embed.title, /Scout finished/);
     assert.match(embed.description, /Finished by <@bot> automatically\./);
-    assert.doesNotMatch(embed.description, /automatically at|<@staff>/);
+    assert.doesNotMatch(embed.description, /automatically at|Finished by <@staff>/);
   } finally {
     f.db.close();
   }
@@ -679,6 +685,7 @@ test('recovered published cards expose player edits and finishing durably closes
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.posts_reconciled, 1);
     assert.match(cardDisplayText(card), /finished/);
     assert.match(cardDisplayText(card), /Scout finished/);
+    assert.match(cardDisplayText(card), /Created by <@staff>/);
     assert.match(signup.content, /finished/i); assert.match(roster.content, /finished/i);
     assert.equal(card.components[0].toJSON().components[0].label, 'View final roster');
     assert.equal(roster.components[0].toJSON().components[0].label, 'View original signup');
@@ -1038,6 +1045,38 @@ test('component recovery paginates and ignores unrelated visible marker text', a
     await refreshScoutStatusCard(f.client, f.db, f.setup.id);
     assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).telemetry_message_id, original.id);
     assert.equal(f.ops.all.size, 106);
+  } finally { f.db.close(); }
+});
+
+test("card recovery never adopts another setup's card whose version number equals this setup's id", async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = fixture();
+  try {
+    // Setup A (id 1): publish it, then bump its version to 2 so its persistent
+    // control card's button custom IDs embed "...:1:2" -- its version number
+    // now numerically equals the id Setup B is about to get.
+    await ensurePostedScoutSetup(f.client, f.db, f.setup); await f.fill();
+    await handleScoutPublishButton(
+      f.interaction(`scout:publishconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`), f.db);
+    f.db.prepare('UPDATE scout_setups SET version = 2 WHERE id = ?').run(f.setup.id);
+    await refreshScoutStatusCard(f.client, f.db, f.setup.id);
+    const setupACard = f.ops.all.first()!;
+    assert.match(JSON.stringify(setupACard.components), new RegExp(`scout:[a-z]+:${f.setup.id}:2(?::|")`));
+
+    // Setup B (id 2): its own telemetry send response is lost, and that real
+    // (but unconfirmed) message is then removed from history entirely, so
+    // the only Ops message a version/id mix-up could latch onto is Setup A's.
+    const setupB = f.makeSetup();
+    const before = new Set(f.ops.all.keys());
+    f.loseSend();
+    await ensurePostedScoutSetup(f.client, f.db, setupB);
+    const lostId = [...f.ops.all.keys()].find((id) => !before.has(id))!;
+    f.ops.all.delete(lostId);
+
+    await assert.rejects(refreshScoutStatusCard(f.client, f.db, setupB.id), /telemetry send is uncertain/);
+
+    assert.equal(ensureScoutReadinessCard(f.db, setupB.id).telemetry_message_id, null);
+    assert.equal(getScoutSetupById(f.db, f.setup.id)!.controlMessageId, setupACard.id);
   } finally { f.db.close(); }
 });
 

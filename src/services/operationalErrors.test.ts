@@ -137,6 +137,25 @@ test('a lifecycle staff report retries failed delivery with a stable reference a
   } finally { f.db.close(); }
 });
 
+test('staff reporting falls back to STAFF_OPS_CHANNEL_ID when the channel is not a managed resource', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  const before = process.env.STAFF_OPS_CHANNEL_ID;
+  process.env.STAFF_OPS_CHANNEL_ID = 'staff-ops';
+  try {
+    f.db.prepare("DELETE FROM managed_resources WHERE logical_key = 'server:channel:admin:staff_ops:text_channel'").run();
+    // The env schema is parsed once at import; re-import with a cache-busting
+    // query so this module instance picks up the value set just above.
+    const fresh = await import(`./operationalErrors.js?staff-ops-channel-id-test=${Date.now()}`);
+    const report = await fresh.reportOperationalError(f.client, f.db, { guildId: 'guild', action: 'Swap' }, new Error('original failure'));
+    assert.equal(report.staffDelivered, true);
+    assert.equal(f.sent.length, 1);
+  } finally {
+    if (before === undefined) delete process.env.STAFF_OPS_CHANNEL_ID; else process.env.STAFF_OPS_CHANNEL_ID = before;
+    f.db.close();
+  }
+});
+
 for (const failure of ['public', 'players', 'denied', 'failure', 'missing', 'wrong-guild', 'unbound']) {
   test(`staff reporting has a truthful non-recursive fallback for ${failure}`, async (t) => {
     const f = fixture();

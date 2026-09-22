@@ -4,6 +4,8 @@ This document summarizes Ratatoskr's operational surface. The runtime command re
 
 Run `/help` in Discord for a private, plain-English quickstart covering every shipped command.
 
+For role assignment, including how division Manager and Captain access work, see [`roles-and-permissions.md`](roles-and-permissions.md).
+
 ## Scout games
 
 - `/scout config` — admins bind `#scout-ops` and configure additional scout staff roles, timezone, five required role emoji, and optional Fill.

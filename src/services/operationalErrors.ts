@@ -1,12 +1,27 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { ChannelType, PermissionFlagsBits, escapeMarkdown, type Client, type GuildTextBasedChannel } from 'discord.js';
 import type Database from 'better-sqlite3';
+import { z } from 'zod';
 import { getActiveManagedResourceByLogicalKey } from '../db/index.js';
 import { serverChannelLogicalKey, serverRoleLogicalKey } from './serverBootstrap.js';
 
 export type OperationContext = { guildId: string; action: string; setupId?: number; division?: string; next?: string };
 type Report = { reference: string; staffDelivered: boolean };
 const recent = new WeakMap<Database.Database, Map<string, Report & { at: number }>>();
+
+// Optional escape hatch for when the guild's staff-ops channel exists but
+// isn't (yet) a Ratatoskr-managed resource -- e.g. it lives under a category
+// server bootstrap doesn't recognize, so adoption is correctly refused as
+// ambiguous. Setting this lets operational alerts reach staff without
+// running server bootstrap (which reconciles permissions across the whole
+// scaffold) just to register one channel. Validated separately from
+// src/config/env.ts, like ROLE_ALLFATHER_ID/ROLE_AESIR_ID in
+// authorization.ts, because it's only needed by this reporting path, not by
+// every process that imports env.ts (e.g. scripts/bootstrap-guild.ts).
+const OperationalErrorsEnvSchema = z.object({
+  STAFF_OPS_CHANNEL_ID: z.string().min(1).optional(),
+});
+const operationalErrorsEnv = OperationalErrorsEnvSchema.parse(process.env);
 
 export function redactOperationalText(value: string): string {
   let result = value;
@@ -25,8 +40,12 @@ function safeLog(value: unknown) {
 
 async function validatedStaffChannel(client: Client, db: Database.Database, guildId: string): Promise<GuildTextBasedChannel> {
   const row = getActiveManagedResourceByLogicalKey(db, guildId, serverChannelLogicalKey('admin', 'staff_ops', 'text_channel'));
-  if (!row || row.resourceType !== 'text_channel' || row.scaffoldDomain !== 'server') throw new Error('staff-ops is not managed');
-  const channel = await client.channels.fetch(row.discordResourceId, { force: true });
+  const managedChannelId = row && row.resourceType === 'text_channel' && row.scaffoldDomain === 'server' ? row.discordResourceId : undefined;
+  // Fall back to the env var below when the channel isn't (yet) a managed
+  // resource -- see OperationalErrorsEnvSchema above.
+  const channelId = managedChannelId ?? operationalErrorsEnv.STAFF_OPS_CHANNEL_ID;
+  if (!channelId) throw new Error('staff-ops is not managed');
+  const channel = await client.channels.fetch(channelId, { force: true });
   if (!channel || channel.type !== ChannelType.GuildText || channel.guild.id !== guildId) throw new Error('staff-ops channel is unavailable or belongs to another guild');
   const guild = channel.guild;
   await guild.roles.fetch();
