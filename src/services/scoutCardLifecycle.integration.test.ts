@@ -313,7 +313,7 @@ test('automatic cancellation puts the existing Scout Ops card in its final attri
     assert.equal(f.ops.all.size, 1);
     assert.match(cardDisplayText(card), /Cancelled by <@bot> automatically\./);
     assert.doesNotMatch(cardDisplayText(card), /automatically at/);
-    assert.doesNotMatch(cardDisplayText(card), /<@staff>/);
+    assert.doesNotMatch(cardDisplayText(card), /Cancelled by <@staff>/);
     assert.deepEqual(card.components, []);
   } finally {
     f.db.close();
@@ -386,7 +386,7 @@ test('automatic finish keeps the current finished-by card presentation without t
     const embed = card.embeds[0].toJSON?.() ?? card.embeds[0];
     assert.match(embed.title, /Scout finished/);
     assert.match(embed.description, /Finished by <@bot> automatically\./);
-    assert.doesNotMatch(embed.description, /automatically at|<@staff>/);
+    assert.doesNotMatch(embed.description, /automatically at|Finished by <@staff>/);
   } finally {
     f.db.close();
   }

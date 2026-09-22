@@ -86,6 +86,7 @@ async function cardView(
         title: `✓ ${setup.divisionDisplayName} Scout finished`,
         description: [
         `<t:${setup.startAt}:t>`,
+        `Created by <@${setup.createdBy}>`,
         lifecycleCleanup?.action === 'finished'
           ? `Finished by <@${completion.finished_by}> automatically.`
           : `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>.`,
@@ -122,7 +123,7 @@ async function cardView(
       content: notify ? `<@${setup.createdBy}>` : '',
       embeds: [{
         title: `${setup.divisionDisplayName} Scout · ${setup.status === 'roster_ready' ? 'roster ready' : 'collecting signups'}`,
-        description: [warning, workingRosterLines.join('\n')].filter(Boolean).join('\n'),
+        description: [`Created by <@${setup.createdBy}>`, warning, workingRosterLines.join('\n')].filter(Boolean).join('\n'),
         color: setup.status === 'roster_ready' ? 0x0d9488 : 0x3b82f6,
       }],
       allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] },
@@ -136,9 +137,9 @@ async function cardView(
         title: replacementSlots.length
           ? `⚠️ ${setup.divisionDisplayName} Scout · replacement needed`
           : `✓ ${setup.divisionDisplayName} Scout filled`,
-        description: replacementSlots.length
+        description: (replacementSlots.length
           ? `<t:${setup.startAt}:t> · ${replacementSlots.map((slot) => `${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]}`).join(', ')}`
-          : `<t:${setup.startAt}:t>`,
+          : `<t:${setup.startAt}:t>`) + `\nCreated by <@${setup.createdBy}>`,
         color: replacementSlots.length ? 0xf59e0b : 0x22c55e,
       }],
       components: [scoutResultLinkRow(setup), scoutFinishButtonRow(setup.id, setup.version)],
@@ -152,6 +153,7 @@ async function cardView(
         title: `🚫 ${setup.divisionDisplayName} Scout cancelled`,
         description: [
           `Start: <t:${setup.startAt}:F>`,
+          `Created by <@${setup.createdBy}>`,
           lifecycleCleanup?.action === 'cancelled' ? `Cancelled by <@${lifecycleCleanup.actorUserId}> automatically.` : '',
           !setup.signupPostReconciled ? 'Cancelled in the records; public post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
           setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
@@ -172,6 +174,7 @@ async function cardView(
     title: `${setup.divisionDisplayName} Scout ${status}`,
     description: [
       `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
+      `Created by <@${setup.createdBy}>`,
       setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
       unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
       readiness,
