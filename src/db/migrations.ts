@@ -552,4 +552,36 @@ export const migrations: Migration[] = [
       ALTER TABLE scout_lifecycle_recovery_attempts ADD COLUMN alert_delivered_at INTEGER;
     `,
   },
+  {
+    id: 21,
+    name: 'league_operations_transactions_and_daily_audits',
+    sql: `
+      CREATE TABLE league_daily_audits (
+        guild_id TEXT NOT NULL,
+        audit_date TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('passed', 'failed')),
+        issues_json TEXT NOT NULL DEFAULT '[]',
+        completed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (guild_id, audit_date)
+      );
+
+      CREATE TABLE league_transactions (
+        reference TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('trade', 'drop', 'pickup', 'rename')),
+        actor_user_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'applying_discord', 'applying_sheets', 'announcement_pending', 'completed', 'failed', 'reconciliation_required'
+        )),
+        announcement_id TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
+      CREATE INDEX idx_league_transactions_guild_status
+        ON league_transactions (guild_id, status, created_at);
+    `,
+  },
 ];

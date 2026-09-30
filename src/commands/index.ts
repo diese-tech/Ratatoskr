@@ -11,6 +11,7 @@ import {
 } from './scout.js';
 import { handleSeasonCommand, seasonCommand } from './season.js';
 import { handleServerCommand, serverCommand } from './server.js';
+import { handleTransactionCommand, transactionCommand } from './transaction.js';
 
 export const commandData = [
   divisionCommand.toJSON(),
@@ -18,6 +19,7 @@ export const commandData = [
   scoutCommand.toJSON(),
   serverCommand.toJSON(),
   helpCommand.toJSON(),
+  transactionCommand.toJSON(),
 ];
 
 export async function registerGuildCommands(client: Client, guildId: string) {
@@ -98,5 +100,7 @@ export async function handleInteraction(
     await handleServerCommand(interaction, storage.managedResources);
   } else if (interaction.commandName === 'help') {
     await handleHelpCommand(interaction);
+  } else if (interaction.commandName === 'transaction') {
+    await handleTransactionCommand(interaction, db, storage.operationScope);
   }
 }

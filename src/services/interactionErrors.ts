@@ -42,7 +42,15 @@ export async function handleInteractionError(interaction: Interaction, db: Datab
     try { await repliable.deferReply({ flags: MessageFlags.Ephemeral }); deferredHere = true; }
     catch { /* Best effort acknowledgement; continue reporting the original error. */ }
   }
-  const report = await reportOperationalError(interaction.client, db, interactionOperationContext(interaction, fallbackGuildId), error);
+  const transactionReference = error && typeof error === 'object' && 'reference' in error && typeof error.reference === 'string'
+    ? error.reference : undefined;
+  const report = await reportOperationalError(
+    interaction.client,
+    db,
+    interactionOperationContext(interaction, fallbackGuildId),
+    error,
+    transactionReference ? { reference: transactionReference, retryUndelivered: true } : undefined,
+  );
   if (!repliable) return;
   const payload = { content: `Ratatoskr could not complete that action. ${operationalErrorGuidance(report)}`, flags: MessageFlags.Ephemeral } as const;
   // A failed apology must never escape the event boundary. Existing component

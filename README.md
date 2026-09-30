@@ -14,6 +14,7 @@ Ratatoskr currently provides:
 - **Scout operations** — configure, create, monitor, review, publish, edit, cancel, finish, and recover division-scoped preseason Scout workflows.
 - **Readiness telemetry** — show current eligible-player and role coverage in Scout Ops using the same canonical eligibility and roster-matching rules used for roster formation.
 - **Persistent controls** — keep roster review, Swap, Replace player, cancellation, and completion actions attached to the relevant Scout workflow instead of expanding the slash-command surface unnecessarily.
+- **League transactions** — preview and execute approved trades, drops, pickups, and official name changes across Discord and the private/public roster sheets with drift protection.
 - **Failure recovery** — persist authoritative workflow state in SQLite and reconcile Discord messages after transient failures, ambiguous delivery, or bot restarts.
 - **Operational reporting** — surface actionable reconciliation failures to staff instead of silently losing state.
 - **Private help** — `/help` provides a plain-language quickstart for the shipped command surface.
@@ -32,6 +33,7 @@ Current top-level namespaces:
 | `/division` | division lifecycle and resource management |
 | `/season` | season lifecycle |
 | `/scout` | Scout configuration, creation, and cancellation entry points |
+| `/transaction` | approved roster moves and official league-name changes |
 | `/help` | private command quickstart |
 
 The runtime command registry is authoritative. Product direction and candidate future domains are tracked in [issue #24](https://github.com/diese-tech/Ratatoskr/issues/24).
@@ -96,6 +98,11 @@ DISCORD_CLIENT_ID=
 DISCORD_GUILD_ID=
 ROLE_ALLFATHER_ID=
 ROLE_AESIR_ID=
+GOOGLE_SERVICE_ACCOUNT_JSON=
+YSL_ADMIN_SPREADSHEET_ID=
+YSL_PUBLIC_SPREADSHEET_ID=
+ROLE_FREE_AGENT_ID=
+YSL_TRANSACTIONS_CHANNEL_ID=
 STAFF_OPS_CHANNEL_ID=
 DATABASE_BACKEND=sqlite
 DATABASE_PATH=

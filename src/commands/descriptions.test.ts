@@ -4,13 +4,14 @@ import { test } from 'node:test';
 process.env.ROLE_ALLFATHER_ID ??= 'allfather-test-role';
 process.env.ROLE_AESIR_ID ??= 'aesir-test-role';
 
-const [{ divisionCommand }, { helpCommand }, { scoutCommand }, { seasonCommand }, { serverCommand }] =
+const [{ divisionCommand }, { helpCommand }, { scoutCommand }, { seasonCommand }, { serverCommand }, { transactionCommand }] =
   await Promise.all([
     import('./division.js'),
     import('./help.js'),
     import('./scout.js'),
     import('./season.js'),
     import('./server.js'),
+    import('./transaction.js'),
   ]);
 
 type DescribedOption = {
@@ -86,4 +87,10 @@ test('every slash command, subcommand, and option uses readable English', () => 
     child(apply, 'delete_obsolete').description,
     'Also delete old bot-managed items after they appear in the preview.',
   );
+
+  const transaction = asCommand(transactionCommand);
+  assert.equal(transaction.description, 'Process approved YSL roster changes.');
+  assert.equal(child(transaction, 'trade').description, 'Swap two players between teams in the same division.');
+  assert.equal(child(child(transaction, 'pickup'), 'team').description, 'Division-suffixed team role receiving the player.');
+  assert.equal(child(transaction, 'rename').description, "Change a player's official league name while preserving name history.");
 });

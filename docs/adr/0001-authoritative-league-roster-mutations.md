@@ -1,0 +1,50 @@
+# ADR 0001: Authoritative league roster mutations
+
+Status: Accepted
+
+## Context
+
+YSL administrators currently repeat an approved roster move in several places: a Discord transaction notice, player roles, the private roster workbook, and the public season roster. Those copies can drift, and Discord and Google Sheets cannot participate in one database transaction.
+
+The YSL-owned workbook remains the public presentation surface. The private **YSL League Operations — Admin** workbook supplies human-readable team-role configuration, canonical player names, current rosters, and transaction history. Discord role IDs remain the stable player/team identity.
+
+## Decision
+
+Ratatoskr owns the execution of approved `/transaction trade`, `/transaction drop`, `/transaction pickup`, and `/transaction rename` commands. The administrator command is authoritative; the sheets are outputs and audit records, not a second command surface.
+
+Before the first mutation of each America/New_York league day, Ratatoskr compares all configured player team roles in Discord with Current Rosters, canonical names, visible public team blocks, and division free-agent lists. A successful result is recorded in SQLite for that day. Every individual transaction still revalidates its players, roles, configured team, and the exact managed sheet values immediately before mutation.
+
+The mutation lifecycle is durable:
+
+1. Validate authorization and current Discord/sheet state.
+2. Record transaction intent in SQLite.
+3. Change only division-suffixed player team roles and the Free Agent role. Plain franchise roles are never part of a roster mutation.
+4. Update the private and public sheets only when their audited before-values still match.
+5. Verify the resulting managed sheet values.
+6. Post the human-facing transaction notice.
+7. Append the private transaction-history rows and mark the transaction complete.
+
+Safe preflight failures repair Discord changes and close the attempt as failed. Once a sheet write may have occurred, Ratatoskr does not guess or blindly roll Discord backward; it records `reconciliation_required`. Completed sheet mutations whose announcement/history is interrupted remain `announcement_pending` and retry on startup. Transaction History uses the stable reference to avoid duplicate rows.
+
+## Presentation
+
+Trade notices use the locked public structure:
+
+> **Word Travels the Branches**
+>
+> Ratatoskr carries news of an agreement between [Team 1] and [Team 2].
+>
+> [player1] leaves [Team 1] to join [Team 2].  
+> [player2] leaves [Team 2] to join [Team 1].
+>
+> Posted by [admin]
+
+The message content pings the two configured team roles. The public card contains no emoji, database reference, raw audit detail, or service-account information.
+
+## Consequences
+
+- Staff get one previewed command instead of several manual edits.
+- Unexpected manual edits stop automation instead of being overwritten.
+- The daily gate detects broad drift; command preflight protects the exact transaction from later drift.
+- The first release intentionally rejects cross-division moves and leaves captain/staff role changes manual.
+- Production rollout requires the Google service-account secret, both workbook IDs, the Free Agent role ID, and the transactions channel ID.
