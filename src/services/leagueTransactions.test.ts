@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildTradePlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildRenamePlan, buildTradePlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { openDatabase } from '../db/client.js';
-import { getLeagueTransaction, hasSuccessfulLeagueAudit } from '../db/repositories/leagueOperations.js';
+import {
+  createLeagueTransaction,
+  getLeagueTransaction,
+  hasSuccessfulLeagueAudit,
+  recordLeagueAudit,
+  transitionLeagueTransaction,
+} from '../db/repositories/leagueOperations.js';
 import { LeagueSheetDriftError, LeagueSheetReconciliationRequiredError } from './leagueSheets.js';
 import { buildLeagueAnnouncement, executeLeagueTransaction, reconcilePendingLeagueTransactions } from './leagueTransactions.js';
 
@@ -29,13 +35,18 @@ function snapshot(): LeagueSnapshot {
   };
 }
 
-function fixture(sheetFailure?: Error) {
+function fixture(sheetFailure?: Error, prepareFailure?: Error) {
   const db = openDatabase(':memory:');
   const events: string[] = [];
   const current = snapshot();
   const sheets = {
     load: async () => ({ snapshot: current, sources: {} as never }),
     assertUnchanged: async () => { events.push('sheet-preflight'); },
+    prepare: () => {
+      events.push('sheet-targets');
+      if (prepareFailure) throw prepareFailure;
+      return { publicUpdates: [] };
+    },
     apply: async () => { events.push('sheet-apply'); if (sheetFailure) throw sheetFailure; },
     appendTransactionHistory: async () => { events.push('history'); },
   };
@@ -55,7 +66,7 @@ test('first mutation of the league day audits before Discord and completes the d
     buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
   });
   assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), true);
-  assert.deepEqual(f.events, ['sheet-preflight', 'discord:one', 'discord:two', 'sheet-apply', 'announce', 'history']);
+  assert.deepEqual(f.events, ['sheet-preflight', 'sheet-targets', 'discord:one', 'discord:two', 'sheet-apply', 'announce', 'history']);
   assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   assert.equal(getLeagueTransaction(f.db, result.reference)?.announcementId, 'message');
   f.db.close();
@@ -87,6 +98,32 @@ test('failed daily audit blocks every mutation and records no transaction', asyn
   }), /daily league audit failed/i);
   assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), false);
   assert.deepEqual(f.events, []);
+  f.db.close();
+});
+
+test('an unresolved public roster target blocks all Discord and durable mutation work', async () => {
+  const f = fixture(undefined, new Error('No empty slot was found in the managed team block.'));
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
+  }), /No empty slot/i);
+  assert.deepEqual(f.events, ['sheet-preflight', 'sheet-targets']);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
+  f.db.close();
+});
+
+test('targeted role preflight validates complete role integrity even for a rename', async () => {
+  const f = fixture();
+  recordLeagueAudit(f.db, { guildId: 'guild', auditDate: '2026-09-30', status: 'passed', issues: [] });
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.roleIds.push('team-b');
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
+  }), /team roles do not match/i);
+  assert.deepEqual(f.events, []);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
 });
 
@@ -130,5 +167,26 @@ test('startup recovery reuses a confirmed announcement and appends history idemp
   assert.deepEqual(f.events.slice(-2), ['recovered-announce', 'history']);
   await reconcilePendingLeagueTransactions({ db: f.db, sheets: f.sheets, discord: f.discord });
   assert.equal(f.events.filter((event) => event === 'recovered-announce').length, 1);
+  f.db.close();
+});
+
+test('startup recovery quarantines and reports transactions interrupted during mutation', async () => {
+  const f = fixture();
+  const payload = { plan: buildTradePlan(f.current, 'one', 'two'), record: { reference: '', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin' } };
+  createLeagueTransaction(f.db, { reference: 'YSL-TRX-DISCORD', guildId: 'guild', kind: 'trade', actorUserId: 'admin', payload });
+  createLeagueTransaction(f.db, { reference: 'YSL-TRX-SHEETS', guildId: 'guild', kind: 'trade', actorUserId: 'admin', payload });
+  transitionLeagueTransaction(f.db, 'YSL-TRX-SHEETS', 'applying_discord', 'applying_sheets');
+  const reports: { reference: string; message: string }[] = [];
+  await reconcilePendingLeagueTransactions({
+    db: f.db,
+    sheets: f.sheets,
+    discord: f.discord,
+    reportError: async (reference, error) => { reports.push({ reference, message: error instanceof Error ? error.message : String(error) }); },
+  });
+  assert.equal(getLeagueTransaction(f.db, 'YSL-TRX-DISCORD')?.status, 'reconciliation_required');
+  assert.equal(getLeagueTransaction(f.db, 'YSL-TRX-SHEETS')?.status, 'reconciliation_required');
+  assert.deepEqual(reports.map((report) => report.reference), ['YSL-TRX-DISCORD', 'YSL-TRX-SHEETS']);
+  assert.equal(reports.every((report) => /manual reconciliation is required/i.test(report.message)), true);
+  assert.deepEqual(f.events, []);
   f.db.close();
 });

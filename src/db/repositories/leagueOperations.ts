@@ -87,6 +87,12 @@ export function listPendingLeagueAnnouncements(db: Database.Database): LeagueTra
   return rows.map(toTransaction);
 }
 
+export function listInterruptedLeagueTransactions(db: Database.Database): LeagueTransaction[] {
+  const rows = db.prepare(`SELECT * FROM league_transactions
+    WHERE status IN ('applying_discord', 'applying_sheets') ORDER BY created_at, reference`).all() as TransactionRow[];
+  return rows.map(toTransaction);
+}
+
 export function transitionLeagueTransaction(
   db: Database.Database,
   reference: string,

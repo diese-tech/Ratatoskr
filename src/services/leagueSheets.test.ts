@@ -93,19 +93,36 @@ test('league sheet reader maps only the configured managed tabs and cells', asyn
 test('sheet preflight aborts before all writes when any audited value drifted', async () => {
   const { gateway, service } = serviceFixture();
   const loaded = await service.load(members, 'free-agent');
+  const plan = buildTradePlan(loaded.snapshot, 'one', 'two');
+  const prepared = service.prepare(loaded, plan);
   gateway.changed = true;
-  await assert.rejects(() => service.apply(loaded, buildTradePlan(loaded.snapshot, 'one', 'two'), {
+  await assert.rejects(() => service.apply(loaded, plan, {
     reference: 'YSL-TRX-1', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
-  }), /changed after the audit/i);
+  }, prepared), /changed after the audit/i);
+  assert.equal(gateway.writes.length, 0);
+});
+
+test('public roster destinations are resolved before a mutation can begin', async () => {
+  const { gateway, service } = serviceFixture();
+  const publicRows = gateway.data.get(gateway.key('public', "'Vanaheim Roster'!A1:O99"))!;
+  for (let row = 4; row <= 10; row += 1) publicRows[row]![2] = `Player ${row}`;
+  const loaded = await service.load(members, 'free-agent');
+  const plan = {
+    ...buildTradePlan(loaded.snapshot, 'one', 'two'),
+    publicChanges: [{ division: 'Vanaheim' as const, area: 'team' as const, group: 'Dream Walkers', from: '', to: 'New Player' }],
+  };
+  assert.throws(() => service.prepare(loaded, plan), /No empty slot.*Dream Walkers/i);
   assert.equal(gateway.writes.length, 0);
 });
 
 test('trade writes the sorted admin roster and only the two exact public player cells', async () => {
   const { gateway, service } = serviceFixture();
   const loaded = await service.load(members, 'free-agent');
-  await service.apply(loaded, buildTradePlan(loaded.snapshot, 'one', 'two'), {
+  const plan = buildTradePlan(loaded.snapshot, 'one', 'two');
+  const prepared = service.prepare(loaded, plan);
+  await service.apply(loaded, plan, {
     reference: 'YSL-TRX-1', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
-  });
+  }, prepared);
   const publicRanges = gateway.writes.filter((write) => write.spreadsheetId === 'public')
     .flatMap((write) => write.updates.map((update) => update.range));
   assert.deepEqual(publicRanges, ["'Vanaheim Roster'!C5", "'Vanaheim Roster'!G16"]);

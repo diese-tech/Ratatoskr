@@ -148,6 +148,10 @@ export type LeagueTransactionRecord = {
   announcementId?: string;
 };
 
+export type PreparedLeagueSheetMutation = {
+  publicUpdates: SheetValueUpdate[];
+};
+
 export class LeagueSheetDriftError extends Error {}
 export class LeagueSheetReconciliationRequiredError extends Error {}
 
@@ -262,10 +266,15 @@ export class LeagueSheetsService {
     });
   }
 
+  prepare(loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan): PreparedLeagueSheetMutation {
+    return { publicUpdates: this.resolvePublicChanges(loaded, plan.publicChanges) };
+  }
+
   async apply(
     loaded: LoadedLeagueSnapshot,
     plan: LeagueMutationPlan,
     record: LeagueTransactionRecord,
+    prepared: PreparedLeagueSheetMutation,
   ): Promise<void> {
     await this.assertUnchanged(loaded);
     const originalRosters = loaded.snapshot.rosters;
@@ -295,10 +304,9 @@ export class LeagueSheetsService {
       }
     }
 
-    const publicUpdates = this.resolvePublicChanges(loaded, plan.publicChanges);
     try {
       await this.gateway.batchUpdate(this.config.adminSpreadsheetId, adminUpdates, 'USER_ENTERED');
-      await this.gateway.batchUpdate(this.config.publicSpreadsheetId, publicUpdates, 'RAW');
+      await this.gateway.batchUpdate(this.config.publicSpreadsheetId, prepared.publicUpdates, 'RAW');
 
       if (plan.nameHistoryAppend) {
         const row = plan.nameHistoryAppend;

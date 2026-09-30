@@ -4,6 +4,7 @@ import { auditLeagueRoster, type DiscordRoleChange, type LeagueMutationPlan, typ
 import {
   createLeagueTransaction,
   hasSuccessfulLeagueAudit,
+  listInterruptedLeagueTransactions,
   listPendingLeagueAnnouncements,
   markLeagueTransactionReconciliationRequired,
   recordLeagueAudit,
@@ -14,6 +15,7 @@ import {
   LeagueSheetReconciliationRequiredError,
   type LeagueTransactionRecord,
   type LoadedLeagueSnapshot,
+  type PreparedLeagueSheetMutation,
 } from './leagueSheets.js';
 
 export type LeagueAnnouncement = {
@@ -27,7 +29,13 @@ export type LeagueAnnouncement = {
 export interface LeagueSheetsPort {
   load(discordMembers: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot>;
   assertUnchanged(loaded: LoadedLeagueSnapshot): Promise<void>;
-  apply(loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan, record: LeagueTransactionRecord): Promise<void>;
+  prepare(loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan): PreparedLeagueSheetMutation;
+  apply(
+    loaded: LoadedLeagueSnapshot,
+    plan: LeagueMutationPlan,
+    record: LeagueTransactionRecord,
+    prepared: PreparedLeagueSheetMutation,
+  ): Promise<void>;
   appendTransactionHistory(plan: LeagueMutationPlan, record: LeagueTransactionRecord): Promise<void>;
 }
 
@@ -75,6 +83,47 @@ function errorWithReference(error: unknown, reference: string): Error & { refere
 }
 
 function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutationPlan): void {
+  const activeTeams = snapshot.teams.filter((team) => team.active);
+  const teamsByRole = new Map(activeTeams.map((team) => [team.teamRoleId, team]));
+  for (const discordId of plan.playerIds) {
+    const member = snapshot.discordMembers.find((candidate) => candidate.discordId === discordId);
+    if (!member) throw new Error(`Discord member ${discordId} could not be loaded.`);
+    const rosterRows = snapshot.rosters.filter((row) => row.discordId === discordId);
+    if (rosterRows.length > 1) throw new Error(`Discord member ${discordId} has multiple roster assignments.`);
+    const currentNames = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
+    if (currentNames.length !== 1) throw new Error(`Discord member ${discordId} must have exactly one current name record.`);
+    const assignedTeamRoles = member.roleIds.filter((roleId) => teamsByRole.has(roleId));
+    const roster = rosterRows[0];
+    if (roster) {
+      const expectedTeam = teamsByRole.get(roster.teamRoleId);
+      if (!expectedTeam) throw new Error(`Discord member ${discordId} is rostered to an inactive or unknown team.`);
+      if (assignedTeamRoles.length !== 1 || assignedTeamRoles[0] !== expectedTeam.teamRoleId) {
+        throw new Error(`Discord member ${discordId} team roles do not match the current roster assignment.`);
+      }
+      if (member.roleIds.includes(snapshot.freeAgentRoleId)) {
+        throw new Error(`Discord member ${discordId} cannot have both a team role and the Free Agent role.`);
+      }
+      if (!member.roleIds.includes(expectedTeam.divisionRoleId)) {
+        throw new Error(`Discord member ${discordId} is missing the ${expectedTeam.division} division role.`);
+      }
+    } else {
+      const currentName = currentNames[0]!;
+      if (currentName.leagueStatus !== 'Free Agent') {
+        throw new Error(`Discord member ${discordId} has no valid team or free-agent assignment.`);
+      }
+      if (assignedTeamRoles.length !== 0) {
+        throw new Error(`Discord member ${discordId} is a free agent but still has a configured team role.`);
+      }
+      if (!member.roleIds.includes(snapshot.freeAgentRoleId)) {
+        throw new Error(`Discord member ${discordId} is missing the Free Agent role.`);
+      }
+      const divisionRoleId = activeTeams.find((team) => team.division === currentName.division)?.divisionRoleId;
+      if (!divisionRoleId || !member.roleIds.includes(divisionRoleId)) {
+        throw new Error(`Discord member ${discordId} is missing the ${currentName.division} division role.`);
+      }
+    }
+  }
+
   for (const change of plan.discordRoleChanges) {
     const member = snapshot.discordMembers.find((candidate) => candidate.discordId === change.discordId);
     if (!member) throw new Error(`Discord member ${change.discordId} could not be loaded.`);
@@ -137,6 +186,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     const plan = input.buildPlan(loaded.snapshot);
     assertDiscordPreconditions(loaded.snapshot, plan);
     await input.sheets.assertUnchanged(loaded);
+    const prepared = input.sheets.prepare(loaded, plan);
 
     const reference = `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const record: LeagueTransactionRecord = {
@@ -169,7 +219,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
 
     transitionLeagueTransaction(input.db, reference, 'applying_discord', 'applying_sheets');
     try {
-      await input.sheets.apply(loaded, plan, record);
+      await input.sheets.apply(loaded, plan, record, prepared);
     } catch (error) {
       if (error instanceof LeagueSheetDriftError) {
         try {
@@ -224,6 +274,15 @@ export async function reconcilePendingLeagueTransactions(input: {
   discord: LeagueDiscordPort;
   reportError?(reference: string, error: unknown): Promise<void>;
 }): Promise<void> {
+  for (const transaction of listInterruptedLeagueTransactions(input.db)) {
+    const error = new Error(
+      `League transaction was interrupted during ${transaction.status}. Discord roles and Google Sheets may be partially applied; manual reconciliation is required.`,
+    );
+    markLeagueTransactionReconciliationRequired(input.db, transaction.reference, error.message);
+    console.error(`League transaction ${transaction.reference} requires reconciliation after restart`, error);
+    await input.reportError?.(transaction.reference, error);
+  }
+
   for (const transaction of listPendingLeagueAnnouncements(input.db)) {
     try {
       const { plan, record } = pendingPayload(transaction.payload);
