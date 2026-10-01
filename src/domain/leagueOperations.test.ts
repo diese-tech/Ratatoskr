@@ -136,6 +136,32 @@ test('daily audit rejects a roster display name that differs from the canonical 
   assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('Current League Name')));
 });
 
+test('daily audit rejects duplicate canonical names within managed team and free-agent areas', () => {
+  const rostered = snapshot();
+  rostered.rosters.push({
+    sheetRow: 9, division: 'Vanaheim', franchise: 'Dream Walkers', teamRoleId: 'team-a',
+    team: 'Dream Walkers VD', discordId: 'three', player: 'One', rosterStatus: 'Player',
+  });
+  rostered.names.push({
+    sheetRow: 9, discordId: 'three', currentLeagueName: 'One', knownName: 'ThreeLive',
+    nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: 'Dream Walkers', leagueStatus: 'Player',
+  });
+  rostered.discordMembers.push({ discordId: 'three', displayName: 'ThreeLive', roleIds: ['team-a', 'division-v'] });
+  rostered.publicRosters.Vanaheim!.teams['Dream Walkers'] = ['One', 'One'];
+  assert.ok(auditLeagueRoster(rostered)
+    .some((issue) => issue.includes('Dream Walkers') && issue.includes('duplicate current player names')));
+
+  const freeAgents = snapshot();
+  freeAgents.names.push({
+    sheetRow: 9, discordId: 'another-free', currentLeagueName: 'Free', knownName: 'AnotherFreeLive',
+    nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: '', leagueStatus: 'Free Agent',
+  });
+  freeAgents.discordMembers.push({ discordId: 'another-free', displayName: 'AnotherFreeLive', roleIds: ['free-agent', 'division-v'] });
+  freeAgents.publicRosters.Vanaheim!.freeAgents = ['Free', 'Free'];
+  assert.ok(auditLeagueRoster(freeAgents)
+    .some((issue) => issue.includes('Vanaheim free agents') && issue.includes('duplicate current player names')));
+});
+
 test('daily audit rejects stale franchise metadata for a free agent', () => {
   const current = snapshot();
   current.names.find((row) => row.discordId === 'free')!.franchise = 'Dream Walkers';

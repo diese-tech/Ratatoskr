@@ -84,6 +84,11 @@ function sameNames(left: Iterable<string>, right: Iterable<string>): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+function hasDuplicateNames(values: Iterable<string>): boolean {
+  const names = [...values].map((value) => value.trim()).filter(Boolean);
+  return new Set(names).size !== names.length;
+}
+
 function canonicalNames(snapshot: LeagueSnapshot): Map<string, string> {
   const result = new Map<string, string>();
   for (const row of snapshot.names) {
@@ -224,6 +229,9 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
       .filter((row) => row.teamRoleId === team.teamRoleId)
       .map((row) => names.get(row.discordId) ?? '');
     const actual = snapshot.publicRosters[team.division]?.teams[team.franchise] ?? [];
+    if (hasDuplicateNames(expected)) {
+      issues.push(`${team.division} ${team.franchise} has duplicate current player names.`);
+    }
     if (!sameNames(expected, actual)) issues.push(`${team.division} ${team.franchise} public roster does not match Current Rosters.`);
   }
   for (const division of ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const) {
@@ -231,6 +239,7 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
       .filter((row) => row.nameStatus === 'Current Discord Name' && row.division === division && row.leagueStatus === 'Free Agent')
       .map((row) => row.currentLeagueName);
     const actual = snapshot.publicRosters[division]?.freeAgents ?? [];
+    if (hasDuplicateNames(expected)) issues.push(`${division} free agents have duplicate current player names.`);
     if (!sameNames(expected, actual)) issues.push(`${division} public free-agent list does not match Player Name History.`);
   }
   return issues;
