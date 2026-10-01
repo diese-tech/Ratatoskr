@@ -170,3 +170,20 @@ test('numeric-looking league names remain exact text in every managed admin upda
   assert.equal(reloaded.snapshot.rosters.find((row) => row.discordId === 'one')?.player, '007');
   assert.equal(reloaded.snapshot.names.find((row) => row.discordId === 'one')?.currentLeagueName, '007');
 });
+
+test('roster rewrites clear through the last occupied physical row after an internal blank', async () => {
+  const { gateway, service } = serviceFixture();
+  const source = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))!;
+  source.splice(2, 0, Array(10).fill(''));
+  const loaded = await service.load(members, 'free-agent');
+  assert.equal(loaded.snapshot.rosters.find((row) => row.discordId === 'two')?.sheetRow, 8);
+  const plan = buildTradePlan(loaded.snapshot, 'one', 'two');
+  await service.apply(loaded, plan, {
+    reference: 'YSL-TRX-SPARSE', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
+  }, service.prepare(loaded, plan));
+  const rosterWrite = gateway.writes.flatMap((write) => write.updates)
+    .find((update) => update.range.startsWith("'Current Rosters'!A6:"));
+  assert.equal(rosterWrite?.range, "'Current Rosters'!A6:J8");
+  const reloaded = await service.load(members, 'free-agent');
+  assert.deepEqual(reloaded.snapshot.rosters.map((row) => row.discordId), ['two', 'one']);
+});

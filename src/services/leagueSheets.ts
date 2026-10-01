@@ -304,9 +304,11 @@ export class LeagueSheetsService {
       row.division, row.franchise, row.teamRoleId, row.team, row.discordId, row.player,
       row.rosterStatus, 'OK', 'Ratatoskr approved transaction', now,
     ]);
-    while (rosterValues.length < originalRosters.length) rosterValues.push(['', '', '', '', '', '', '', '', '', '']);
+    const lastOriginalRosterRow = Math.max(5, ...originalRosters.map((row) => row.sheetRow));
+    const lastRosterRow = Math.max(lastOriginalRosterRow, 5 + sortedRosters.length);
+    while (rosterValues.length < lastRosterRow - 5) rosterValues.push(['', '', '', '', '', '', '', '', '', '']);
     const adminUpdates: SheetValueUpdate[] = rosterValues.length
-      ? [{ range: `'Current Rosters'!A6:J${5 + rosterValues.length}`, values: rosterValues }]
+      ? [{ range: `'Current Rosters'!A6:J${lastRosterRow}`, values: rosterValues }]
       : [];
 
     for (const next of plan.nameUpdates) {

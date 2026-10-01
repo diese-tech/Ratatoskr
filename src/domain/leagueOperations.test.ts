@@ -69,6 +69,16 @@ test('daily audit rejects contradictory free-agent and roster roles', () => {
   assert.ok(issues.some((issue) => issue.includes('free') && issue.includes('missing the Free Agent role')));
 });
 
+test('daily audit rejects stale current-name assignment metadata for a rostered player', () => {
+  const current = snapshot();
+  const name = current.names.find((row) => row.discordId === 'one')!;
+  name.division = 'Alfheim';
+  name.franchise = 'The Sewer';
+  name.leagueStatus = 'Player';
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('Current Rosters assignment')));
+});
+
 test('trade swaps team assignments and exact public cells while preserving captain status', () => {
   const plan = buildTradePlan(snapshot(), 'one', 'two');
   assert.equal(plan.rosters.find((row) => row.discordId === 'one')?.teamRoleId, 'team-b');
@@ -105,4 +115,13 @@ test('rename changes the canonical name everywhere while retaining the old canon
   assert.deepEqual(plan.publicChanges, [
     { division: 'Vanaheim', area: 'team', group: 'Dream Walkers', from: 'One', to: 'One Prime' },
   ]);
+});
+
+test('rename rejects a canonical name already used in the same managed roster area', () => {
+  const current = snapshot();
+  const secondRoster = current.rosters.find((row) => row.discordId === 'two')!;
+  secondRoster.teamRoleId = 'team-a';
+  secondRoster.team = 'Dream Walkers VD';
+  secondRoster.franchise = 'Dream Walkers';
+  assert.throws(() => buildRenamePlan(current, 'one', 'Two'), /already used by another player/i);
 });

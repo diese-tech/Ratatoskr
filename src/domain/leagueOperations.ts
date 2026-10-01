@@ -128,6 +128,13 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
     if (!names.has(row.discordId)) issues.push(`Current Rosters member ${row.discordId} has no Current League Name.`);
     if ((currentNameRows.get(row.discordId)?.length ?? 0) !== 1) {
       issues.push(`Current Rosters member ${row.discordId} must have exactly one current name record.`);
+    } else {
+      const currentName = currentNameRows.get(row.discordId)![0]!;
+      if (currentName.division !== row.division
+        || currentName.franchise !== row.franchise
+        || currentName.leagueStatus !== row.rosterStatus) {
+        issues.push(`Current name record for ${row.discordId} does not match its Current Rosters assignment.`);
+      }
     }
   }
 
@@ -310,6 +317,14 @@ export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, req
   const current = currentNameRow(snapshot, discordId);
   const roster = snapshot.rosters.find((row) => row.discordId === discordId);
   if (current.currentLeagueName === nextName) throw new Error('That is already the player\'s Current League Name.');
+  const nameUsedInSameArea = snapshot.names.some((row) => {
+    if (row.discordId === discordId || row.nameStatus !== 'Current Discord Name' || row.currentLeagueName !== nextName) return false;
+    const otherRoster = snapshot.rosters.find((candidate) => candidate.discordId === row.discordId);
+    return roster
+      ? otherRoster?.teamRoleId === roster.teamRoleId
+      : !otherRoster && row.leagueStatus === 'Free Agent' && row.division === current.division;
+  });
+  if (nameUsedInSameArea) throw new Error('That league name is already used by another player in this roster area.');
   const existingAlias = snapshot.names.some((row) => row.discordId === discordId && row.knownName === current.currentLeagueName);
   return {
     kind: 'rename',
