@@ -32,7 +32,7 @@ class FakeGateway implements LeagueSheetsGateway {
       };
       const rosterMatch = /^'Current Rosters'!A(\d+):J\1$/.exec(update.range);
       if (rosterMatch) {
-        const key = this.key(spreadsheetId, "'Current Rosters'!A5:J1000");
+        const key = this.key(spreadsheetId, "'Current Rosters'!A5:J");
         const rows = this.data.get(key)!;
         const rowIndex = Number(rosterMatch[1]) - 5;
         while (rows.length <= rowIndex) rows.push(Array(10).fill(''));
@@ -78,7 +78,7 @@ function serviceFixture() {
     ['two', 'Two', 'TwoLive', 'Current Discord Name', 'Vanaheim', 'The Sewer', 'Player', '', '', '', ''],
   ];
   gateway.data.set(gateway.key('admin', "'League Teams'!A5:L100"), teams);
-  gateway.data.set(gateway.key('admin', "'Current Rosters'!A5:J1000"), rosters);
+  gateway.data.set(gateway.key('admin', "'Current Rosters'!A5:J"), rosters);
   gateway.data.set(gateway.key('admin', "'Player Name History'!A5:K"), names);
   for (const division of ['Vanaheim', 'Alfheim', 'Svartalfheim']) {
     const rows = emptyPublic();
@@ -118,7 +118,7 @@ test('sheet preflight classifies a newly malformed sheet as safe pre-write drift
   const { gateway, service } = serviceFixture();
   const loaded = await service.load(members, 'free-agent');
   const plan = buildTradePlan(loaded.snapshot, 'one', 'two');
-  gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))![1]![6] = 'Starter';
+  gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J"))![1]![6] = 'Starter';
   await assert.rejects(
     () => service.apply(loaded, plan, {
       reference: 'YSL-TRX-MALFORMED', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
@@ -187,7 +187,7 @@ test('public verification accepts a pickup written into an internal managed-bloc
 
 test('numeric-looking league names remain exact text in every managed admin update', async () => {
   const { gateway, service } = serviceFixture();
-  const untouchedRoster = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))![2]!;
+  const untouchedRoster = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J"))![2]!;
   untouchedRoster[7] = 'Manual check';
   untouchedRoster[8] = 'League staff note';
   untouchedRoster[9] = '2026-09-29';
@@ -222,7 +222,7 @@ test('free-agent rename history records the affected division', async () => {
 
 test('roster mutations preserve unrelated rows and internal blanks', async () => {
   const { gateway, service } = serviceFixture();
-  const source = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))!;
+  const source = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J"))!;
   source.splice(2, 0, Array(10).fill(''));
   const loaded = await service.load(members, 'free-agent');
   assert.equal(loaded.snapshot.rosters.find((row) => row.discordId === 'two')?.sheetRow, 8);
@@ -241,7 +241,7 @@ test('roster mutations preserve unrelated rows and internal blanks', async () =>
 
 test('partially populated roster rows fail closed before any rewrite', async () => {
   const { gateway, service } = serviceFixture();
-  const source = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))!;
+  const source = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J"))!;
   source.splice(2, 0, ['Vanaheim', 'Dream Walkers', 'team-a', 'Dream Walkers VD', '', 'Unlinked Player', 'Player']);
   await assert.rejects(() => service.load(members, 'free-agent'), /row 7 is partially populated/i);
   assert.equal(gateway.writes.length, 0);
@@ -249,7 +249,7 @@ test('partially populated roster rows fail closed before any rewrite', async () 
 
 test('unsupported roster status fails closed instead of becoming Player', async () => {
   const { gateway, service } = serviceFixture();
-  gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))![1]![6] = 'Starter';
+  gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J"))![1]![6] = 'Starter';
   await assert.rejects(() => service.load(members, 'free-agent'), /unsupported Roster Status.*Captain or Player/i);
   assert.equal(gateway.writes.length, 0);
 });
@@ -269,6 +269,16 @@ test('player name history reads remain open-ended beyond row 1000', async () => 
   const loaded = await service.load(members, 'free-agent');
   assert.equal(loaded.snapshot.names.find((row) => row.discordId === 'late')?.sheetRow, 1006);
   assert.ok(gateway.reads.some((read) => read.range === "'Player Name History'!A5:K"));
+});
+
+test('current roster reads remain open-ended beyond row 1000', async () => {
+  const { gateway, service } = serviceFixture();
+  const rosters = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J"))!;
+  while (rosters.length < 1001) rosters.push(Array(10).fill(''));
+  rosters.push(['Vanaheim', 'Dream Walkers', 'team-a', 'Dream Walkers VD', 'late', 'Late Player', 'Player', '', '', '']);
+  const loaded = await service.load(members, 'free-agent');
+  assert.equal(loaded.snapshot.rosters.find((row) => row.discordId === 'late')?.sheetRow, 1006);
+  assert.ok(gateway.reads.some((read) => read.range === "'Current Rosters'!A5:J"));
 });
 
 test('partial team configuration fails closed instead of being ignored', async () => {

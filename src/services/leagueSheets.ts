@@ -90,7 +90,7 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
 }
 
 const ADMIN_TEAMS_RANGE = "'League Teams'!A5:L100";
-const ADMIN_ROSTERS_RANGE = "'Current Rosters'!A5:J1000";
+const ADMIN_ROSTERS_RANGE = "'Current Rosters'!A5:J";
 const ADMIN_NAMES_RANGE = "'Player Name History'!A5:K";
 const PUBLIC_RANGE = 'A1:O99';
 
