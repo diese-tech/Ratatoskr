@@ -29,6 +29,7 @@ export type LeagueAnnouncement = {
 export type LeagueRoleState = {
   configuredTeamRoleIds: string[];
   expectedTeamRoleId: string | null;
+  configuredDivisionRoleIds: string[];
   freeAgentRoleId: string;
   expectsFreeAgent: boolean;
   divisionRoleId: string;
@@ -169,6 +170,7 @@ function expectedRoleState(
   return {
     configuredTeamRoleIds: activeTeams.map((candidate) => candidate.teamRoleId),
     expectedTeamRoleId: team?.teamRoleId ?? null,
+    configuredDivisionRoleIds: [...new Set(activeTeams.map((candidate) => candidate.divisionRoleId))],
     freeAgentRoleId: snapshot.freeAgentRoleId,
     expectsFreeAgent: !roster && currentName.leagueStatus === 'Free Agent',
     divisionRoleId,

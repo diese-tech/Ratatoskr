@@ -100,6 +100,7 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
   const issues: string[] = [];
   const activeTeams = snapshot.teams.filter((team) => team.active);
   const teamsByRole = new Map<string, LeagueTeam>();
+  const configuredDivisionRoleIds = new Set(activeTeams.map((team) => team.divisionRoleId));
   for (const team of activeTeams) {
     if (teamsByRole.has(team.teamRoleId)) issues.push(`Team role ${team.teamRoleId} is configured more than once.`);
     teamsByRole.set(team.teamRoleId, team);
@@ -149,8 +150,9 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
     if (assignedTeamRoles.length === 0 && roster) issues.push(`Discord member ${member.discordId} is rostered without its team role.`);
     if (roster) {
       const team = teamsByRole.get(roster.teamRoleId);
-      if (team && !member.roleIds.includes(team.divisionRoleId)) {
-        issues.push(`Discord member ${member.discordId} is missing the ${team.division} division role.`);
+      const assignedDivisionRoles = member.roleIds.filter((roleId) => configuredDivisionRoleIds.has(roleId));
+      if (team && (assignedDivisionRoles.length !== 1 || assignedDivisionRoles[0] !== team.divisionRoleId)) {
+        issues.push(`Discord member ${member.discordId} division roles do not match ${team.division}.`);
       }
       if (member.roleIds.includes(snapshot.freeAgentRoleId)) {
         issues.push(`Discord member ${member.discordId} is rostered but still has the Free Agent role.`);
@@ -178,8 +180,9 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
       continue;
     }
     const divisionRoleId = activeTeams.find((team) => team.division === row.division)?.divisionRoleId;
-    if (!divisionRoleId || !member.roleIds.includes(divisionRoleId)) {
-      issues.push(`Discord member ${row.discordId} is missing the ${row.division} division role.`);
+    const assignedDivisionRoles = member.roleIds.filter((roleId) => configuredDivisionRoleIds.has(roleId));
+    if (!divisionRoleId || assignedDivisionRoles.length !== 1 || assignedDivisionRoles[0] !== divisionRoleId) {
+      issues.push(`Discord member ${row.discordId} division roles do not match ${row.division}.`);
     }
   }
 

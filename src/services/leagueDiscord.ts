@@ -24,8 +24,10 @@ function assertMemberRoleState(member: GuildMember, expected: LeagueRoleState): 
   const teamRolesMatch = expected.expectedTeamRoleId
     ? assignedTeamRoles.length === 1 && assignedTeamRoles[0] === expected.expectedTeamRoleId
     : assignedTeamRoles.length === 0;
+  const assignedDivisionRoles = expected.configuredDivisionRoleIds.filter((roleId) => member.roles.cache.has(roleId));
+  const divisionRolesMatch = assignedDivisionRoles.length === 1 && assignedDivisionRoles[0] === expected.divisionRoleId;
   const freeAgentMatches = member.roles.cache.has(expected.freeAgentRoleId) === expected.expectsFreeAgent;
-  if (!teamRolesMatch || !freeAgentMatches || !member.roles.cache.has(expected.divisionRoleId)) {
+  if (!teamRolesMatch || !divisionRolesMatch || !freeAgentMatches) {
     throw new Error(`Discord member ${member.id} complete league role state changed before the transaction finished.`);
   }
 }

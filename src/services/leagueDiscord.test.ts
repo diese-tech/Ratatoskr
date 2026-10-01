@@ -48,6 +48,7 @@ test('a forced member fetch rejects unrelated league-role drift before applying 
   const before = {
     configuredTeamRoleIds: ['team-a', 'team-b', 'team-c'],
     expectedTeamRoleId: 'team-a',
+    configuredDivisionRoleIds: ['division-v'],
     freeAgentRoleId: 'free-agent',
     expectsFreeAgent: false,
     divisionRoleId: 'division-v',
@@ -56,6 +57,42 @@ test('a forced member fetch rejects unrelated league-role drift before applying 
     { discordId: 'one', remove: ['team-a'], add: ['team-c'] },
     before,
     { ...before, expectedTeamRoleId: 'team-c' },
+  ), /complete league role state changed/i);
+  assert.equal(mutations, 0);
+});
+
+test('a forced member fetch rejects an additional configured division role', async () => {
+  let mutations = 0;
+  const cache = new Collection<string, unknown>([
+    ['team-a', {}],
+    ['division-v', {}],
+    ['division-a', {}],
+  ]);
+  const member = {
+    id: 'one',
+    roles: {
+      cache,
+      remove: async () => { mutations += 1; },
+      add: async () => { mutations += 1; },
+    },
+  };
+  const guild = {
+    id: 'guild',
+    members: { fetch: async () => member },
+  } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  const before = {
+    configuredTeamRoleIds: ['team-a', 'team-b'],
+    expectedTeamRoleId: 'team-a',
+    configuredDivisionRoleIds: ['division-v', 'division-a'],
+    freeAgentRoleId: 'free-agent',
+    expectsFreeAgent: false,
+    divisionRoleId: 'division-v',
+  };
+  await assert.rejects(() => gateway.applyRoleChange(
+    { discordId: 'one', remove: ['team-a'], add: ['team-b'] },
+    before,
+    { ...before, expectedTeamRoleId: 'team-b' },
   ), /complete league role state changed/i);
   assert.equal(mutations, 0);
 });
@@ -84,6 +121,7 @@ test('post-change verification requires the complete destination role state', as
   const before = {
     configuredTeamRoleIds: ['team-a', 'team-b', 'team-c'],
     expectedTeamRoleId: 'team-a',
+    configuredDivisionRoleIds: ['division-v'],
     freeAgentRoleId: 'free-agent',
     expectsFreeAgent: false,
     divisionRoleId: 'division-v',

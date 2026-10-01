@@ -10,6 +10,7 @@ function emptyPublic(): Rows { return Array.from({ length: 99 }, () => Array(15)
 class FakeGateway implements LeagueSheetsGateway {
   readonly data = new Map<string, Rows>();
   readonly writes: { spreadsheetId: string; updates: SheetValueUpdate[]; option: 'RAW' | 'USER_ENTERED' }[] = [];
+  readonly appends: { spreadsheetId: string; range: string; values: Rows; option: 'RAW' | 'USER_ENTERED' }[] = [];
   changed = false;
 
   key(spreadsheetId: string, range: string) { return `${spreadsheetId}:${range}`; }
@@ -49,7 +50,9 @@ class FakeGateway implements LeagueSheetsGateway {
       }
     }
   }
-  async append() {}
+  async append(spreadsheetId: string, range: string, values: Rows, option: 'RAW' | 'USER_ENTERED' = 'RAW') {
+    this.appends.push({ spreadsheetId, range, values, option });
+  }
 }
 
 function serviceFixture() {
@@ -169,6 +172,22 @@ test('numeric-looking league names remain exact text in every managed admin upda
   const reloaded = await service.load(members, 'free-agent');
   assert.equal(reloaded.snapshot.rosters.find((row) => row.discordId === 'one')?.player, '007');
   assert.equal(reloaded.snapshot.names.find((row) => row.discordId === 'one')?.currentLeagueName, '007');
+});
+
+test('free-agent rename history records the affected division', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.get(gateway.key('admin', "'Player Name History'!A5:K1000"))!.push(
+    ['free', 'Free', 'FreeLive', 'Current Discord Name', 'Vanaheim', '', 'Free Agent', '', '', '', ''],
+  );
+  const loaded = await service.load([
+    ...members,
+    { discordId: 'free', displayName: 'FreeLive', roleIds: ['free-agent', 'division-v'] },
+  ], 'free-agent');
+  const plan = buildRenamePlan(loaded.snapshot, 'free', 'Free Prime');
+  await service.appendTransactionHistory(plan, {
+    reference: 'YSL-TRX-FREE-RENAME', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
+  });
+  assert.equal(gateway.appends[0]?.values[0]?.[3], 'Vanaheim');
 });
 
 test('roster rewrites clear through the last occupied physical row after an internal blank', async () => {

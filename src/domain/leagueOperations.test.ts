@@ -69,6 +69,19 @@ test('daily audit rejects contradictory free-agent and roster roles', () => {
   assert.ok(issues.some((issue) => issue.includes('free') && issue.includes('missing the Free Agent role')));
 });
 
+test('daily audit rejects additional configured division roles', () => {
+  const current = snapshot();
+  current.teams.push({
+    teamKey: 'Alfheim|Elsewhere', franchise: 'Elsewhere', division: 'Alfheim',
+    teamRoleId: 'team-c', teamRole: 'Elsewhere AD', divisionRoleId: 'division-a', active: true,
+  });
+  current.discordMembers[0]!.roleIds.push('division-a');
+  current.discordMembers[2]!.roleIds.push('division-a');
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('division roles')));
+  assert.ok(issues.some((issue) => issue.includes('free') && issue.includes('division roles')));
+});
+
 test('daily audit rejects stale current-name assignment metadata for a rostered player', () => {
   const current = snapshot();
   const name = current.names.find((row) => row.discordId === 'one')!;

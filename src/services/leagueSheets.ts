@@ -392,7 +392,8 @@ export class LeagueSheetsService {
         record.announcementId ?? '', 'Completed', record.processedBy,
       ];
     }) : [[
-      record.reference, plan.kind, record.effectiveDate, plan.teams[0]?.division ?? '', '', '',
+      record.reference, plan.kind, record.effectiveDate,
+      plan.teams[0]?.division ?? plan.publicChanges[0]?.division ?? '', '', '',
       plan.playerIds[0] ?? '',
       plan.players[0] ?? '', record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
     ]];
