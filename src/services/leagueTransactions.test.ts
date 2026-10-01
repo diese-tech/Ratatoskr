@@ -132,6 +132,20 @@ test('targeted role preflight validates complete role integrity even for a renam
   f.db.close();
 });
 
+test('targeted preflight rejects stale current-name assignment metadata after the daily audit', async () => {
+  const f = fixture();
+  recordLeagueAudit(f.db, { guildId: 'guild', auditDate: '2026-09-30', status: 'passed', issues: [] });
+  f.current.names.find((row) => row.discordId === 'one')!.franchise = 'B';
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
+  }), /current-name assignment does not match/i);
+  assert.deepEqual(f.events, []);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
+  f.db.close();
+});
+
 test('a safe sheet preflight failure rolls Discord back and closes the attempt as failed', async () => {
   const f = fixture(new LeagueSheetDriftError('changed'));
   const reference = await executeLeagueTransaction({

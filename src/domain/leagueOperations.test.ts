@@ -108,6 +108,16 @@ test('pickup fills the configured team, removes free-agent role, and rejects an 
   assert.throws(() => buildPickupPlan(snapshot(), 'one', 'team-b'), /not a free agent/i);
 });
 
+test('moves reject canonical names already used in their destination roster area', () => {
+  const pickup = snapshot();
+  pickup.names.find((row) => row.discordId === 'free')!.currentLeagueName = 'One';
+  assert.throws(() => buildPickupPlan(pickup, 'free', 'team-a'), /already used in the destination roster area/i);
+
+  const drop = snapshot();
+  drop.names.find((row) => row.discordId === 'free')!.currentLeagueName = 'Two';
+  assert.throws(() => buildDropPlan(drop, 'two'), /already used in the destination free-agent area/i);
+});
+
 test('rename changes the canonical name everywhere while retaining the old canonical name as history', () => {
   const plan = buildRenamePlan(snapshot(), 'one', 'One Prime');
   assert.ok(plan.nameUpdates.filter((row) => row.discordId === 'one').every((row) => row.currentLeagueName === 'One Prime'));

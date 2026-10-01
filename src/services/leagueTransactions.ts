@@ -97,6 +97,12 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
     if (roster) {
       const expectedTeam = teamsByRole.get(roster.teamRoleId);
       if (!expectedTeam) throw new Error(`Discord member ${discordId} is rostered to an inactive or unknown team.`);
+      const currentName = currentNames[0]!;
+      if (currentName.division !== roster.division
+        || currentName.franchise !== roster.franchise
+        || currentName.leagueStatus !== roster.rosterStatus) {
+        throw new Error(`Discord member ${discordId} current-name assignment does not match the current roster.`);
+      }
       if (assignedTeamRoles.length !== 1 || assignedTeamRoles[0] !== expectedTeam.teamRoleId) {
         throw new Error(`Discord member ${discordId} team roles do not match the current roster assignment.`);
       }
