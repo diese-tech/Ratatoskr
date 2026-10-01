@@ -17,6 +17,7 @@ export type LeagueTransaction = {
   status: LeagueTransactionStatus;
   announcementId: string | null;
   errorMessage: string | null;
+  reconciliationAlertedAt: string | null;
 };
 
 type TransactionRow = {
@@ -28,6 +29,7 @@ type TransactionRow = {
   status: LeagueTransactionStatus;
   announcement_id: string | null;
   error_message: string | null;
+  reconciliation_alerted_at: string | null;
 };
 
 function toTransaction(row: TransactionRow): LeagueTransaction {
@@ -40,6 +42,7 @@ function toTransaction(row: TransactionRow): LeagueTransaction {
     status: row.status,
     announcementId: row.announcement_id,
     errorMessage: row.error_message,
+    reconciliationAlertedAt: row.reconciliation_alerted_at,
   };
 }
 
@@ -89,7 +92,9 @@ export function listPendingLeagueAnnouncements(db: Database.Database): LeagueTra
 
 export function listInterruptedLeagueTransactions(db: Database.Database): LeagueTransaction[] {
   const rows = db.prepare(`SELECT * FROM league_transactions
-    WHERE status IN ('applying_discord', 'applying_sheets') ORDER BY created_at, reference`).all() as TransactionRow[];
+    WHERE status IN ('applying_discord', 'applying_sheets')
+      OR (status = 'reconciliation_required' AND reconciliation_alerted_at IS NULL)
+    ORDER BY created_at, reference`).all() as TransactionRow[];
   return rows.map(toTransaction);
 }
 
@@ -118,4 +123,11 @@ export function markLeagueTransactionReconciliationRequired(
       status = 'reconciliation_required', error_message = ?,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE reference = ? AND status <> 'completed'`).run(errorMessage, reference);
+}
+
+export function markLeagueTransactionReconciliationAlerted(db: Database.Database, reference: string): void {
+  db.prepare(`UPDATE league_transactions SET
+      reconciliation_alerted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE reference = ? AND status = 'reconciliation_required' AND reconciliation_alerted_at IS NULL`).run(reference);
 }

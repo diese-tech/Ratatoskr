@@ -103,7 +103,7 @@ client.once('clientReady', async () => {
     sheets: new LeagueSheetsService(leagueSheetsConnection.gateway, leagueSheetsConnection.config),
     discord: new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId),
     reportError: async (reference, error) => {
-      await reportOperationalError(
+      return reportOperationalError(
         client,
         db,
         { guildId: env.DISCORD_GUILD_ID, action: 'League transaction recovery' },

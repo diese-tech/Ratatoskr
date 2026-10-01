@@ -11,10 +11,12 @@ class FakeGateway implements LeagueSheetsGateway {
   readonly data = new Map<string, Rows>();
   readonly writes: { spreadsheetId: string; updates: SheetValueUpdate[]; option: 'RAW' | 'USER_ENTERED' }[] = [];
   readonly appends: { spreadsheetId: string; range: string; values: Rows; option: 'RAW' | 'USER_ENTERED' }[] = [];
+  readonly reads: { spreadsheetId: string; range: string }[] = [];
   changed = false;
 
   key(spreadsheetId: string, range: string) { return `${spreadsheetId}:${range}`; }
   async getValues(spreadsheetId: string, range: string): Promise<Rows> {
+    this.reads.push({ spreadsheetId, range });
     const rows = structuredClone(this.data.get(this.key(spreadsheetId, range)) ?? []);
     if (this.changed && range.includes('Current Rosters')) rows[1]![5] = 'Manual edit';
     return rows;
@@ -188,6 +190,7 @@ test('free-agent rename history records the affected division', async () => {
     reference: 'YSL-TRX-FREE-RENAME', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
   });
   assert.equal(gateway.appends[0]?.values[0]?.[3], 'Vanaheim');
+  assert.ok(gateway.reads.some((read) => read.range === "'Transaction History'!A6:A"));
 });
 
 test('roster rewrites clear through the last occupied physical row after an internal blank', async () => {

@@ -379,7 +379,7 @@ export class LeagueSheetsService {
     plan: LeagueMutationPlan,
     record: LeagueTransactionRecord,
   ): Promise<void> {
-    const existing = await this.gateway.getValues(this.config.adminSpreadsheetId, "'Transaction History'!A6:A5000");
+    const existing = await this.gateway.getValues(this.config.adminSpreadsheetId, "'Transaction History'!A6:A");
     if (existing.some((row) => String(row[0] ?? '') === record.reference)) return;
     const transactionRows = plan.discordRoleChanges.length > 0 ? plan.discordRoleChanges.map((change, index) => {
       const from = plan.teams.find((team) => change.remove.includes(team.teamRoleId));

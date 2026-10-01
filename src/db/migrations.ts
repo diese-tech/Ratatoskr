@@ -584,4 +584,11 @@ export const migrations: Migration[] = [
         ON league_transactions (guild_id, status, created_at);
     `,
   },
+  {
+    id: 22,
+    name: 'league_reconciliation_alert_delivery',
+    sql: `
+      ALTER TABLE league_transactions ADD COLUMN reconciliation_alerted_at TEXT;
+    `,
+  },
 ];

@@ -6,6 +6,7 @@ import {
   hasSuccessfulLeagueAudit,
   listInterruptedLeagueTransactions,
   listPendingLeagueAnnouncements,
+  markLeagueTransactionReconciliationAlerted,
   markLeagueTransactionReconciliationRequired,
   recordLeagueAudit,
   transitionLeagueTransaction,
@@ -327,15 +328,17 @@ export async function reconcilePendingLeagueTransactions(input: {
   db: Database.Database;
   sheets: LeagueSheetsPort;
   discord: LeagueDiscordPort;
-  reportError?(reference: string, error: unknown): Promise<void>;
+  reportError?(reference: string, error: unknown): Promise<{ staffDelivered: boolean }>;
 }): Promise<void> {
   for (const transaction of listInterruptedLeagueTransactions(input.db)) {
-    const error = new Error(
-      `League transaction was interrupted during ${transaction.status}. Discord roles and Google Sheets may be partially applied; manual reconciliation is required.`,
-    );
-    markLeagueTransactionReconciliationRequired(input.db, transaction.reference, error.message);
+    const error = new Error(transaction.errorMessage
+      ?? `League transaction was interrupted during ${transaction.status}. Discord roles and Google Sheets may be partially applied; manual reconciliation is required.`);
+    if (transaction.status !== 'reconciliation_required') {
+      markLeagueTransactionReconciliationRequired(input.db, transaction.reference, error.message);
+    }
     console.error(`League transaction ${transaction.reference} requires reconciliation after restart`, error);
-    await input.reportError?.(transaction.reference, error);
+    const report = await input.reportError?.(transaction.reference, error);
+    if (report?.staffDelivered) markLeagueTransactionReconciliationAlerted(input.db, transaction.reference);
   }
 
   for (const transaction of listPendingLeagueAnnouncements(input.db)) {

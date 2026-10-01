@@ -213,12 +213,38 @@ test('startup recovery quarantines and reports transactions interrupted during m
     db: f.db,
     sheets: f.sheets,
     discord: f.discord,
-    reportError: async (reference, error) => { reports.push({ reference, message: error instanceof Error ? error.message : String(error) }); },
+    reportError: async (reference, error) => {
+      reports.push({ reference, message: error instanceof Error ? error.message : String(error) });
+      return { staffDelivered: true };
+    },
   });
   assert.equal(getLeagueTransaction(f.db, 'YSL-TRX-DISCORD')?.status, 'reconciliation_required');
   assert.equal(getLeagueTransaction(f.db, 'YSL-TRX-SHEETS')?.status, 'reconciliation_required');
   assert.deepEqual(reports.map((report) => report.reference), ['YSL-TRX-DISCORD', 'YSL-TRX-SHEETS']);
   assert.equal(reports.every((report) => /manual reconciliation is required/i.test(report.message)), true);
+  await reconcilePendingLeagueTransactions({
+    db: f.db, sheets: f.sheets, discord: f.discord,
+    reportError: async () => { throw new Error('delivered alerts must not retry'); },
+  });
   assert.deepEqual(f.events, []);
+  f.db.close();
+});
+
+test('startup recovery retries an undelivered reconciliation alert on the next run', async () => {
+  const f = fixture();
+  const payload = { plan: buildTradePlan(f.current, 'one', 'two'), record: { reference: '', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin' } };
+  createLeagueTransaction(f.db, { reference: 'YSL-TRX-RETRY', guildId: 'guild', kind: 'trade', actorUserId: 'admin', payload });
+  let attempts = 0;
+  const recover = () => reconcilePendingLeagueTransactions({
+    db: f.db, sheets: f.sheets, discord: f.discord,
+    reportError: async () => ({ staffDelivered: ++attempts > 1 }),
+  });
+  await recover();
+  assert.equal(getLeagueTransaction(f.db, 'YSL-TRX-RETRY')?.reconciliationAlertedAt, null);
+  await recover();
+  assert.ok(getLeagueTransaction(f.db, 'YSL-TRX-RETRY')?.reconciliationAlertedAt);
+  assert.equal(attempts, 2);
+  await recover();
+  assert.equal(attempts, 2);
   f.db.close();
 });
