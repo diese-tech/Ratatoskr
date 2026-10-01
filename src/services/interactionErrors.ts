@@ -1,6 +1,7 @@
 import { MessageFlags, type Interaction } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
+  getLeagueTransaction,
   markLeagueReconciliationTicketAlerted,
   markLeagueTransactionReconciliationAlerted,
 } from '../db/repositories/leagueOperations.js';
@@ -50,6 +51,9 @@ export async function handleInteractionError(interaction: Interaction, db: Datab
     ? error.reference : undefined;
   const reconciliationTicket = Boolean(error && typeof error === 'object'
     && 'leagueReconciliationTicket' in error && error.leagueReconciliationTicket === true);
+  const transaction = transactionReference ? getLeagueTransaction(db, transactionReference) : undefined;
+  const durableTransactionAlert = transaction
+    && ['applying_discord', 'applying_sheets', 'reconciliation_required'].includes(transaction.status);
   const context = reconciliationTicket
     ? {
       guildId: interaction.guildId ?? fallbackGuildId,
@@ -64,7 +68,9 @@ export async function handleInteractionError(interaction: Interaction, db: Datab
     db,
     context,
     error,
-    transactionReference ? { reference: transactionReference, retryUndelivered: true } : undefined,
+    transactionReference && (reconciliationTicket || durableTransactionAlert)
+      ? { reference: transactionReference, retryUndelivered: true }
+      : undefined,
   );
   if (reconciliationTicket && transactionReference && report.staffDelivered) {
     markLeagueReconciliationTicketAlerted(db, transactionReference);

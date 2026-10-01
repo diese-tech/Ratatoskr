@@ -188,6 +188,24 @@ test('targeted role preflight validates complete role integrity even for a renam
   f.db.close();
 });
 
+test('fresh role drift opens a durable no-write reconciliation ticket', async () => {
+  const f = fixture();
+  f.discord.validateRoleState = async (discordId: string) => {
+    f.events.push(`discord-preflight:${discordId}`);
+    throw new Error(`Complete league role state changed for ${discordId}.`);
+  };
+  const reference = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
+  }).then(() => '', (error: Error & { reference?: string }) => error.reference!);
+  assert.ok(reference);
+  assert.equal(getLeagueReconciliationTicket(f.db, reference)?.status, 'open');
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
+  assert.deepEqual(f.events, ['sheet-preflight', 'sheet-targets', 'discord-preflight:one']);
+  f.db.close();
+});
+
 test('targeted preflight rejects stale current-name assignment metadata after the daily audit', async () => {
   const f = fixture();
   recordLeagueAudit(f.db, { guildId: 'guild', auditDate: '2026-09-30', status: 'passed', issues: [] });

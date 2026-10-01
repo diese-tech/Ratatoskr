@@ -305,8 +305,12 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
     ]));
-    for (const discordId of plan.playerIds) {
-      await input.discord.validateRoleState(discordId, beforeByPlayer.get(discordId)!);
+    try {
+      for (const discordId of plan.playerIds) {
+        await input.discord.validateRoleState(discordId, beforeByPlayer.get(discordId)!);
+      }
+    } catch (error) {
+      throw openReconciliationTicket(input, auditDate, error);
     }
 
     const reference = `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
