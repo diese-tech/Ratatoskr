@@ -72,7 +72,18 @@ type ExecuteLeagueTransactionInput = {
   sheets: LeagueSheetsPort;
   discord: LeagueDiscordPort;
   buildPlan(snapshot: LeagueSnapshot): LeagueMutationPlan;
+  expectedPlanFingerprint?: string;
 };
+
+export class LeagueTransactionPreviewChangedError extends Error {
+  constructor(readonly plan: LeagueMutationPlan) {
+    super('League state changed after the transaction preview. Review the updated preview before confirming again.');
+  }
+}
+
+export function leagueTransactionPlanFingerprint(plan: LeagueMutationPlan): string {
+  return createHash('sha256').update(JSON.stringify(plan)).digest('hex');
+}
 
 const activeGuilds = new WeakMap<object, Set<string>>();
 
@@ -280,6 +291,10 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     }
     resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     const plan = input.buildPlan(loaded.snapshot);
+    if (input.expectedPlanFingerprint
+      && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {
+      throw new LeagueTransactionPreviewChangedError(plan);
+    }
     assertDiscordPreconditions(loaded.snapshot, plan);
     const prepared = input.sheets.prepare(loaded, plan);
     const beforeByPlayer = new Map(plan.playerIds.map((discordId) => [

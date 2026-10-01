@@ -209,3 +209,41 @@ export function getLeagueReconciliationTicket(
     .get(reference) as ReconciliationTicketRow | undefined;
   return row ? toReconciliationTicket(row) : undefined;
 }
+
+export function saveLeagueTransactionPreview(db: Database.Database, input: {
+  guildId: string;
+  actorUserId: string;
+  intentKey: string;
+  planFingerprint: string;
+}): void {
+  db.prepare(`INSERT INTO league_transaction_previews
+      (guild_id, actor_user_id, intent_key, plan_fingerprint)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(guild_id, actor_user_id, intent_key) DO UPDATE SET
+      plan_fingerprint = excluded.plan_fingerprint,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`)
+    .run(input.guildId, input.actorUserId, input.intentKey, input.planFingerprint);
+}
+
+export function getLeagueTransactionPreviewFingerprint(
+  db: Database.Database,
+  guildId: string,
+  actorUserId: string,
+  intentKey: string,
+): string | undefined {
+  const row = db.prepare(`SELECT plan_fingerprint FROM league_transaction_previews
+    WHERE guild_id = ? AND actor_user_id = ? AND intent_key = ?`)
+    .get(guildId, actorUserId, intentKey) as { plan_fingerprint: string } | undefined;
+  return row?.plan_fingerprint;
+}
+
+export function deleteLeagueTransactionPreview(
+  db: Database.Database,
+  guildId: string,
+  actorUserId: string,
+  intentKey: string,
+): void {
+  db.prepare(`DELETE FROM league_transaction_previews
+    WHERE guild_id = ? AND actor_user_id = ? AND intent_key = ?`)
+    .run(guildId, actorUserId, intentKey);
+}

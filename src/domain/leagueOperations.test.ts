@@ -92,6 +92,24 @@ test('daily audit rejects duplicate active team mappings to one public roster bl
   assert.ok(issues.some((issue) => issue.includes('Vanaheim Dream Walkers') && issue.includes('more than one active team')));
 });
 
+test('daily audit rejects ambiguous division-role mappings', () => {
+  const reusedRole = snapshot();
+  reusedRole.teams.push({
+    teamKey: 'Alfheim|Elsewhere', franchise: 'Elsewhere', division: 'Alfheim',
+    teamRoleId: 'team-c', teamRole: 'Elsewhere AD', divisionRoleId: 'division-v', active: true,
+  });
+  assert.ok(auditLeagueRoster(reusedRole)
+    .some((issue) => issue.includes('division-v') && issue.includes('Vanaheim') && issue.includes('Alfheim')));
+
+  const splitDivision = snapshot();
+  splitDivision.teams.push({
+    teamKey: 'Vanaheim|Elsewhere', franchise: 'Elsewhere', division: 'Vanaheim',
+    teamRoleId: 'team-c', teamRole: 'Elsewhere VD', divisionRoleId: 'division-other', active: true,
+  });
+  assert.ok(auditLeagueRoster(splitDivision)
+    .some((issue) => issue.includes('Vanaheim') && issue.includes('more than one division role')));
+});
+
 test('daily audit rejects stale current-name assignment metadata for a rostered player', () => {
   const current = snapshot();
   const name = current.names.find((row) => row.discordId === 'one')!;

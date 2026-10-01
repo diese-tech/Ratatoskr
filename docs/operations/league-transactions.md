@@ -7,6 +7,8 @@
 3. Re-run the same command with `confirm:true` only after the approved move and detected teams are correct.
 4. Confirm the private completion reference and the public transaction notice when one is expected.
 
+Ratatoskr stores the private preview by server, administrator, and exact command selections. Confirmation proceeds only when the freshly rebuilt transaction is identical to that preview. If league state changed, Ratatoskr makes no transaction changes, replaces the saved preview, and shows the administrator the updated move to review before trying again.
+
 Only Allfather and Aesir role IDs may run these commands. Pickups accept only one of the 24 active division-suffixed team roles from **League Teams**. Plain franchise roles are leadership/advisor access and are never moved.
 
 ## Automatic safety checks
@@ -38,4 +40,4 @@ Keep the service-account JSON sealed. Share both workbooks with the service-acco
 
 ## Production gate
 
-Passing tests and CI does not prove live acceptance. Before enabling staff use, back up the persistent SQLite database, deploy through migration 23 once, inspect startup logs, run one controlled preview, deliberately verify one safe drift produces a staff-ops ticket without writes, and perform a reversible live transaction with both sheet workbooks open. Do not run a second bot replica against the same database/guild.
+Passing tests and CI does not prove live acceptance. Before enabling staff use, back up the persistent SQLite database, deploy through migration 24 once, inspect startup logs, run one controlled preview, deliberately verify one safe drift produces a staff-ops ticket without writes, and perform a reversible live transaction with both sheet workbooks open. Do not run a second bot replica against the same database/guild.

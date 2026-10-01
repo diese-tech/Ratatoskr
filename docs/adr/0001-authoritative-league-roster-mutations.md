@@ -14,12 +14,14 @@ Ratatoskr owns the execution of approved `/transaction trade`, `/transaction dro
 
 Before every confirmed mutation, Ratatoskr compares all configured player team roles in Discord with Current Rosters, canonical names, visible public team blocks, and division free-agent lists. The result is recorded in SQLite for that America/New_York league day. Every transaction also revalidates the exact managed sheet values immediately before mutation.
 
+The private preview is durable and scoped to the server, administrator, and exact command selections. Confirmation rebuilds the plan inside the serialized transaction lock and compares it with the saved preview fingerprint. A changed plan is not executed; the saved preview and private response are replaced with the current plan for a new review.
+
 Manual sheet changes are never silently normalized. Ratatoskr updates only the roster rows and public cells owned by the approved transaction. If a manual entry makes the managed sources disagree, the command makes no changes and opens a durable, deduplicated reconciliation ticket. The ticket is delivered to the private staff-ops channel and remains retryable across restarts until delivery is confirmed. Staff reconcile the named Discord and sheet surfaces manually; the next clean full audit resolves the open ticket.
 
 The mutation lifecycle is durable:
 
-1. Validate authorization and current Discord/sheet state.
-2. Record transaction intent in SQLite.
+1. Validate authorization, the saved preview, and current Discord/sheet state.
+2. Confirm the current plan still matches the reviewed preview, then record transaction intent in SQLite.
 3. Change only division-suffixed player team roles and the Free Agent role. Plain franchise roles are never part of a roster mutation.
 4. Update the private and public sheets only when their audited before-values still match.
 5. Verify the resulting managed sheet values.

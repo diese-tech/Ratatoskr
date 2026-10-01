@@ -11,7 +11,13 @@ import {
   transitionLeagueTransaction,
 } from '../db/repositories/leagueOperations.js';
 import { LeagueSheetDriftError, LeagueSheetReconciliationRequiredError } from './leagueSheets.js';
-import { buildLeagueAnnouncement, executeLeagueTransaction, reconcilePendingLeagueTransactions } from './leagueTransactions.js';
+import {
+  buildLeagueAnnouncement,
+  executeLeagueTransaction,
+  leagueTransactionPlanFingerprint,
+  LeagueTransactionPreviewChangedError,
+  reconcilePendingLeagueTransactions,
+} from './leagueTransactions.js';
 
 function snapshot(): LeagueSnapshot {
   return {
@@ -72,6 +78,7 @@ test('every confirmed mutation audits before Discord and completes the durable s
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
+    expectedPlanFingerprint: leagueTransactionPlanFingerprint(buildTradePlan(f.current, 'one', 'two')),
   });
   assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), true);
   assert.deepEqual(f.events, [
@@ -80,6 +87,26 @@ test('every confirmed mutation audits before Discord and completes the durable s
   ]);
   assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   assert.equal(getLeagueTransaction(f.db, result.reference)?.announcementId, 'message');
+  f.db.close();
+});
+
+test('confirmation rejects a plan that differs from the administrator preview', async () => {
+  const f = fixture();
+  const previewed = buildTradePlan(f.current, 'one', 'two');
+  const expectedPlanFingerprint = leagueTransactionPlanFingerprint(previewed);
+  f.current.rosters.find((row) => row.discordId === 'one')!.rosterStatus = 'Player';
+  f.current.names.find((row) => row.discordId === 'one')!.leagueStatus = 'Player';
+  await assert.rejects(
+    () => executeLeagueTransaction({
+      db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+      freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+      buildPlan: (current) => buildTradePlan(current, 'one', 'two'), expectedPlanFingerprint,
+    }),
+    (error: unknown) => error instanceof LeagueTransactionPreviewChangedError
+      && error.plan.rosters.find((row) => row.discordId === 'one')?.rosterStatus === 'Player',
+  );
+  assert.deepEqual(f.events, ['sheet-preflight']);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
 });
 

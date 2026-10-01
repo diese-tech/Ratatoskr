@@ -17,7 +17,16 @@ import { requireAccess } from '../services/authorization.js';
 import { loadLeagueOperationsConfig } from '../config/league-operations.js';
 import { DiscordLeagueGateway } from '../services/leagueDiscord.js';
 import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from '../services/leagueSheets.js';
-import { executeLeagueTransaction } from '../services/leagueTransactions.js';
+import {
+  deleteLeagueTransactionPreview,
+  getLeagueTransactionPreviewFingerprint,
+  saveLeagueTransactionPreview,
+} from '../db/repositories/leagueOperations.js';
+import {
+  executeLeagueTransaction,
+  LeagueTransactionPreviewChangedError,
+  leagueTransactionPlanFingerprint,
+} from '../services/leagueTransactions.js';
 
 export const transactionCommand = new SlashCommandBuilder()
   .setName('transaction')
@@ -67,6 +76,17 @@ function planBuilder(interaction: ChatInputCommandInteraction): (snapshot: Leagu
   throw new Error('Unknown transaction type.');
 }
 
+function intentKey(interaction: ChatInputCommandInteraction): string {
+  const subcommand = interaction.options.getSubcommand();
+  if (subcommand === 'trade') {
+    return JSON.stringify([subcommand, interaction.options.getUser('player_one', true).id, interaction.options.getUser('player_two', true).id]);
+  }
+  const player = interaction.options.getUser('player', true).id;
+  if (subcommand === 'pickup') return JSON.stringify([subcommand, player, interaction.options.getRole('team', true).id]);
+  if (subcommand === 'rename') return JSON.stringify([subcommand, player, interaction.options.getString('league_name', true)]);
+  return JSON.stringify([subcommand, player]);
+}
+
 function preview(plan: LeagueMutationPlan): string {
   if (plan.kind === 'trade') {
     return [
@@ -100,25 +120,60 @@ export async function handleTransactionCommand(
   const sheets = new LeagueSheetsService(gateway, config);
   const discord = new DiscordLeagueGateway(interaction.guild, transactionEnvironment.transactionsChannelId);
   const buildPlan = planBuilder(interaction);
+  const previewIntent = intentKey(interaction);
+
+  const showPreview = async (message = '') => {
+    const loaded = await sheets.load(await discord.getMembers(), transactionEnvironment.freeAgentRoleId);
+    const plan = buildPlan(loaded.snapshot);
+    saveLeagueTransactionPreview(db, {
+      guildId: interaction.guild!.id,
+      actorUserId: interaction.user.id,
+      intentKey: previewIntent,
+      planFingerprint: leagueTransactionPlanFingerprint(plan),
+    });
+    await interaction.editReply(`${message}${preview(plan)}`);
+  };
 
   if (interaction.options.getBoolean('confirm') !== true) {
-    const loaded = await sheets.load(await discord.getMembers(), transactionEnvironment.freeAgentRoleId);
-    await interaction.editReply(preview(buildPlan(loaded.snapshot)));
+    await showPreview();
+    return;
+  }
+
+  const expectedPlanFingerprint = getLeagueTransactionPreviewFingerprint(
+    db, interaction.guild.id, interaction.user.id, previewIntent,
+  );
+  if (!expectedPlanFingerprint) {
+    await showPreview('A matching preview is required before confirmation.\n\n');
     return;
   }
 
   const actorName = (member as GuildMember).displayName || interaction.user.globalName || interaction.user.username;
-  const result = await executeLeagueTransaction({
-    db,
-    operationScope,
-    guildId: interaction.guild.id,
-    actorUserId: interaction.user.id,
-    actorName,
-    freeAgentRoleId: transactionEnvironment.freeAgentRoleId,
-    now: new Date(),
-    sheets,
-    discord,
-    buildPlan,
-  });
+  let result: Awaited<ReturnType<typeof executeLeagueTransaction>>;
+  try {
+    result = await executeLeagueTransaction({
+      db,
+      operationScope,
+      guildId: interaction.guild.id,
+      actorUserId: interaction.user.id,
+      actorName,
+      freeAgentRoleId: transactionEnvironment.freeAgentRoleId,
+      now: new Date(),
+      sheets,
+      discord,
+      buildPlan,
+      expectedPlanFingerprint,
+    });
+  } catch (error) {
+    if (!(error instanceof LeagueTransactionPreviewChangedError)) throw error;
+    saveLeagueTransactionPreview(db, {
+      guildId: interaction.guild.id,
+      actorUserId: interaction.user.id,
+      intentKey: previewIntent,
+      planFingerprint: leagueTransactionPlanFingerprint(error.plan),
+    });
+    await interaction.editReply(`League state changed after your preview. Review this updated transaction before confirming again.\n\n${preview(error.plan)}`);
+    return;
+  }
+  deleteLeagueTransactionPreview(db, interaction.guild.id, interaction.user.id, previewIntent);
   await interaction.editReply(`Transaction completed. Reference: ${result.reference}`);
 }

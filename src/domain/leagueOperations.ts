@@ -101,6 +101,8 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
   const activeTeams = snapshot.teams.filter((team) => team.active);
   const teamsByRole = new Map<string, LeagueTeam>();
   const teamsByPublicBlock = new Map<string, LeagueTeam>();
+  const roleByDivision = new Map<LeagueDivision, string>();
+  const divisionByRole = new Map<string, LeagueDivision>();
   const configuredDivisionRoleIds = new Set(activeTeams.map((team) => team.divisionRoleId));
   for (const team of activeTeams) {
     if (teamsByRole.has(team.teamRoleId)) issues.push(`Team role ${team.teamRoleId} is configured more than once.`);
@@ -110,6 +112,16 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
       issues.push(`${team.division} ${team.franchise} is configured as more than one active team.`);
     }
     teamsByPublicBlock.set(publicBlockKey, team);
+    const configuredRole = roleByDivision.get(team.division);
+    if (configuredRole && configuredRole !== team.divisionRoleId) {
+      issues.push(`${team.division} is configured with more than one division role.`);
+    }
+    roleByDivision.set(team.division, team.divisionRoleId);
+    const configuredDivision = divisionByRole.get(team.divisionRoleId);
+    if (configuredDivision && configuredDivision !== team.division) {
+      issues.push(`Division role ${team.divisionRoleId} is shared by ${configuredDivision} and ${team.division}.`);
+    }
+    divisionByRole.set(team.divisionRoleId, team.division);
   }
 
   let names: Map<string, string>;

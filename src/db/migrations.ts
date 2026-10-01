@@ -613,4 +613,19 @@ export const migrations: Migration[] = [
         ON league_reconciliation_tickets (guild_id, fingerprint, status);
     `,
   },
+  {
+    id: 24,
+    name: 'league_transaction_previews',
+    sql: `
+      CREATE TABLE league_transaction_previews (
+        guild_id TEXT NOT NULL,
+        actor_user_id TEXT NOT NULL,
+        intent_key TEXT NOT NULL,
+        plan_fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (guild_id, actor_user_id, intent_key)
+      );
+    `,
+  },
 ];

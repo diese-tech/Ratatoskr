@@ -3,9 +3,12 @@ import test from 'node:test';
 import { openDatabase } from '../client.js';
 import {
   createLeagueTransaction,
+  deleteLeagueTransactionPreview,
+  getLeagueTransactionPreviewFingerprint,
   getLeagueTransaction,
   hasSuccessfulLeagueAudit,
   recordLeagueAudit,
+  saveLeagueTransactionPreview,
   transitionLeagueTransaction,
 } from './leagueOperations.js';
 
@@ -16,6 +19,21 @@ test('only a successful full audit opens the daily mutation gate', () => {
   recordLeagueAudit(db, { guildId: 'guild', auditDate: '2026-09-30', status: 'passed', issues: [] });
   assert.equal(hasSuccessfulLeagueAudit(db, 'guild', '2026-09-30'), true);
   assert.equal(hasSuccessfulLeagueAudit(db, 'guild', '2026-10-01'), false);
+  db.close();
+});
+
+test('transaction previews are isolated by guild, administrator, and command intent', () => {
+  const db = openDatabase(':memory:');
+  saveLeagueTransactionPreview(db, {
+    guildId: 'guild', actorUserId: 'admin', intentKey: 'trade:one:two', planFingerprint: 'first',
+  });
+  saveLeagueTransactionPreview(db, {
+    guildId: 'guild', actorUserId: 'admin', intentKey: 'trade:one:two', planFingerprint: 'updated',
+  });
+  assert.equal(getLeagueTransactionPreviewFingerprint(db, 'guild', 'admin', 'trade:one:two'), 'updated');
+  assert.equal(getLeagueTransactionPreviewFingerprint(db, 'guild', 'other-admin', 'trade:one:two'), undefined);
+  deleteLeagueTransactionPreview(db, 'guild', 'admin', 'trade:one:two');
+  assert.equal(getLeagueTransactionPreviewFingerprint(db, 'guild', 'admin', 'trade:one:two'), undefined);
   db.close();
 });
 
