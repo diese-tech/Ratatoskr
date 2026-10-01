@@ -23,6 +23,7 @@ import { loadLeagueOperationsConfig } from './config/league-operations.js';
 import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from './services/leagueSheets.js';
 import { DiscordLeagueGateway } from './services/leagueDiscord.js';
 import { reconcilePendingLeagueTransactions } from './services/leagueTransactions.js';
+import { runIsolatedStartupRecovery } from './services/startupRecovery.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -30,6 +31,13 @@ import { reconcilePendingLeagueTransactions } from './services/leagueTransaction
 const storage = openApplicationStorage();
 const db = storage.legacyDatabase;
 console.log(`Storage ready (${storage.backend}).`);
+
+// League mutations are a configured production capability. Validate every
+// required ID and the service-account payload before Discord login so Railway
+// restarts a bad deployment instead of leaving an apparently-online bot with
+// part of startup silently skipped.
+const leagueConfig = loadLeagueOperationsConfig();
+const leagueSheetsConnection = createGoogleLeagueSheetsGateway();
 
 const client = new Client({
   intents: [
@@ -95,24 +103,35 @@ client.once('clientReady', async () => {
   console.log(`Ratatoskr online as ${client.user?.tag ?? 'unknown user'}`);
   await registerGuildCommands(client, env.DISCORD_GUILD_ID);
   console.log('Guild slash commands registered.');
-  const leagueConfig = loadLeagueOperationsConfig();
-  const leagueGuild = await client.guilds.fetch(env.DISCORD_GUILD_ID);
-  const leagueSheetsConnection = createGoogleLeagueSheetsGateway();
-  await reconcilePendingLeagueTransactions({
-    db,
-    sheets: new LeagueSheetsService(leagueSheetsConnection.gateway, leagueSheetsConnection.config),
-    discord: new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId),
-    reportError: async (reference, error) => {
-      return reportOperationalError(
+  const leagueRecovered = await runIsolatedStartupRecovery(
+    'League transaction recovery',
+    async () => {
+      const leagueGuild = await client.guilds.fetch(env.DISCORD_GUILD_ID);
+      await reconcilePendingLeagueTransactions({
+        db,
+        sheets: new LeagueSheetsService(leagueSheetsConnection.gateway, leagueSheetsConnection.config),
+        discord: new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId),
+        reportError: async (reference, error) => reportOperationalError(
+          client,
+          db,
+          { guildId: env.DISCORD_GUILD_ID, action: 'League transaction recovery' },
+          error,
+          { reference, retryUndelivered: true },
+        ),
+      });
+    },
+    async (error) => {
+      await reportOperationalError(
         client,
         db,
-        { guildId: env.DISCORD_GUILD_ID, action: 'League transaction recovery' },
+        { guildId: env.DISCORD_GUILD_ID, action: 'League transaction startup recovery' },
         error,
-        { reference, retryUndelivered: true },
       );
     },
-  });
-  console.log('Pending league transaction notices reconciled.');
+  );
+  console.log(leagueRecovered
+    ? 'Pending league transaction notices reconciled.'
+    : 'League transaction recovery failed; continuing existing Scout startup.');
   await reconcilePostingScoutSetups(client, db);
   console.log('Pending scout signup posts reconciled.');
   await reconcilePendingScoutPublishes(client, db);
