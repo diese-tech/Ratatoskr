@@ -164,7 +164,13 @@ function parseTeams(rows: CellRows): LeagueTeam[] {
 }
 
 function parseRosters(rows: CellRows): LeagueRosterRow[] {
-  return rows.slice(1).map((row, index) => ({ row, index })).filter(({ row }) => String(row[4] ?? '').trim() !== '').map(({ row, index }) => ({
+  const populated = rows.slice(1).map((row, index) => ({ row, index })).filter(({ row }) => row.some((cell) => String(cell ?? '').trim() !== ''));
+  for (const { row, index } of populated) {
+    if ([0, 1, 2, 3, 4, 5, 6].some((column) => String(row[column] ?? '').trim() === '')) {
+      throw new Error(`Current Rosters row ${index + 6} is partially populated; required roster fields cannot be blank.`);
+    }
+  }
+  return populated.map(({ row, index }) => ({
     sheetRow: index + 6,
     division: parseDivision(String(row[0])),
     franchise: String(row[1]),

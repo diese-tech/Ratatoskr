@@ -209,3 +209,11 @@ test('roster rewrites clear through the last occupied physical row after an inte
   const reloaded = await service.load(members, 'free-agent');
   assert.deepEqual(reloaded.snapshot.rosters.map((row) => row.discordId), ['two', 'one']);
 });
+
+test('partially populated roster rows fail closed before any rewrite', async () => {
+  const { gateway, service } = serviceFixture();
+  const source = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))!;
+  source.splice(2, 0, ['Vanaheim', 'Dream Walkers', 'team-a', 'Dream Walkers VD', '', 'Unlinked Player', 'Player']);
+  await assert.rejects(() => service.load(members, 'free-agent'), /row 7 is partially populated/i);
+  assert.equal(gateway.writes.length, 0);
+});

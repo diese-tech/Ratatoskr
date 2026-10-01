@@ -55,6 +55,7 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
     validateRoleState: async (discordId: string) => { events.push(`discord-preflight:${discordId}`); },
     applyRoleChange: async (change: { discordId: string }) => { events.push(`discord:${change.discordId}`); },
     rollbackRoleChange: async (change: { discordId: string }) => { events.push(`rollback:${change.discordId}`); },
+    findAnnouncement: async () => undefined,
     announce: async (_announcement: unknown, reference: string) => {
       announcementReferences.push(reference);
       events.push('announce');

@@ -54,6 +54,7 @@ export interface LeagueDiscordPort {
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
   applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
   rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState): Promise<void>;
+  findAnnouncement(reference: string): Promise<string | undefined>;
   announce(announcement: LeagueAnnouncement, reference: string): Promise<string>;
 }
 
@@ -347,7 +348,8 @@ export async function reconcilePendingLeagueTransactions(input: {
       let announcementId = transaction.announcementId ?? undefined;
       const announcement = buildLeagueAnnouncement(plan, record.processedBy);
       if (announcement && !announcementId) {
-        announcementId = await input.discord.announce(announcement, transaction.reference);
+        announcementId = await input.discord.findAnnouncement(transaction.reference)
+          ?? await input.discord.announce(announcement, transaction.reference);
         record.announcementId = announcementId;
         transitionLeagueTransaction(input.db, transaction.reference, 'announcement_pending', 'announcement_pending', { announcementId });
       } else if (announcementId) record.announcementId = announcementId;

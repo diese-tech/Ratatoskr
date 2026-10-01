@@ -35,6 +35,14 @@ function assertMemberRoleState(member: GuildMember, expected: LeagueRoleState): 
 export class DiscordLeagueGateway implements LeagueDiscordPort {
   constructor(private readonly guild: Guild, private readonly transactionsChannelId: string) {}
 
+  private async transactionsChannel() {
+    const channel = await this.guild.channels.fetch(this.transactionsChannelId);
+    if (!channel || channel.type !== ChannelType.GuildText || channel.guild.id !== this.guild.id) {
+      throw new Error('The configured transactions channel is unavailable.');
+    }
+    return channel;
+  }
+
   async getMembers(): Promise<DiscordLeagueMember[]> {
     const members = await this.guild.members.fetch();
     return members.filter((member) => !member.user.bot).map(roleSnapshot);
@@ -82,11 +90,23 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     }
   }
 
-  async announce(announcement: LeagueAnnouncement, reference: string): Promise<string> {
-    const channel = await this.guild.channels.fetch(this.transactionsChannelId);
-    if (!channel || channel.type !== ChannelType.GuildText || channel.guild.id !== this.guild.id) {
-      throw new Error('The configured transactions channel is unavailable.');
+  async findAnnouncement(reference: string): Promise<string | undefined> {
+    const channel = await this.transactionsChannel();
+    let before: string | undefined;
+    while (true) {
+      const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+      const match = messages.find((message) => message.author.id === this.guild.client.user?.id
+        && String(message.nonce ?? '') === reference);
+      if (match) return match.id;
+      if (messages.size < 100) return undefined;
+      const oldest = messages.last();
+      if (!oldest || oldest.id === before) return undefined;
+      before = oldest.id;
     }
+  }
+
+  async announce(announcement: LeagueAnnouncement, reference: string): Promise<string> {
+    const channel = await this.transactionsChannel();
     const message = await channel.send({
       content: announcement.content,
       embeds: [new EmbedBuilder().setTitle(announcement.title).setDescription(announcement.description).setFooter({ text: announcement.footer })],

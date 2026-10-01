@@ -25,6 +25,29 @@ test('transaction announcements enforce the durable reference as the Discord non
   assert.equal(sent[0]?.enforceNonce, true);
 });
 
+test('announcement recovery finds an old matching nonce before sending again', async () => {
+  const reference = 'YSL-TRX-20260930-RECOVER';
+  let fetches = 0;
+  const oldMessages = new Collection<string, any>();
+  for (let index = 0; index < 100; index += 1) {
+    oldMessages.set(`new-${index}`, { id: `new-${index}`, nonce: null, author: { id: 'rat' } });
+  }
+  const matched = { id: 'existing-message', nonce: reference, author: { id: 'rat' } };
+  const channel = {
+    type: ChannelType.GuildText,
+    guild: { id: 'guild' },
+    messages: { fetch: async () => (++fetches === 1 ? oldMessages : new Collection([[matched.id, matched]])) },
+  };
+  const guild = {
+    id: 'guild',
+    client: { user: { id: 'rat' } },
+    channels: { fetch: async () => channel },
+  } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  assert.equal(await gateway.findAnnouncement(reference), 'existing-message');
+  assert.equal(fetches, 2);
+});
+
 test('a forced member fetch rejects unrelated league-role drift before applying a change', async () => {
   let mutations = 0;
   const cache = new Collection<string, unknown>([
