@@ -129,6 +129,18 @@ test('daily audit rejects a current player without exactly one roster assignment
   assert.ok(issues.some((issue) => issue.includes('two') && issue.includes('exactly one Current Rosters assignment')));
 });
 
+test('daily audit rejects duplicate current-name rows for an unrostered member', () => {
+  const current = snapshot();
+  current.names.push({
+    ...current.names.find((row) => row.discordId === 'free')!,
+    sheetRow: 9,
+    leagueStatus: 'Former Player',
+  });
+  current.discordMembers.find((member) => member.discordId === 'free')!.roleIds = ['division-v'];
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('free') && issue.includes('exactly one current name record')));
+});
+
 test('daily audit rejects a roster display name that differs from the canonical league name', () => {
   const current = snapshot();
   current.rosters[0]!.player = 'Stale Name';
@@ -160,6 +172,16 @@ test('daily audit rejects duplicate canonical names within managed team and free
   freeAgents.publicRosters.Vanaheim!.freeAgents = ['Free', 'Free'];
   assert.ok(auditLeagueRoster(freeAgents)
     .some((issue) => issue.includes('Vanaheim free agents') && issue.includes('duplicate current player names')));
+});
+
+test('daily audit rejects an active team without a managed public roster block', () => {
+  const current = snapshot();
+  current.teams.push({
+    teamKey: 'Vanaheim|Misspelled Team', franchise: 'Misspelled Team', division: 'Vanaheim',
+    teamRoleId: 'team-c', teamRole: 'Misspelled Team VD', divisionRoleId: 'division-v', active: true,
+  });
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('Misspelled Team') && issue.includes('no managed public roster block')));
 });
 
 test('daily audit rejects stale franchise metadata for a free agent', () => {

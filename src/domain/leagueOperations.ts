@@ -142,6 +142,9 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
     rows.push(row);
     currentNameRows.set(row.discordId, rows);
   }
+  for (const [discordId, rows] of currentNameRows) {
+    if (rows.length !== 1) issues.push(`Discord member ${discordId} must have exactly one current name record.`);
+  }
   for (const row of snapshot.rosters) {
     rosterCountById.set(row.discordId, (rosterCountById.get(row.discordId) ?? 0) + 1);
     if (rosterById.has(row.discordId)) issues.push(`Discord member ${row.discordId} appears more than once in Current Rosters.`);
@@ -156,9 +159,7 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
     else if (row.player !== canonicalName) {
       issues.push(`Current Rosters player name for ${row.discordId} does not match its Current League Name.`);
     }
-    if ((currentNameRows.get(row.discordId)?.length ?? 0) !== 1) {
-      issues.push(`Current Rosters member ${row.discordId} must have exactly one current name record.`);
-    } else {
+    if ((currentNameRows.get(row.discordId)?.length ?? 0) === 1) {
       const currentName = currentNameRows.get(row.discordId)![0]!;
       if (currentName.division !== row.division
         || currentName.franchise !== row.franchise
@@ -228,7 +229,13 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
     const expected = snapshot.rosters
       .filter((row) => row.teamRoleId === team.teamRoleId)
       .map((row) => names.get(row.discordId) ?? '');
-    const actual = snapshot.publicRosters[team.division]?.teams[team.franchise] ?? [];
+    const publicDivision = snapshot.publicRosters[team.division];
+    const hasPublicBlock = publicDivision !== undefined
+      && Object.prototype.hasOwnProperty.call(publicDivision.teams, team.franchise);
+    if (!hasPublicBlock) {
+      issues.push(`${team.division} ${team.franchise} has no managed public roster block.`);
+    }
+    const actual = publicDivision?.teams[team.franchise] ?? [];
     if (hasDuplicateNames(expected)) {
       issues.push(`${team.division} ${team.franchise} has duplicate current player names.`);
     }
