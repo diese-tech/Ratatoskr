@@ -100,10 +100,16 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
   const issues: string[] = [];
   const activeTeams = snapshot.teams.filter((team) => team.active);
   const teamsByRole = new Map<string, LeagueTeam>();
+  const teamsByPublicBlock = new Map<string, LeagueTeam>();
   const configuredDivisionRoleIds = new Set(activeTeams.map((team) => team.divisionRoleId));
   for (const team of activeTeams) {
     if (teamsByRole.has(team.teamRoleId)) issues.push(`Team role ${team.teamRoleId} is configured more than once.`);
     teamsByRole.set(team.teamRoleId, team);
+    const publicBlockKey = `${team.division}\u0000${team.franchise}`;
+    if (teamsByPublicBlock.has(publicBlockKey)) {
+      issues.push(`${team.division} ${team.franchise} is configured as more than one active team.`);
+    }
+    teamsByPublicBlock.set(publicBlockKey, team);
   }
 
   let names: Map<string, string>;

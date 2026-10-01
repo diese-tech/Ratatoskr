@@ -82,6 +82,16 @@ test('daily audit rejects additional configured division roles', () => {
   assert.ok(issues.some((issue) => issue.includes('free') && issue.includes('division roles')));
 });
 
+test('daily audit rejects duplicate active team mappings to one public roster block', () => {
+  const current = snapshot();
+  current.teams.push({
+    teamKey: 'Vanaheim|Dream Walkers duplicate', franchise: 'Dream Walkers', division: 'Vanaheim',
+    teamRoleId: 'team-c', teamRole: 'Dream Walkers Alternate VD', divisionRoleId: 'division-v', active: true,
+  });
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('Vanaheim Dream Walkers') && issue.includes('more than one active team')));
+});
+
 test('daily audit rejects stale current-name assignment metadata for a rostered player', () => {
   const current = snapshot();
   const name = current.names.find((row) => row.discordId === 'one')!;
