@@ -159,8 +159,11 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
     else if (row.player !== canonicalName) {
       issues.push(`Current Rosters player name for ${row.discordId} does not match its Current League Name.`);
     }
-    if ((currentNameRows.get(row.discordId)?.length ?? 0) === 1) {
-      const currentName = currentNameRows.get(row.discordId)![0]!;
+    const memberCurrentNames = currentNameRows.get(row.discordId) ?? [];
+    if (memberCurrentNames.length === 0) {
+      issues.push(`Discord member ${row.discordId} must have exactly one current name record.`);
+    } else if (memberCurrentNames.length === 1) {
+      const currentName = memberCurrentNames[0]!;
       if (currentName.division !== row.division
         || currentName.franchise !== row.franchise
         || currentName.leagueStatus !== row.rosterStatus) {

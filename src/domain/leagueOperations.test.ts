@@ -141,6 +141,13 @@ test('daily audit rejects duplicate current-name rows for an unrostered member',
   assert.ok(issues.some((issue) => issue.includes('free') && issue.includes('exactly one current name record')));
 });
 
+test('daily audit rejects a rostered member without a current-name row', () => {
+  const current = snapshot();
+  current.names.find((row) => row.discordId === 'one')!.nameStatus = 'Former Discord Name';
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('exactly one current name record')));
+});
+
 test('daily audit rejects a roster display name that differs from the canonical league name', () => {
   const current = snapshot();
   current.rosters[0]!.player = 'Stale Name';
