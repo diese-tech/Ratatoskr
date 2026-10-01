@@ -129,6 +129,7 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
   catch (error) { issues.push(error instanceof Error ? error.message : String(error)); names = new Map(); }
 
   const rosterById = new Map<string, LeagueRosterRow>();
+  const rosterCountById = new Map<string, number>();
   const currentNameRows = new Map<string, LeagueNameRow[]>();
   for (const row of snapshot.names) {
     if (row.nameStatus !== 'Current Discord Name') continue;
@@ -137,6 +138,7 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
     currentNameRows.set(row.discordId, rows);
   }
   for (const row of snapshot.rosters) {
+    rosterCountById.set(row.discordId, (rosterCountById.get(row.discordId) ?? 0) + 1);
     if (rosterById.has(row.discordId)) issues.push(`Discord member ${row.discordId} appears more than once in Current Rosters.`);
     rosterById.set(row.discordId, row);
     const team = teamsByRole.get(row.teamRoleId);
@@ -158,6 +160,12 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
         || currentName.leagueStatus !== row.rosterStatus) {
         issues.push(`Current name record for ${row.discordId} does not match its Current Rosters assignment.`);
       }
+    }
+  }
+  for (const [discordId, rows] of currentNameRows) {
+    if (rows.length !== 1 || !['Captain', 'Player'].includes(rows[0]!.leagueStatus)) continue;
+    if (rosterCountById.get(discordId) !== 1) {
+      issues.push(`Current player ${discordId} must have exactly one Current Rosters assignment.`);
     }
   }
 

@@ -3,8 +3,11 @@ import test from 'node:test';
 import { ChannelType, Collection, PermissionFlagsBits, PermissionsBitField, type Client } from 'discord.js';
 import { openDatabase, insertManagedResource } from '../db/index.js';
 import {
+  createLeagueTransaction,
   createOrGetLeagueReconciliationTicket,
+  getLeagueTransaction,
   getLeagueReconciliationTicket,
+  markLeagueTransactionReconciliationRequired,
 } from '../db/repositories/leagueOperations.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import { handleInteractionError, interactionOperationContext } from './interactionErrors.js';
@@ -75,6 +78,24 @@ test('a delivered league reconciliation ticket is marked alerted and gives staff
   assert.ok(getLeagueReconciliationTicket(f.db, 'YSL-REC-TEST')?.alertedAt);
   assert.match(f.sent[0].content, /League sheet reconciliation/);
   assert.match(f.sent[0].content, /Ratatoskr made no changes/);
+  f.db.close();
+});
+
+test('a delivered immediate transaction reconciliation alert is not retried on restart', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  createLeagueTransaction(f.db, {
+    reference: 'YSL-TRX-TEST', guildId: 'guild', kind: 'trade', actorUserId: 'admin', payload: {},
+  });
+  markLeagueTransactionReconciliationRequired(f.db, 'YSL-TRX-TEST', 'Discord rollback failed.');
+  const interaction: any = {
+    client: f.client, guildId: 'guild', isChatInputCommand: () => true, commandName: 'transaction',
+    options: { getSubcommand: () => 'trade' }, isRepliable: () => true, replied: false, deferred: false,
+    deferReply: async () => { interaction.deferred = true; }, editReply: async () => undefined,
+  };
+  const error = Object.assign(new Error('Discord rollback failed.'), { reference: 'YSL-TRX-TEST' });
+  await handleInteractionError(interaction, f.db, error, 'guild');
+  assert.ok(getLeagueTransaction(f.db, 'YSL-TRX-TEST')?.reconciliationAlertedAt);
   f.db.close();
 });
 

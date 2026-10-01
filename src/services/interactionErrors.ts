@@ -1,6 +1,9 @@
 import { MessageFlags, type Interaction } from 'discord.js';
 import type Database from 'better-sqlite3';
-import { markLeagueReconciliationTicketAlerted } from '../db/repositories/leagueOperations.js';
+import {
+  markLeagueReconciliationTicketAlerted,
+  markLeagueTransactionReconciliationAlerted,
+} from '../db/repositories/leagueOperations.js';
 import { reportOperationalError, operationalErrorGuidance, type OperationContext } from './operationalErrors.js';
 
 export function interactionOperationContext(interaction: Interaction, fallbackGuildId: string): OperationContext {
@@ -65,6 +68,9 @@ export async function handleInteractionError(interaction: Interaction, db: Datab
   );
   if (reconciliationTicket && transactionReference && report.staffDelivered) {
     markLeagueReconciliationTicketAlerted(db, transactionReference);
+  }
+  if (transactionReference && report.staffDelivered) {
+    markLeagueTransactionReconciliationAlerted(db, transactionReference);
   }
   if (!repliable) return;
   const payload = { content: `Ratatoskr could not complete that action. ${operationalErrorGuidance(report)}`, flags: MessageFlags.Ephemeral } as const;

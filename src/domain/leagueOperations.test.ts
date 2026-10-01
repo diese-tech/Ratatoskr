@@ -120,6 +120,15 @@ test('daily audit rejects stale current-name assignment metadata for a rostered 
   assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('Current Rosters assignment')));
 });
 
+test('daily audit rejects a current player without exactly one roster assignment', () => {
+  const current = snapshot();
+  current.rosters = current.rosters.filter((row) => row.discordId !== 'two');
+  current.discordMembers.find((member) => member.discordId === 'two')!.roleIds = ['division-v'];
+  current.publicRosters.Vanaheim!.teams['The Sewer'] = [];
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('two') && issue.includes('exactly one Current Rosters assignment')));
+});
+
 test('daily audit rejects a roster display name that differs from the canonical league name', () => {
   const current = snapshot();
   current.rosters[0]!.player = 'Stale Name';
