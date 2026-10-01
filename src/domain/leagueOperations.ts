@@ -174,6 +174,9 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
   for (const rows of currentNameRows.values()) {
     if (rows.length !== 1 || rows[0]!.leagueStatus !== 'Free Agent') continue;
     const row = rows[0]!;
+    if (row.franchise.trim() !== '') {
+      issues.push(`Current free agent ${row.discordId} must not retain a franchise assignment.`);
+    }
     const member = memberById.get(row.discordId);
     if (!member) {
       issues.push(`Current free agent ${row.discordId} is not in the Discord member snapshot.`);

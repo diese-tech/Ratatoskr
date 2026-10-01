@@ -92,6 +92,13 @@ test('daily audit rejects stale current-name assignment metadata for a rostered 
   assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('Current Rosters assignment')));
 });
 
+test('daily audit rejects stale franchise metadata for a free agent', () => {
+  const current = snapshot();
+  current.names.find((row) => row.discordId === 'free')!.franchise = 'Dream Walkers';
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('free') && issue.includes('franchise assignment')));
+});
+
 test('trade swaps team assignments and exact public cells while preserving captain status', () => {
   const plan = buildTradePlan(snapshot(), 'one', 'two');
   assert.equal(plan.rosters.find((row) => row.discordId === 'one')?.teamRoleId, 'team-b');

@@ -161,6 +161,9 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
       if (currentName.leagueStatus !== 'Free Agent') {
         throw new Error(`Discord member ${discordId} has no valid team or free-agent assignment.`);
       }
+      if (currentName.franchise.trim() !== '') {
+        throw new Error(`Discord member ${discordId} is a free agent but still has a franchise assignment.`);
+      }
       if (assignedTeamRoles.length !== 0) {
         throw new Error(`Discord member ${discordId} is a free agent but still has a configured team role.`);
       }
