@@ -111,6 +111,7 @@ function fixture() {
   let publicChannel = false;
   let playersAllowed = false;
   let sendAllowed = true;
+  let readHistoryAllowed = true;
   let failSend = false;
   let loseSendResponse = false;
   let missing = false;
@@ -119,7 +120,8 @@ function fixture() {
   const channel = { type: ChannelType.GuildText, guild,
     permissionOverwrites: { cache: new Collection() },
     permissionsFor: (target: any) => new PermissionsBitField(target.id === 'bot'
-      ? sendAllowed ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] : []
+      ? sendAllowed ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
+        ...(readHistoryAllowed ? [PermissionFlagsBits.ReadMessageHistory] : [])] : []
       : target.id === 'staff' || (target.id === 'guild' && publicChannel) || (target.id === 'player' && playersAllowed)
         ? [PermissionFlagsBits.ViewChannel] : []),
     messages: { fetch: async ({ limit, before }: { limit: number; before?: string }) => {
@@ -153,6 +155,7 @@ function fixture() {
       publicChannel = which === 'public';
       playersAllowed = which === 'players';
       sendAllowed = which !== 'denied';
+      readHistoryAllowed = which !== 'no-history';
       failSend = which === 'failure';
       loseSendResponse = which === 'lost-response';
       missing = which === 'missing';
@@ -232,6 +235,27 @@ test('a delayed staff-report retry finds an accepted message after its send resp
     assert.equal(recovered.staffDelivered, true);
     assert.equal(f.sent.length, 1, 'history recovery must not send a duplicate alert');
     assert.equal(f.attempted.length, 1);
+  } finally { f.db.close(); }
+});
+
+test('ordinary alerts remain deliverable without message history while durable retries fail safely', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  try {
+    f.set('no-history');
+    const ordinary = await reportOperationalError(
+      f.client, f.db, { guildId: 'guild', action: 'Ordinary failure' }, new Error('Failed'),
+    );
+    assert.equal(ordinary.staffDelivered, true);
+    const durable = await reportOperationalError(
+      f.client,
+      f.db,
+      { guildId: 'guild', action: 'Durable recovery' },
+      new Error('Failed'),
+      { reference: 'durable-reference', retryUndelivered: true },
+    );
+    assert.equal(durable.staffDelivered, false);
+    assert.equal(f.sent.length, 1);
   } finally { f.db.close(); }
 });
 

@@ -56,11 +56,9 @@ async function validatedStaffChannel(client: Client, db: Database.Database, guil
   for (const id of [process.env.ROLE_ALLFATHER_ID, process.env.ROLE_AESIR_ID]) if (id) staffIds.add(id);
   if (channel.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel, false)) throw new Error('staff-ops is public');
   const bot = guild.members.me ?? await guild.members.fetchMe();
-  if (!channel.permissionsFor(bot)?.has([
-    PermissionFlagsBits.ViewChannel,
-    PermissionFlagsBits.SendMessages,
-    PermissionFlagsBits.ReadMessageHistory,
-  ])) throw new Error('bot cannot send to or read staff-ops');
+  if (!channel.permissionsFor(bot)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
+    throw new Error('bot cannot send to staff-ops');
+  }
   for (const role of guild.roles.cache.values()) {
     if (role.id === guild.id || staffIds.has(role.id) || role.permissions.has(PermissionFlagsBits.Administrator)
       || (role.managed && role.tags?.botId === client.user?.id)) continue;
@@ -126,9 +124,15 @@ export async function reportOperationalError(
   records.set(key, report); // Suppress ordinary duplicate alerts before the send.
   try {
     const channel = await validatedStaffChannel(client, db, context.guildId);
-    if (options && await staffReportExists(channel, client.user?.id, options.reference)) {
-      report.staffDelivered = true;
-      return { reference: report.reference, staffDelivered: true };
+    if (options) {
+      const bot = channel.guild.members.me ?? await channel.guild.members.fetchMe();
+      if (!channel.permissionsFor(bot)?.has(PermissionFlagsBits.ReadMessageHistory)) {
+        throw new Error('bot cannot read staff-ops history for durable alert recovery');
+      }
+      if (await staffReportExists(channel, client.user?.id, options.reference)) {
+        report.staffDelivered = true;
+        return { reference: report.reference, staffDelivered: true };
+      }
     }
     const safe = (text: string) => escapeMarkdown(redactOperationalText(text).replace(/[\r\n]/g, ' ')).slice(0, 300);
     await channel.send({ content: [
