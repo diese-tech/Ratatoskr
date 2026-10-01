@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ChannelType, Collection, PermissionFlagsBits, PermissionsBitField, type Client } from 'discord.js';
 import { openDatabase, insertManagedResource } from '../db/index.js';
+import {
+  createOrGetLeagueReconciliationTicket,
+  getLeagueReconciliationTicket,
+} from '../db/repositories/leagueOperations.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import { handleInteractionError, interactionOperationContext } from './interactionErrors.js';
+import { LeagueReconciliationTicketError } from './leagueTransactions.js';
 
 test('nested Scout failures identify their setup and operation without confusing division or page IDs', () => {
   const context = (customId: string, values: string[] = []) => interactionOperationContext({
@@ -48,6 +53,29 @@ test('unexpected failure acknowledges privately before staff lookup and reports 
     assert.equal(f.sent.length, 2);
     assert.match(f.sent[1].content, /Setup #13/);
   } finally { f.db.close(); }
+});
+
+test('a delivered league reconciliation ticket is marked alerted and gives staff manual-repair guidance', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  createOrGetLeagueReconciliationTicket(f.db, {
+    reference: 'YSL-REC-TEST', guildId: 'guild', actorUserId: 'admin', fingerprint: 'fingerprint', summary: 'Roster drift.',
+  });
+  const interaction: any = {
+    client: f.client, guildId: 'guild', isChatInputCommand: () => true, commandName: 'transaction',
+    options: { getSubcommand: () => 'trade' }, isRepliable: () => true, replied: false, deferred: false,
+    deferReply: async () => { interaction.deferred = true; }, editReply: async () => undefined,
+  };
+  await handleInteractionError(
+    interaction,
+    f.db,
+    new LeagueReconciliationTicketError('Ratatoskr made no changes. Reconcile league data, then retry.', 'YSL-REC-TEST'),
+    'guild',
+  );
+  assert.ok(getLeagueReconciliationTicket(f.db, 'YSL-REC-TEST')?.alertedAt);
+  assert.match(f.sent[0].content, /League sheet reconciliation/);
+  assert.match(f.sent[0].content, /Ratatoskr made no changes/);
+  f.db.close();
 });
 
 function fixture() {

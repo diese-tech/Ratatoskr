@@ -12,7 +12,9 @@ The YSL-owned workbook remains the public presentation surface. The private **YS
 
 Ratatoskr owns the execution of approved `/transaction trade`, `/transaction drop`, `/transaction pickup`, and `/transaction rename` commands. The administrator command is authoritative; the sheets are outputs and audit records, not a second command surface.
 
-Before the first mutation of each America/New_York league day, Ratatoskr compares all configured player team roles in Discord with Current Rosters, canonical names, visible public team blocks, and division free-agent lists. A successful result is recorded in SQLite for that day. Every individual transaction still revalidates its players, roles, configured team, and the exact managed sheet values immediately before mutation.
+Before every confirmed mutation, Ratatoskr compares all configured player team roles in Discord with Current Rosters, canonical names, visible public team blocks, and division free-agent lists. The result is recorded in SQLite for that America/New_York league day. Every transaction also revalidates the exact managed sheet values immediately before mutation.
+
+Manual sheet changes are never silently normalized. Ratatoskr updates only the roster rows and public cells owned by the approved transaction. If a manual entry makes the managed sources disagree, the command makes no changes and opens a durable, deduplicated reconciliation ticket. The ticket is delivered to the private staff-ops channel and remains retryable across restarts until delivery is confirmed. Staff reconcile the named Discord and sheet surfaces manually; the next clean full audit resolves the open ticket.
 
 The mutation lifecycle is durable:
 
@@ -45,6 +47,6 @@ The message content pings the two configured team roles. The public card contain
 
 - Staff get one previewed command instead of several manual edits.
 - Unexpected manual edits stop automation instead of being overwritten.
-- The daily gate detects broad drift; command preflight protects the exact transaction from later drift.
+- Every confirmed mutation detects broad drift; command preflight protects the exact transaction from later drift.
 - The first release intentionally rejects cross-division moves and leaves captain/staff role changes manual.
 - Production rollout requires the Google service-account secret, both workbook IDs, the Free Agent role ID, and the transactions channel ID.

@@ -4,6 +4,7 @@ import { buildRenamePlan, buildTradePlan, type LeagueSnapshot } from '../domain/
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
+  getLeagueReconciliationTicket,
   getLeagueTransaction,
   hasSuccessfulLeagueAudit,
   recordLeagueAudit,
@@ -65,7 +66,7 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
   return { db, events, announcementReferences, current, sheets, discord };
 }
 
-test('first mutation of the league day audits before Discord and completes the durable sequence', async () => {
+test('every confirmed mutation audits before Discord and completes the durable sequence', async () => {
   const f = fixture();
   const result = await executeLeagueTransaction({
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
@@ -101,13 +102,36 @@ test('trade announcement uses the locked Yggdrasil copy and pings only both team
 test('failed daily audit blocks every mutation and records no transaction', async () => {
   const f = fixture();
   f.current.publicRosters.Vanaheim!.teams.A = ['Wrong'];
-  await assert.rejects(() => executeLeagueTransaction({
+  const reference = await executeLeagueTransaction({
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
-  }), /daily league audit failed/i);
+  }).then(() => '', (error: Error & { reference?: string }) => {
+    assert.match(error.message, /made no changes.*league audit failed/i);
+    return error.reference!;
+  });
   assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), false);
+  assert.equal(getLeagueReconciliationTicket(f.db, reference)?.status, 'open');
   assert.deepEqual(f.events, []);
+  f.db.close();
+});
+
+test('the same unresolved sheet drift reuses one durable ticket and a clean audit resolves it', async () => {
+  const f = fixture();
+  f.current.publicRosters.Vanaheim!.teams.A = ['Wrong'];
+  const attempt = () => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
+  }).then(() => '', (error: Error & { reference?: string }) => error.reference!);
+  const firstReference = await attempt();
+  const secondReference = await attempt();
+  assert.equal(secondReference, firstReference);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_reconciliation_tickets').get() as { count: number }).count, 1);
+
+  f.current.publicRosters.Vanaheim!.teams.A = ['One'];
+  await attempt();
+  assert.equal(getLeagueReconciliationTicket(f.db, firstReference)?.status, 'resolved');
   f.db.close();
 });
 
@@ -131,7 +155,7 @@ test('targeted role preflight validates complete role integrity even for a renam
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
-  }), /team roles do not match/i);
+  }), /multiple team roles/i);
   assert.deepEqual(f.events, []);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
@@ -145,7 +169,7 @@ test('targeted preflight rejects stale current-name assignment metadata after th
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
-  }), /current-name assignment does not match/i);
+  }), /current name record.*does not match/i);
   assert.deepEqual(f.events, []);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
@@ -245,6 +269,32 @@ test('startup recovery retries an undelivered reconciliation alert on the next r
   await recover();
   assert.ok(getLeagueTransaction(f.db, 'YSL-TRX-RETRY')?.reconciliationAlertedAt);
   assert.equal(attempts, 2);
+  await recover();
+  assert.equal(attempts, 2);
+  f.db.close();
+});
+
+test('startup recovery delivers an undelivered sheet reconciliation ticket once', async () => {
+  const f = fixture();
+  f.current.publicRosters.Vanaheim!.teams.A = ['Wrong'];
+  const reference = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
+  }).then(() => '', (error: Error & { reference?: string }) => error.reference!);
+  let attempts = 0;
+  const recover = () => reconcilePendingLeagueTransactions({
+    db: f.db, sheets: f.sheets, discord: f.discord,
+    reportError: async (reportedReference, error) => {
+      assert.equal(reportedReference, reference);
+      assert.match(error instanceof Error ? error.message : String(error), /made no changes/i);
+      return { staffDelivered: ++attempts > 1 };
+    },
+  });
+  await recover();
+  assert.equal(getLeagueReconciliationTicket(f.db, reference)?.alertedAt, null);
+  await recover();
+  assert.ok(getLeagueReconciliationTicket(f.db, reference)?.alertedAt);
   await recover();
   assert.equal(attempts, 2);
   f.db.close();

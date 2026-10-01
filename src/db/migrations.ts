@@ -591,4 +591,26 @@ export const migrations: Migration[] = [
       ALTER TABLE league_transactions ADD COLUMN reconciliation_alerted_at TEXT;
     `,
   },
+  {
+    id: 23,
+    name: 'league_sheet_reconciliation_tickets',
+    sql: `
+      CREATE TABLE league_reconciliation_tickets (
+        reference TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        actor_user_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'resolved')) DEFAULT 'open',
+        alerted_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
+      CREATE INDEX idx_league_reconciliation_tickets_delivery
+        ON league_reconciliation_tickets (status, alerted_at, created_at);
+      CREATE INDEX idx_league_reconciliation_tickets_guild_fingerprint
+        ON league_reconciliation_tickets (guild_id, fingerprint, status);
+    `,
+  },
 ];

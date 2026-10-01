@@ -32,6 +32,38 @@ type TransactionRow = {
   reconciliation_alerted_at: string | null;
 };
 
+export type LeagueReconciliationTicket = {
+  reference: string;
+  guildId: string;
+  actorUserId: string;
+  fingerprint: string;
+  summary: string;
+  status: 'open' | 'resolved';
+  alertedAt: string | null;
+};
+
+type ReconciliationTicketRow = {
+  reference: string;
+  guild_id: string;
+  actor_user_id: string;
+  fingerprint: string;
+  summary: string;
+  status: 'open' | 'resolved';
+  alerted_at: string | null;
+};
+
+function toReconciliationTicket(row: ReconciliationTicketRow): LeagueReconciliationTicket {
+  return {
+    reference: row.reference,
+    guildId: row.guild_id,
+    actorUserId: row.actor_user_id,
+    fingerprint: row.fingerprint,
+    summary: row.summary,
+    status: row.status,
+    alertedAt: row.alerted_at,
+  };
+}
+
 function toTransaction(row: TransactionRow): LeagueTransaction {
   return {
     reference: row.reference,
@@ -130,4 +162,50 @@ export function markLeagueTransactionReconciliationAlerted(db: Database.Database
       reconciliation_alerted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE reference = ? AND status = 'reconciliation_required' AND reconciliation_alerted_at IS NULL`).run(reference);
+}
+
+export function createOrGetLeagueReconciliationTicket(db: Database.Database, input: {
+  reference: string;
+  guildId: string;
+  actorUserId: string;
+  fingerprint: string;
+  summary: string;
+}): LeagueReconciliationTicket {
+  const existing = db.prepare(`SELECT * FROM league_reconciliation_tickets
+    WHERE guild_id = ? AND fingerprint = ? AND status = 'open'
+    ORDER BY created_at LIMIT 1`).get(input.guildId, input.fingerprint) as ReconciliationTicketRow | undefined;
+  if (existing) return toReconciliationTicket(existing);
+  db.prepare(`INSERT INTO league_reconciliation_tickets
+    (reference, guild_id, actor_user_id, fingerprint, summary)
+    VALUES (?, ?, ?, ?, ?)`).run(input.reference, input.guildId, input.actorUserId, input.fingerprint, input.summary);
+  return toReconciliationTicket(db.prepare('SELECT * FROM league_reconciliation_tickets WHERE reference = ?')
+    .get(input.reference) as ReconciliationTicketRow);
+}
+
+export function listUndeliveredLeagueReconciliationTickets(db: Database.Database): LeagueReconciliationTicket[] {
+  return (db.prepare(`SELECT * FROM league_reconciliation_tickets
+    WHERE status = 'open' AND alerted_at IS NULL ORDER BY created_at, reference`).all() as ReconciliationTicketRow[])
+    .map(toReconciliationTicket);
+}
+
+export function markLeagueReconciliationTicketAlerted(db: Database.Database, reference: string): void {
+  db.prepare(`UPDATE league_reconciliation_tickets SET
+      alerted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE reference = ? AND status = 'open' AND alerted_at IS NULL`).run(reference);
+}
+
+export function resolveOpenLeagueReconciliationTickets(db: Database.Database, guildId: string): number {
+  return db.prepare(`UPDATE league_reconciliation_tickets SET
+      status = 'resolved', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE guild_id = ? AND status = 'open'`).run(guildId).changes;
+}
+
+export function getLeagueReconciliationTicket(
+  db: Database.Database,
+  reference: string,
+): LeagueReconciliationTicket | undefined {
+  const row = db.prepare('SELECT * FROM league_reconciliation_tickets WHERE reference = ?')
+    .get(reference) as ReconciliationTicketRow | undefined;
+  return row ? toReconciliationTicket(row) : undefined;
 }

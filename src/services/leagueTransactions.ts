@@ -1,14 +1,17 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { auditLeagueRoster, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import {
   createLeagueTransaction,
-  hasSuccessfulLeagueAudit,
+  createOrGetLeagueReconciliationTicket,
   listInterruptedLeagueTransactions,
   listPendingLeagueAnnouncements,
+  listUndeliveredLeagueReconciliationTickets,
+  markLeagueReconciliationTicketAlerted,
   markLeagueTransactionReconciliationAlerted,
   markLeagueTransactionReconciliationRequired,
   recordLeagueAudit,
+  resolveOpenLeagueReconciliationTickets,
   transitionLeagueTransaction,
 } from '../db/repositories/leagueOperations.js';
 import {
@@ -92,6 +95,35 @@ function dateInLeagueTimezone(now: Date): string {
 function errorWithReference(error: unknown, reference: string): Error & { reference: string } {
   const result = error instanceof Error ? error : new Error(String(error));
   return Object.assign(result, { reference });
+}
+
+export class LeagueReconciliationTicketError extends Error {
+  readonly leagueReconciliationTicket = true;
+
+  constructor(message: string, readonly reference: string) {
+    super(message);
+    this.name = 'LeagueReconciliationTicketError';
+  }
+}
+
+function openReconciliationTicket(
+  input: Pick<ExecuteLeagueTransactionInput, 'db' | 'guildId' | 'actorUserId'>,
+  auditDate: string,
+  error: unknown,
+): LeagueReconciliationTicketError {
+  const summary = error instanceof Error ? error.message : String(error);
+  const fingerprint = createHash('sha256').update(summary).digest('hex');
+  const ticket = createOrGetLeagueReconciliationTicket(input.db, {
+    reference: `YSL-REC-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`,
+    guildId: input.guildId,
+    actorUserId: input.actorUserId,
+    fingerprint,
+    summary,
+  });
+  return new LeagueReconciliationTicketError(
+    `Ratatoskr made no changes. Reconcile Discord, Current Rosters, Player Name History, and the public roster, then retry. ${summary}`,
+    ticket.reference,
+  );
 }
 
 function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutationPlan): void {
@@ -222,16 +254,30 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
   const release = acquire(input.operationScope, input.guildId);
   try {
     const members = input.discord.getMembers ? await input.discord.getMembers() : [];
-    const loaded = await input.sheets.load(members, input.freeAgentRoleId);
     const auditDate = dateInLeagueTimezone(input.now);
-    if (!hasSuccessfulLeagueAudit(input.db, input.guildId, auditDate)) {
-      const issues = auditLeagueRoster(loaded.snapshot);
-      recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: issues.length ? 'failed' : 'passed', issues });
-      if (issues.length) throw new Error(`Daily league audit failed; nothing changed. ${issues.slice(0, 5).join(' ')}`);
+    let loaded: LoadedLeagueSnapshot;
+    try {
+      loaded = await input.sheets.load(members, input.freeAgentRoleId);
+    } catch (error) {
+      throw openReconciliationTicket(input, auditDate, error);
     }
+    const issues = auditLeagueRoster(loaded.snapshot);
+    recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: issues.length ? 'failed' : 'passed', issues });
+    if (issues.length) {
+      throw openReconciliationTicket(
+        input,
+        auditDate,
+        new Error(`League audit failed. ${issues.slice(0, 5).join(' ')}`),
+      );
+    }
+    try {
+      await input.sheets.assertUnchanged(loaded);
+    } catch (error) {
+      throw openReconciliationTicket(input, auditDate, error);
+    }
+    resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     const plan = input.buildPlan(loaded.snapshot);
     assertDiscordPreconditions(loaded.snapshot, plan);
-    await input.sheets.assertUnchanged(loaded);
     const prepared = input.sheets.prepare(loaded, plan);
     const beforeByPlayer = new Map(plan.playerIds.map((discordId) => [
       discordId,
@@ -331,6 +377,15 @@ export async function reconcilePendingLeagueTransactions(input: {
   discord: LeagueDiscordPort;
   reportError?(reference: string, error: unknown): Promise<{ staffDelivered: boolean }>;
 }): Promise<void> {
+  for (const ticket of listUndeliveredLeagueReconciliationTickets(input.db)) {
+    const error = new LeagueReconciliationTicketError(
+      `Ratatoskr made no changes. Reconcile Discord, Current Rosters, Player Name History, and the public roster, then retry. ${ticket.summary}`,
+      ticket.reference,
+    );
+    const report = await input.reportError?.(ticket.reference, error);
+    if (report?.staffDelivered) markLeagueReconciliationTicketAlerted(input.db, ticket.reference);
+  }
+
   for (const transaction of listInterruptedLeagueTransactions(input.db)) {
     const error = new Error(transaction.errorMessage
       ?? `League transaction was interrupted during ${transaction.status}. Discord roles and Google Sheets may be partially applied; manual reconciliation is required.`);

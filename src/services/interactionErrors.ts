@@ -1,5 +1,6 @@
 import { MessageFlags, type Interaction } from 'discord.js';
 import type Database from 'better-sqlite3';
+import { markLeagueReconciliationTicketAlerted } from '../db/repositories/leagueOperations.js';
 import { reportOperationalError, operationalErrorGuidance, type OperationContext } from './operationalErrors.js';
 
 export function interactionOperationContext(interaction: Interaction, fallbackGuildId: string): OperationContext {
@@ -44,13 +45,27 @@ export async function handleInteractionError(interaction: Interaction, db: Datab
   }
   const transactionReference = error && typeof error === 'object' && 'reference' in error && typeof error.reference === 'string'
     ? error.reference : undefined;
+  const reconciliationTicket = Boolean(error && typeof error === 'object'
+    && 'leagueReconciliationTicket' in error && error.leagueReconciliationTicket === true);
+  const context = reconciliationTicket
+    ? {
+      guildId: interaction.guildId ?? fallbackGuildId,
+      action: 'League sheet reconciliation',
+      next: error instanceof Error
+        ? error.message
+        : 'Review the league sheets and Discord roles, correct or confirm the manual change, then retry the command.',
+    }
+    : interactionOperationContext(interaction, fallbackGuildId);
   const report = await reportOperationalError(
     interaction.client,
     db,
-    interactionOperationContext(interaction, fallbackGuildId),
+    context,
     error,
     transactionReference ? { reference: transactionReference, retryUndelivered: true } : undefined,
   );
+  if (reconciliationTicket && transactionReference && report.staffDelivered) {
+    markLeagueReconciliationTicketAlerted(db, transactionReference);
+  }
   if (!repliable) return;
   const payload = { content: `Ratatoskr could not complete that action. ${operationalErrorGuidance(report)}`, flags: MessageFlags.Ephemeral } as const;
   // A failed apology must never escape the event boundary. Existing component

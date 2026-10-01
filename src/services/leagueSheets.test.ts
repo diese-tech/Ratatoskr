@@ -30,10 +30,13 @@ class FakeGateway implements LeagueSheetsGateway {
         if (/^\d+$/.test(cell)) return Number(cell);
         return cell;
       };
-      if (update.range.startsWith("'Current Rosters'!A6:")) {
+      const rosterMatch = /^'Current Rosters'!A(\d+):J\1$/.exec(update.range);
+      if (rosterMatch) {
         const key = this.key(spreadsheetId, "'Current Rosters'!A5:J1000");
-        const header = this.data.get(key)![0]!;
-        this.data.set(key, [header, ...update.values.map((row) => row.map(evaluate))]);
+        const rows = this.data.get(key)!;
+        const rowIndex = Number(rosterMatch[1]) - 5;
+        while (rows.length <= rowIndex) rows.push(Array(10).fill(''));
+        rows[rowIndex] = update.values[0]!.map(evaluate);
       } else {
         const publicMatch = /^'([^']+) Roster'!([A-O])(\d+)$/.exec(update.range);
         if (publicMatch) {
@@ -124,7 +127,7 @@ test('public roster destinations are resolved before a mutation can begin', asyn
   assert.equal(gateway.writes.length, 0);
 });
 
-test('trade writes the sorted admin roster and only the two exact public player cells', async () => {
+test('trade writes only the affected admin rows and the two exact public player cells', async () => {
   const { gateway, service } = serviceFixture();
   const loaded = await service.load(members, 'free-agent');
   const plan = buildTradePlan(loaded.snapshot, 'one', 'two');
@@ -135,6 +138,10 @@ test('trade writes the sorted admin roster and only the two exact public player 
   const publicRanges = gateway.writes.filter((write) => write.spreadsheetId === 'public')
     .flatMap((write) => write.updates.map((update) => update.range));
   assert.deepEqual(publicRanges, ["'Vanaheim Roster'!C5", "'Vanaheim Roster'!G16"]);
+  const adminRosterRanges = gateway.writes.filter((write) => write.spreadsheetId === 'admin')
+    .flatMap((write) => write.updates.map((update) => update.range))
+    .filter((range) => range.startsWith("'Current Rosters'!"));
+  assert.deepEqual(adminRosterRanges, ["'Current Rosters'!A6:J6", "'Current Rosters'!A7:J7"]);
   const reloaded = await service.load([
     { discordId: 'one', displayName: 'OneLive', roleIds: ['team-b', 'division-v'] },
     { discordId: 'two', displayName: 'TwoLive', roleIds: ['team-a', 'division-v'] },
@@ -165,6 +172,10 @@ test('public verification accepts a pickup written into an internal managed-bloc
 
 test('numeric-looking league names remain exact text in every managed admin update', async () => {
   const { gateway, service } = serviceFixture();
+  const untouchedRoster = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))![2]!;
+  untouchedRoster[7] = 'Manual check';
+  untouchedRoster[8] = 'League staff note';
+  untouchedRoster[9] = '2026-09-29';
   const loaded = await service.load(members, 'free-agent');
   const plan = buildRenamePlan(loaded.snapshot, 'one', '007');
   await service.apply(loaded, plan, {
@@ -174,6 +185,7 @@ test('numeric-looking league names remain exact text in every managed admin upda
   const reloaded = await service.load(members, 'free-agent');
   assert.equal(reloaded.snapshot.rosters.find((row) => row.discordId === 'one')?.player, '007');
   assert.equal(reloaded.snapshot.names.find((row) => row.discordId === 'one')?.currentLeagueName, '007');
+  assert.deepEqual(untouchedRoster.slice(7, 10), ['Manual check', 'League staff note', '2026-09-29']);
 });
 
 test('free-agent rename history records the affected division', async () => {
@@ -193,7 +205,7 @@ test('free-agent rename history records the affected division', async () => {
   assert.ok(gateway.reads.some((read) => read.range === "'Transaction History'!A6:A"));
 });
 
-test('roster rewrites clear through the last occupied physical row after an internal blank', async () => {
+test('roster mutations preserve unrelated rows and internal blanks', async () => {
   const { gateway, service } = serviceFixture();
   const source = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))!;
   source.splice(2, 0, Array(10).fill(''));
@@ -203,11 +215,13 @@ test('roster rewrites clear through the last occupied physical row after an inte
   await service.apply(loaded, plan, {
     reference: 'YSL-TRX-SPARSE', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
   }, service.prepare(loaded, plan));
-  const rosterWrite = gateway.writes.flatMap((write) => write.updates)
-    .find((update) => update.range.startsWith("'Current Rosters'!A6:"));
-  assert.equal(rosterWrite?.range, "'Current Rosters'!A6:J8");
+  const rosterRanges = gateway.writes.flatMap((write) => write.updates)
+    .filter((update) => update.range.startsWith("'Current Rosters'!"))
+    .map((update) => update.range);
+  assert.deepEqual(rosterRanges, ["'Current Rosters'!A6:J6", "'Current Rosters'!A8:J8"]);
   const reloaded = await service.load(members, 'free-agent');
-  assert.deepEqual(reloaded.snapshot.rosters.map((row) => row.discordId), ['two', 'one']);
+  assert.deepEqual(reloaded.snapshot.rosters.map((row) => row.discordId), ['one', 'two']);
+  assert.equal(source[2]?.every((cell) => cell === ''), true);
 });
 
 test('partially populated roster rows fail closed before any rewrite', async () => {
@@ -215,5 +229,28 @@ test('partially populated roster rows fail closed before any rewrite', async () 
   const source = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))!;
   source.splice(2, 0, ['Vanaheim', 'Dream Walkers', 'team-a', 'Dream Walkers VD', '', 'Unlinked Player', 'Player']);
   await assert.rejects(() => service.load(members, 'free-agent'), /row 7 is partially populated/i);
+  assert.equal(gateway.writes.length, 0);
+});
+
+test('unsupported roster status fails closed instead of becoming Player', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J1000"))![1]![6] = 'Starter';
+  await assert.rejects(() => service.load(members, 'free-agent'), /unsupported Roster Status.*Captain or Player/i);
+  assert.equal(gateway.writes.length, 0);
+});
+
+test('blank current league name fails closed instead of reaching a public roster write', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.get(gateway.key('admin', "'Player Name History'!A5:K1000"))![1]![1] = '';
+  await assert.rejects(() => service.load(members, 'free-agent'), /no Current League Name/i);
+  assert.equal(gateway.writes.length, 0);
+});
+
+test('partial team configuration fails closed instead of being ignored', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.get(gateway.key('admin', "'League Teams'!A5:L100"))!.push(
+    ['', 'Manual Franchise', 'Vanaheim', '', 'Manual VD', '', '', 'division-v', 'Vanaheim', '', '', 'Yes'],
+  );
+  await assert.rejects(() => service.load(members, 'free-agent'), /League Teams row 8 is partially populated/i);
   assert.equal(gateway.writes.length, 0);
 });

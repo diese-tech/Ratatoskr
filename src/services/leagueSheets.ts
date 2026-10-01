@@ -95,8 +95,6 @@ const ADMIN_NAMES_RANGE = "'Player Name History'!A5:K1000";
 const PUBLIC_RANGE = 'A1:O99';
 
 const divisions = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
-const divisionOrder = new Map<LeagueDivision, number>(divisions.map((division, index) => [division, index]));
-
 const publicTeamCells: Record<string, { column: number; startRow: number; endRow: number }> = {
   'Dream Walkers': { column: 2, startRow: 5, endRow: 11 },
   'Eternal Vanguard': { column: 6, startRow: 5, endRow: 11 },
@@ -121,10 +119,6 @@ function value(rows: CellRows, row: number, column: number): string {
 function parseDivision(input: string): LeagueDivision {
   if (input === 'Vanaheim' || input === 'Alfheim' || input === 'Svartalfheim') return input;
   throw new Error(`Unsupported league division: ${input || '(blank)'}.`);
-}
-
-function nonEmptyRows(rows: CellRows, identityColumn: number): CellRows {
-  return rows.slice(1).filter((row) => String(row[identityColumn] ?? '').trim() !== '');
 }
 
 export type LeagueSheetSources = {
@@ -152,7 +146,17 @@ export class LeagueSheetDriftError extends Error {}
 export class LeagueSheetReconciliationRequiredError extends Error {}
 
 function parseTeams(rows: CellRows): LeagueTeam[] {
-  return nonEmptyRows(rows, 0).map((row) => ({
+  const populated = rows.slice(1).map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.some((cell) => String(cell ?? '').trim() !== ''));
+  for (const { row, index } of populated) {
+    if ([0, 1, 2, 3, 4, 7, 11].some((column) => String(row[column] ?? '').trim() === '')) {
+      throw new Error(`League Teams row ${index + 6} is partially populated; required team fields cannot be blank.`);
+    }
+    if (!['yes', 'no'].includes(String(row[11]).trim().toLowerCase())) {
+      throw new Error(`League Teams row ${index + 6} has unsupported Active Team value; use Yes or No.`);
+    }
+  }
+  return populated.map(({ row }) => ({
     teamKey: String(row[0]),
     franchise: String(row[1]),
     division: parseDivision(String(row[2])),
@@ -169,6 +173,10 @@ function parseRosters(rows: CellRows): LeagueRosterRow[] {
     if ([0, 1, 2, 3, 4, 5, 6].some((column) => String(row[column] ?? '').trim() === '')) {
       throw new Error(`Current Rosters row ${index + 6} is partially populated; required roster fields cannot be blank.`);
     }
+    const status = String(row[6]).trim();
+    if (status !== 'Captain' && status !== 'Player') {
+      throw new Error(`Current Rosters row ${index + 6} has unsupported Roster Status "${status}"; use Captain or Player.`);
+    }
   }
   return populated.map(({ row, index }) => ({
     sheetRow: index + 6,
@@ -178,15 +186,25 @@ function parseRosters(rows: CellRows): LeagueRosterRow[] {
     team: String(row[3]),
     discordId: String(row[4]),
     player: String(row[5]),
-    rosterStatus: String(row[6]) === 'Captain' ? 'Captain' : 'Player',
+    rosterStatus: String(row[6]).trim() as 'Captain' | 'Player',
   }));
 }
 
 function parseNames(rows: CellRows): LeagueNameRow[] {
-  return rows.slice(1).map((row, index) => ({ row, index })).filter(({ row }) => String(row[0] ?? '').trim() !== '').map(({ row, index }) => ({
+  const populated = rows.slice(1).map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.some((cell) => String(cell ?? '').trim() !== ''));
+  for (const { row, index } of populated) {
+    if (String(row[0] ?? '').trim() === '') {
+      throw new Error(`Player Name History row ${index + 6} is populated but has no Discord ID.`);
+    }
+    if (String(row[1] ?? '').trim() === '') {
+      throw new Error(`Player Name History row ${index + 6} has no Current League Name.`);
+    }
+  }
+  return populated.map(({ row, index }) => ({
     sheetRow: index + 6,
-    discordId: String(row[0]),
-    currentLeagueName: String(row[1]),
+    discordId: String(row[0]).trim(),
+    currentLeagueName: String(row[1]).trim(),
     knownName: String(row[2]),
     nameStatus: String(row[3]),
     division: parseDivision(String(row[4])),
@@ -300,22 +318,27 @@ export class LeagueSheetsService {
   ): Promise<void> {
     await this.assertUnchanged(loaded);
     const originalRosters = loaded.snapshot.rosters;
-    const teamOrder = new Map(loaded.snapshot.teams.filter((team) => team.active).map((team, index) => [team.teamRoleId, index]));
-    const sortedRosters = [...plan.rosters].sort((left, right) =>
-      (divisionOrder.get(left.division)! - divisionOrder.get(right.division)!)
-      || ((teamOrder.get(left.teamRoleId) ?? 999) - (teamOrder.get(right.teamRoleId) ?? 999))
-      || (left.rosterStatus === right.rosterStatus ? left.player.localeCompare(right.player) : left.rosterStatus === 'Captain' ? -1 : 1));
     const now = `${record.effectiveDate}T00:00:00.000Z`;
-    const rosterValues = sortedRosters.map((row) => [
+    const rosterValue = (row: LeagueRosterRow): Cell[] => [
       row.division, row.franchise, row.teamRoleId, row.team, row.discordId, row.player,
       row.rosterStatus, 'OK', 'Ratatoskr approved transaction', now,
-    ]);
-    const lastOriginalRosterRow = Math.max(5, ...originalRosters.map((row) => row.sheetRow));
-    const lastRosterRow = Math.max(lastOriginalRosterRow, 5 + sortedRosters.length);
-    while (rosterValues.length < lastRosterRow - 5) rosterValues.push(['', '', '', '', '', '', '', '', '', '']);
-    const adminUpdates: SheetValueUpdate[] = rosterValues.length
-      ? [{ range: `'Current Rosters'!A6:J${lastRosterRow}`, values: rosterValues }]
-      : [];
+    ];
+    const nextByPlayer = new Map(plan.rosters.map((row) => [row.discordId, row]));
+    const originalByPlayer = new Map(originalRosters.map((row) => [row.discordId, row]));
+    const adminUpdates: SheetValueUpdate[] = [];
+    for (const previous of originalRosters) {
+      const next = nextByPlayer.get(previous.discordId);
+      if (!next) {
+        adminUpdates.push({ range: `'Current Rosters'!A${previous.sheetRow}:J${previous.sheetRow}`, values: [Array(10).fill('')] });
+      } else if (JSON.stringify(rosterValue(previous).slice(0, 7)) !== JSON.stringify(rosterValue(next).slice(0, 7))) {
+        adminUpdates.push({ range: `'Current Rosters'!A${previous.sheetRow}:J${previous.sheetRow}`, values: [rosterValue(next)] });
+      }
+    }
+    for (const next of plan.rosters) {
+      if (!originalByPlayer.has(next.discordId)) {
+        adminUpdates.push({ range: `'Current Rosters'!A${next.sheetRow}:J${next.sheetRow}`, values: [rosterValue(next)] });
+      }
+    }
 
     for (const next of plan.nameUpdates) {
       const previous = loaded.snapshot.names.find((row) => row.sheetRow === next.sheetRow);
@@ -369,7 +392,7 @@ export class LeagueSheetsService {
           && actual.franchise === expected.franchise
           && actual.leagueStatus === expected.leagueStatus;
       });
-      if (JSON.stringify(rosterProjection(sortedRosters)) !== JSON.stringify(rosterProjection(verification.snapshot.rosters))
+      if (JSON.stringify(rosterProjection(plan.rosters)) !== JSON.stringify(rosterProjection(verification.snapshot.rosters))
         || !namesMatch
         || !samePublicRosters(expectedPublic, verification.snapshot.publicRosters)) {
         throw new Error('Post-write values do not match the approved transaction.');

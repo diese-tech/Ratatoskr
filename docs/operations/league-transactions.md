@@ -11,10 +11,10 @@ Only Allfather and Aesir role IDs may run these commands. Pickups accept only on
 
 ## Automatic safety checks
 
-- The first confirmed mutation each league day runs a complete Discord/private-sheet/public-sheet audit.
+- Every confirmed mutation runs a complete Discord/private-sheet/public-sheet audit.
 - Every confirmed mutation re-reads the managed sheet values and player roles immediately before changing anything.
-- A mismatch stops the command; Ratatoskr does not normalize or overwrite the unexpected value.
-- Current Rosters is rewritten in league order: Vanaheim, Alfheim, Svartalfheim.
+- A mismatch stops the command; Ratatoskr does not normalize or overwrite the unexpected value. It records one durable reconciliation ticket and alerts staff-ops.
+- Current Rosters updates are row-targeted. Unrelated rows, internal blanks, and manually maintained cells on unrelated rows are preserved.
 - Public writes are restricted to the eight seven-player team blocks and the two free-agent columns on each visible roster tab. Draft tabs are never read or written by the transaction service.
 
 ## Required Railway variables
@@ -31,11 +31,11 @@ Keep the service-account JSON sealed. Share both workbooks with the service-acco
 
 ## Failure meaning
 
-- **Nothing changed / run again:** a before-value drifted or validation failed. Inspect Discord and the named sheet; decide which source is correct before retrying.
+- **Nothing changed / reconciliation ticket:** a source is malformed or Discord, the private workbook, and the public workbook disagree. Ratatoskr leaves every source untouched, records a stable `YSL-REC-...` reference, and alerts staff-ops. Reconcile the named surfaces manually, then retry; a clean audit resolves the ticket.
 - **Failed and rolled back:** Discord rejected a role change, and Ratatoskr confirmed the original roles were restored.
 - **Reconciliation required:** an external write may be partial. Do not rerun the same roster move. Use the YSL reference in Railway logs and inspect Discord, Current Rosters, Player Name History, the public division roster, and Transaction History.
 - **Notice/history pending:** the roster move and sheet values are complete. Restart recovery retries the missing notice/history and uses the YSL reference to avoid duplicate history rows.
 
 ## Production gate
 
-Passing tests and CI does not prove live acceptance. Before enabling staff use, back up the persistent SQLite database, deploy migration 21 once, inspect startup logs, run one controlled preview, and perform a reversible live transaction with both sheet workbooks open. Do not run a second bot replica against the same database/guild.
+Passing tests and CI does not prove live acceptance. Before enabling staff use, back up the persistent SQLite database, deploy through migration 23 once, inspect startup logs, run one controlled preview, deliberately verify one safe drift produces a staff-ops ticket without writes, and perform a reversible live transaction with both sheet workbooks open. Do not run a second bot replica against the same database/guild.
