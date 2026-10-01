@@ -5,7 +5,7 @@ import {
   type GuildMember,
 } from 'discord.js';
 import type { DiscordLeagueMember, DiscordRoleChange } from '../domain/leagueOperations.js';
-import type { LeagueAnnouncement, LeagueDiscordPort } from './leagueTransactions.js';
+import type { LeagueAnnouncement, LeagueDiscordPort, LeagueRoleState } from './leagueTransactions.js';
 
 export class DiscordRoleReconciliationRequiredError extends Error {
   readonly reconciliationRequired = true;
@@ -19,6 +19,17 @@ function roleSnapshot(member: GuildMember): DiscordLeagueMember {
   return { discordId: member.id, displayName: member.displayName, roleIds: [...member.roles.cache.keys()] };
 }
 
+function assertMemberRoleState(member: GuildMember, expected: LeagueRoleState): void {
+  const assignedTeamRoles = expected.configuredTeamRoleIds.filter((roleId) => member.roles.cache.has(roleId));
+  const teamRolesMatch = expected.expectedTeamRoleId
+    ? assignedTeamRoles.length === 1 && assignedTeamRoles[0] === expected.expectedTeamRoleId
+    : assignedTeamRoles.length === 0;
+  const freeAgentMatches = member.roles.cache.has(expected.freeAgentRoleId) === expected.expectsFreeAgent;
+  if (!teamRolesMatch || !freeAgentMatches || !member.roles.cache.has(expected.divisionRoleId)) {
+    throw new Error(`Discord member ${member.id} complete league role state changed before the transaction finished.`);
+  }
+}
+
 export class DiscordLeagueGateway implements LeagueDiscordPort {
   constructor(private readonly guild: Guild, private readonly transactionsChannelId: string) {}
 
@@ -27,20 +38,18 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     return members.filter((member) => !member.user.bot).map(roleSnapshot);
   }
 
-  async applyRoleChange(change: DiscordRoleChange): Promise<void> {
+  async validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void> {
+    assertMemberRoleState(await fetchFreshMember(this.guild, discordId), expected);
+  }
+
+  async applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void> {
     const member = await fetchFreshMember(this.guild, change.discordId);
-    if (change.remove.some((roleId) => !member.roles.cache.has(roleId))
-      || change.add.some((roleId) => member.roles.cache.has(roleId))) {
-      throw new Error(`Discord roles changed before ${change.discordId} could be updated.`);
-    }
+    assertMemberRoleState(member, before);
     try {
       if (change.remove.length) await member.roles.remove(change.remove, 'Ratatoskr approved league transaction');
       if (change.add.length) await member.roles.add(change.add, 'Ratatoskr approved league transaction');
       const verified = await fetchFreshMember(this.guild, change.discordId);
-      if (change.remove.some((roleId) => verified.roles.cache.has(roleId))
-        || change.add.some((roleId) => !verified.roles.cache.has(roleId))) {
-        throw new Error('Discord returned a role state that does not match the approved transaction.');
-      }
+      assertMemberRoleState(verified, after);
     } catch (error) {
       try {
         const current = await fetchFreshMember(this.guild, change.discordId);
@@ -49,8 +58,7 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
         if (unexpectedDestination.length) await current.roles.remove(unexpectedDestination, 'Ratatoskr failed transaction repair');
         if (missingOriginal.length) await current.roles.add(missingOriginal, 'Ratatoskr failed transaction repair');
         const repaired = await fetchFreshMember(this.guild, change.discordId);
-        if (change.remove.some((roleId) => !repaired.roles.cache.has(roleId))
-          || change.add.some((roleId) => repaired.roles.cache.has(roleId))) throw new Error('Role repair did not converge.');
+        assertMemberRoleState(repaired, before);
       } catch (repairError) {
         throw new DiscordRoleReconciliationRequiredError(
           `Discord role mutation may be partial for ${change.discordId}: ${repairError instanceof Error ? repairError.message : String(repairError)}`,
@@ -60,13 +68,14 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     }
   }
 
-  async rollbackRoleChange(change: DiscordRoleChange): Promise<void> {
+  async rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState): Promise<void> {
     const member = await fetchFreshMember(this.guild, change.discordId);
     if (change.add.length) await member.roles.remove(change.add, 'Ratatoskr transaction rollback');
     if (change.remove.length) await member.roles.add(change.remove, 'Ratatoskr transaction rollback');
     const verified = await fetchFreshMember(this.guild, change.discordId);
-    if (change.remove.some((roleId) => !verified.roles.cache.has(roleId))
-      || change.add.some((roleId) => verified.roles.cache.has(roleId))) {
+    try {
+      assertMemberRoleState(verified, expected);
+    } catch {
       throw new DiscordRoleReconciliationRequiredError(`Discord rollback did not converge for ${change.discordId}.`);
     }
   }

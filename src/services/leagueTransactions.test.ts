@@ -52,6 +52,7 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
     appendTransactionHistory: async () => { events.push('history'); },
   };
   const discord = {
+    validateRoleState: async (discordId: string) => { events.push(`discord-preflight:${discordId}`); },
     applyRoleChange: async (change: { discordId: string }) => { events.push(`discord:${change.discordId}`); },
     rollbackRoleChange: async (change: { discordId: string }) => { events.push(`rollback:${change.discordId}`); },
     announce: async (_announcement: unknown, reference: string) => {
@@ -71,7 +72,10 @@ test('first mutation of the league day audits before Discord and completes the d
     buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
   });
   assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), true);
-  assert.deepEqual(f.events, ['sheet-preflight', 'sheet-targets', 'discord:one', 'discord:two', 'sheet-apply', 'announce', 'history']);
+  assert.deepEqual(f.events, [
+    'sheet-preflight', 'sheet-targets', 'discord-preflight:one', 'discord-preflight:two',
+    'discord:one', 'discord:two', 'sheet-apply', 'announce', 'history',
+  ]);
   assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   assert.equal(getLeagueTransaction(f.db, result.reference)?.announcementId, 'message');
   f.db.close();

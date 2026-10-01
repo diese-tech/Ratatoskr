@@ -26,6 +26,14 @@ export type LeagueAnnouncement = {
   footer: string;
 };
 
+export type LeagueRoleState = {
+  configuredTeamRoleIds: string[];
+  expectedTeamRoleId: string | null;
+  freeAgentRoleId: string;
+  expectsFreeAgent: boolean;
+  divisionRoleId: string;
+};
+
 export interface LeagueSheetsPort {
   load(discordMembers: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot>;
   assertUnchanged(loaded: LoadedLeagueSnapshot): Promise<void>;
@@ -41,8 +49,9 @@ export interface LeagueSheetsPort {
 
 export interface LeagueDiscordPort {
   getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
-  applyRoleChange(change: DiscordRoleChange): Promise<void>;
-  rollbackRoleChange(change: DiscordRoleChange): Promise<void>;
+  validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
+  applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
+  rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState): Promise<void>;
   announce(announcement: LeagueAnnouncement, reference: string): Promise<string>;
 }
 
@@ -143,6 +152,29 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
   }
 }
 
+function expectedRoleState(
+  snapshot: LeagueSnapshot,
+  rosters: LeagueSnapshot['rosters'],
+  names: LeagueSnapshot['names'],
+  discordId: string,
+): LeagueRoleState {
+  const activeTeams = snapshot.teams.filter((team) => team.active);
+  const roster = rosters.find((row) => row.discordId === discordId);
+  const currentName = names.find((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
+  if (!currentName) throw new Error(`Discord member ${discordId} has no current name record.`);
+  const team = roster ? activeTeams.find((candidate) => candidate.teamRoleId === roster.teamRoleId) : undefined;
+  const divisionRoleId = team?.divisionRoleId
+    ?? activeTeams.find((candidate) => candidate.division === currentName.division)?.divisionRoleId;
+  if (!divisionRoleId) throw new Error(`Discord member ${discordId} has no configured division role.`);
+  return {
+    configuredTeamRoleIds: activeTeams.map((candidate) => candidate.teamRoleId),
+    expectedTeamRoleId: team?.teamRoleId ?? null,
+    freeAgentRoleId: snapshot.freeAgentRoleId,
+    expectsFreeAgent: !roster && currentName.leagueStatus === 'Free Agent',
+    divisionRoleId,
+  };
+}
+
 export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: string): LeagueAnnouncement | undefined {
   const mention = (roleId: string) => `<@&${roleId}>`;
   if (plan.kind === 'rename') return undefined;
@@ -174,8 +206,12 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
   };
 }
 
-async function rollbackDiscord(discord: LeagueDiscordPort, applied: DiscordRoleChange[]): Promise<void> {
-  for (const change of [...applied].reverse()) await discord.rollbackRoleChange(change);
+async function rollbackDiscord(
+  discord: LeagueDiscordPort,
+  applied: DiscordRoleChange[],
+  beforeByPlayer: Map<string, LeagueRoleState>,
+): Promise<void> {
+  for (const change of [...applied].reverse()) await discord.rollbackRoleChange(change, beforeByPlayer.get(change.discordId)!);
 }
 
 export async function executeLeagueTransaction(input: ExecuteLeagueTransactionInput): Promise<{ reference: string; announcementId?: string }> {
@@ -193,6 +229,17 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     assertDiscordPreconditions(loaded.snapshot, plan);
     await input.sheets.assertUnchanged(loaded);
     const prepared = input.sheets.prepare(loaded, plan);
+    const beforeByPlayer = new Map(plan.playerIds.map((discordId) => [
+      discordId,
+      expectedRoleState(loaded.snapshot, loaded.snapshot.rosters, loaded.snapshot.names, discordId),
+    ]));
+    const afterByPlayer = new Map(plan.playerIds.map((discordId) => [
+      discordId,
+      expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
+    ]));
+    for (const discordId of plan.playerIds) {
+      await input.discord.validateRoleState(discordId, beforeByPlayer.get(discordId)!);
+    }
 
     const reference = `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const record: LeagueTransactionRecord = {
@@ -206,7 +253,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     const applied: DiscordRoleChange[] = [];
     try {
       for (const change of plan.discordRoleChanges) {
-        await input.discord.applyRoleChange(change);
+        await input.discord.applyRoleChange(change, beforeByPlayer.get(change.discordId)!, afterByPlayer.get(change.discordId)!);
         applied.push(change);
       }
     } catch (error) {
@@ -215,7 +262,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         throw errorWithReference(error, reference);
       }
       try {
-        await rollbackDiscord(input.discord, applied);
+        await rollbackDiscord(input.discord, applied, beforeByPlayer);
         transitionLeagueTransaction(input.db, reference, 'applying_discord', 'failed', { errorMessage: String(error) });
       } catch (rollbackError) {
         markLeagueTransactionReconciliationRequired(input.db, reference, `Discord rollback failed: ${String(rollbackError)}`);
@@ -229,7 +276,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     } catch (error) {
       if (error instanceof LeagueSheetDriftError) {
         try {
-          await rollbackDiscord(input.discord, applied);
+          await rollbackDiscord(input.discord, applied, beforeByPlayer);
           transitionLeagueTransaction(input.db, reference, 'applying_sheets', 'failed', { errorMessage: error.message });
         } catch (rollbackError) {
           markLeagueTransactionReconciliationRequired(input.db, reference, `Discord rollback failed after sheet drift: ${String(rollbackError)}`);

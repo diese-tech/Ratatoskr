@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ChannelType, type Guild } from 'discord.js';
+import { ChannelType, Collection, type Guild } from 'discord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
 
 test('transaction announcements enforce the durable reference as the Discord nonce', async () => {
@@ -23,4 +23,74 @@ test('transaction announcements enforce the durable reference as the Discord non
   }, reference);
   assert.equal(sent[0]?.nonce, reference);
   assert.equal(sent[0]?.enforceNonce, true);
+});
+
+test('a forced member fetch rejects unrelated league-role drift before applying a change', async () => {
+  let mutations = 0;
+  const cache = new Collection<string, unknown>([
+    ['team-a', {}],
+    ['team-b', {}],
+    ['division-v', {}],
+  ]);
+  const member = {
+    id: 'one',
+    roles: {
+      cache,
+      remove: async () => { mutations += 1; },
+      add: async () => { mutations += 1; },
+    },
+  };
+  const guild = {
+    id: 'guild',
+    members: { fetch: async () => member },
+  } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  const before = {
+    configuredTeamRoleIds: ['team-a', 'team-b', 'team-c'],
+    expectedTeamRoleId: 'team-a',
+    freeAgentRoleId: 'free-agent',
+    expectsFreeAgent: false,
+    divisionRoleId: 'division-v',
+  };
+  await assert.rejects(() => gateway.applyRoleChange(
+    { discordId: 'one', remove: ['team-a'], add: ['team-c'] },
+    before,
+    { ...before, expectedTeamRoleId: 'team-c' },
+  ), /complete league role state changed/i);
+  assert.equal(mutations, 0);
+});
+
+test('post-change verification requires the complete destination role state', async () => {
+  const cache = new Collection<string, unknown>([
+    ['team-a', {}],
+    ['division-v', {}],
+  ]);
+  const member = {
+    id: 'one',
+    roles: {
+      cache,
+      remove: async (roleIds: string[]) => { for (const roleId of roleIds) cache.delete(roleId); },
+      add: async (roleIds: string[]) => {
+        for (const roleId of roleIds) cache.set(roleId, {});
+        if (roleIds.includes('team-c')) cache.set('team-b', {});
+      },
+    },
+  };
+  const guild = {
+    id: 'guild',
+    members: { fetch: async () => member },
+  } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  const before = {
+    configuredTeamRoleIds: ['team-a', 'team-b', 'team-c'],
+    expectedTeamRoleId: 'team-a',
+    freeAgentRoleId: 'free-agent',
+    expectsFreeAgent: false,
+    divisionRoleId: 'division-v',
+  };
+  await assert.rejects(() => gateway.applyRoleChange(
+    { discordId: 'one', remove: ['team-a'], add: ['team-c'] },
+    before,
+    { ...before, expectedTeamRoleId: 'team-c' },
+  ), (error: Error & { reconciliationRequired?: boolean }) => error.reconciliationRequired === true);
 });
