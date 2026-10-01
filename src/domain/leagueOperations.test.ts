@@ -24,8 +24,8 @@ function snapshot(): LeagueSnapshot {
   return {
     teams: teams.map((team) => ({ ...team })),
     rosters: [
-      { sheetRow: 6, division: 'Vanaheim', franchise: 'Dream Walkers', teamRoleId: 'team-a', team: 'Dream Walkers VD', discordId: 'one', player: 'OneLive', rosterStatus: 'Captain' },
-      { sheetRow: 7, division: 'Vanaheim', franchise: 'The Sewer', teamRoleId: 'team-b', team: 'The Sewer VD', discordId: 'two', player: 'TwoLive', rosterStatus: 'Player' },
+      { sheetRow: 6, division: 'Vanaheim', franchise: 'Dream Walkers', teamRoleId: 'team-a', team: 'Dream Walkers VD', discordId: 'one', player: 'One', rosterStatus: 'Captain' },
+      { sheetRow: 7, division: 'Vanaheim', franchise: 'The Sewer', teamRoleId: 'team-b', team: 'The Sewer VD', discordId: 'two', player: 'Two', rosterStatus: 'Player' },
     ],
     names: [
       { sheetRow: 6, discordId: 'one', currentLeagueName: 'One', knownName: 'OneLive', nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: 'Dream Walkers', leagueStatus: 'Captain' },
@@ -90,6 +90,13 @@ test('daily audit rejects stale current-name assignment metadata for a rostered 
   name.leagueStatus = 'Player';
   const issues = auditLeagueRoster(current);
   assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('Current Rosters assignment')));
+});
+
+test('daily audit rejects a roster display name that differs from the canonical league name', () => {
+  const current = snapshot();
+  current.rosters[0]!.player = 'Stale Name';
+  const issues = auditLeagueRoster(current);
+  assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('Current League Name')));
 });
 
 test('daily audit rejects stale franchise metadata for a free agent', () => {

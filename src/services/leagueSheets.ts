@@ -91,7 +91,7 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
 
 const ADMIN_TEAMS_RANGE = "'League Teams'!A5:L100";
 const ADMIN_ROSTERS_RANGE = "'Current Rosters'!A5:J1000";
-const ADMIN_NAMES_RANGE = "'Player Name History'!A5:K1000";
+const ADMIN_NAMES_RANGE = "'Player Name History'!A5:K";
 const PUBLIC_RANGE = 'A1:O99';
 
 const divisions = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
@@ -276,7 +276,13 @@ export class LeagueSheetsService {
   }
 
   async assertUnchanged(loaded: LoadedLeagueSnapshot): Promise<void> {
-    const fresh = await this.load(loaded.snapshot.discordMembers, loaded.snapshot.freeAgentRoleId);
+    let fresh: LoadedLeagueSnapshot;
+    try {
+      fresh = await this.load(loaded.snapshot.discordMembers, loaded.snapshot.freeAgentRoleId);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new LeagueSheetDriftError(`League sheets became unreadable after the audit. Nothing was written: ${detail}`);
+    }
     const changed = JSON.stringify(fresh.sources) !== JSON.stringify(loaded.sources);
     if (changed) throw new LeagueSheetDriftError('League sheets changed after the audit. Nothing was written; run the command again.');
   }
