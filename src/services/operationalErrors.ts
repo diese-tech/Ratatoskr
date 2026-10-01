@@ -56,7 +56,11 @@ async function validatedStaffChannel(client: Client, db: Database.Database, guil
   for (const id of [process.env.ROLE_ALLFATHER_ID, process.env.ROLE_AESIR_ID]) if (id) staffIds.add(id);
   if (channel.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel, false)) throw new Error('staff-ops is public');
   const bot = guild.members.me ?? await guild.members.fetchMe();
-  if (!channel.permissionsFor(bot)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) throw new Error('bot cannot send to staff-ops');
+  if (!channel.permissionsFor(bot)?.has([
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.ReadMessageHistory,
+  ])) throw new Error('bot cannot send to or read staff-ops');
   for (const role of guild.roles.cache.values()) {
     if (role.id === guild.id || staffIds.has(role.id) || role.permissions.has(PermissionFlagsBits.Administrator)
       || (role.managed && role.tags?.botId === client.user?.id)) continue;
@@ -71,6 +75,27 @@ async function validatedStaffChannel(client: Client, db: Database.Database, guil
     }
   }
   return channel;
+}
+
+async function staffReportExists(
+  channel: GuildTextBasedChannel,
+  botUserId: string | undefined,
+  reference: string,
+): Promise<boolean> {
+  if (!botUserId) return false;
+  const expectedNonce = createHash('sha256').update(reference).digest('hex').slice(0, 24);
+  let before: string | undefined;
+  while (true) {
+    const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    const match = messages.some((message) => message.author.id === botUserId
+      && (String(message.nonce ?? '') === expectedNonce
+        || message.content.split(/\r?\n/).includes(`Reference: ${reference}`)));
+    if (match) return true;
+    if (messages.size < 100) return false;
+    const oldest = messages.last();
+    if (!oldest || oldest.id === before) return false;
+    before = oldest.id;
+  }
 }
 
 /** Concise safe Discord summary; redacted error detail stays in process logs. */
@@ -101,6 +126,10 @@ export async function reportOperationalError(
   records.set(key, report); // Suppress ordinary duplicate alerts before the send.
   try {
     const channel = await validatedStaffChannel(client, db, context.guildId);
+    if (options && await staffReportExists(channel, client.user?.id, options.reference)) {
+      report.staffDelivered = true;
+      return { reference: report.reference, staffDelivered: true };
+    }
     const safe = (text: string) => escapeMarkdown(redactOperationalText(text).replace(/[\r\n]/g, ' ')).slice(0, 300);
     await channel.send({ content: [
       `Ratatoskr could not finish **${safe(context.action)}**.`,

@@ -112,22 +112,51 @@ function fixture() {
   let playersAllowed = false;
   let sendAllowed = true;
   let failSend = false;
+  let loseSendResponse = false;
   let missing = false;
   const bot = { id: 'bot' };
   const guild = { id: 'guild', roles: { everyone: roles.get('guild'), cache: roles, fetch: async () => roles }, members: { me: bot } };
   const channel = { type: ChannelType.GuildText, guild,
     permissionOverwrites: { cache: new Collection() },
     permissionsFor: (target: any) => new PermissionsBitField(target.id === 'bot'
-      ? sendAllowed ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] : []
+      ? sendAllowed ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] : []
       : target.id === 'staff' || (target.id === 'guild' && publicChannel) || (target.id === 'player' && playersAllowed)
         ? [PermissionFlagsBits.ViewChannel] : []),
-    send: async (payload: any) => { attempted.push(payload); if (failSend) throw new Error('Forbidden'); sent.push(payload); },
+    messages: { fetch: async ({ limit, before }: { limit: number; before?: string }) => {
+      const rows = [...history.values()]
+        .filter((message) => before === undefined || Number(message.id) < Number(before))
+        .sort((left, right) => Number(right.id) - Number(left.id))
+        .slice(0, limit);
+      return new Collection(rows.map((message) => [message.id, message]));
+    } },
+    send: async (payload: any) => {
+      attempted.push(payload);
+      if (failSend) throw new Error('Forbidden');
+      sent.push(payload);
+      const message = { id: String(++nextMessageId), author: bot, content: payload.content, nonce: payload.nonce };
+      history.set(message.id, message);
+      if (loseSendResponse) throw new Error('Response lost');
+      return message;
+    },
   };
+  let nextMessageId = 0;
+  const history = new Collection<string, any>();
   const client = { user: bot, channels: { fetch: async (id: string) => { assert.equal(id, 'staff-ops'); return missing ? null : channel; } } } as unknown as Client;
   insertManagedResource(db, { guildId: 'guild', discordResourceId: 'staff-ops', resourceType: 'text_channel', scaffoldDomain: 'server', logicalKey: 'server:channel:admin:staff_ops:text_channel' });
   insertManagedResource(db, { guildId: 'guild', discordResourceId: 'staff', resourceType: 'role', scaffoldDomain: 'server', logicalKey: 'server:role:valkyries' });
   return { db, client, sent, attempted, channel,
-    set: (which: string) => { publicChannel = which === 'public'; playersAllowed = which === 'players'; sendAllowed = which !== 'denied'; failSend = which === 'failure'; missing = which === 'missing'; } };
+    addHistory: (content: string) => {
+      const message = { id: String(++nextMessageId), author: bot, content, nonce: null };
+      history.set(message.id, message);
+    },
+    set: (which: string) => {
+      publicChannel = which === 'public';
+      playersAllowed = which === 'players';
+      sendAllowed = which !== 'denied';
+      failSend = which === 'failure';
+      loseSendResponse = which === 'lost-response';
+      missing = which === 'missing';
+    } };
 }
 
 test('operational report shares a reference, redacts credentials and suppresses repeated staff alerts', async (t) => {
@@ -183,6 +212,26 @@ test('a lifecycle staff report retries failed delivery with a stable reference a
 
     await reportOperationalError(f.client, f.db, context, new Error('Discord edit failed'), options);
     assert.equal(f.sent.length, 1);
+  } finally { f.db.close(); }
+});
+
+test('a delayed staff-report retry finds an accepted message after its send response was lost', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  const context = { guildId: 'guild', action: 'League transaction reconciliation' };
+  const options = { reference: 'YSL-TRX-LOST-RESPONSE', retryUndelivered: true } as const;
+  try {
+    f.set('lost-response');
+    const uncertain = await reportOperationalError(f.client, f.db, context, new Error('Response lost'), options);
+    assert.equal(uncertain.staffDelivered, false);
+    assert.equal(f.sent.length, 1);
+    for (let index = 0; index < 105; index += 1) f.addHistory(`Later staff message ${index}`);
+
+    f.set('available');
+    const recovered = await reportOperationalError(f.client, f.db, context, new Error('Response lost'), options);
+    assert.equal(recovered.staffDelivered, true);
+    assert.equal(f.sent.length, 1, 'history recovery must not send a duplicate alert');
+    assert.equal(f.attempted.length, 1);
   } finally { f.db.close(); }
 });
 
