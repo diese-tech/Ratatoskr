@@ -43,7 +43,7 @@ export interface LeagueDiscordPort {
   getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
   applyRoleChange(change: DiscordRoleChange): Promise<void>;
   rollbackRoleChange(change: DiscordRoleChange): Promise<void>;
-  announce(announcement: LeagueAnnouncement): Promise<string>;
+  announce(announcement: LeagueAnnouncement, reference: string): Promise<string>;
 }
 
 type ExecuteLeagueTransactionInput = {
@@ -240,7 +240,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     let announcementId: string | undefined;
     if (announcement) {
       try {
-        announcementId = await input.discord.announce(announcement);
+        announcementId = await input.discord.announce(announcement, reference);
         record.announcementId = announcementId;
         transitionLeagueTransaction(input.db, reference, 'announcement_pending', 'announcement_pending', { announcementId });
       } catch (error) {
@@ -289,7 +289,7 @@ export async function reconcilePendingLeagueTransactions(input: {
       let announcementId = transaction.announcementId ?? undefined;
       const announcement = buildLeagueAnnouncement(plan, record.processedBy);
       if (announcement && !announcementId) {
-        announcementId = await input.discord.announce(announcement);
+        announcementId = await input.discord.announce(announcement, transaction.reference);
         record.announcementId = announcementId;
         transitionLeagueTransaction(input.db, transaction.reference, 'announcement_pending', 'announcement_pending', { announcementId });
       } else if (announcementId) record.announcementId = announcementId;

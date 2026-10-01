@@ -118,10 +118,6 @@ function value(rows: CellRows, row: number, column: number): string {
   return cell === null || cell === undefined ? '' : String(cell).trim();
 }
 
-function safeUserEnteredText(input: string): string {
-  return /^[=+\-@]/.test(input) ? `'${input}` : input;
-}
-
 function parseDivision(input: string): LeagueDivision {
   if (input === 'Vanaheim' || input === 'Alfheim' || input === 'Svartalfheim') return input;
   throw new Error(`Unsupported league division: ${input || '(blank)'}.`);
@@ -211,6 +207,26 @@ function parsePublic(rows: CellRows) {
   };
 }
 
+function samePublicRosters(
+  left: LeagueSnapshot['publicRosters'],
+  right: LeagueSnapshot['publicRosters'],
+): boolean {
+  const normalized = (values: string[]) => [...values].sort((a, b) => a.localeCompare(b));
+  for (const division of divisions) {
+    const leftDivision = left[division];
+    const rightDivision = right[division];
+    if (!leftDivision || !rightDivision) return false;
+    const franchises = new Set([...Object.keys(leftDivision.teams), ...Object.keys(rightDivision.teams)]);
+    for (const franchise of franchises) {
+      if (JSON.stringify(normalized(leftDivision.teams[franchise] ?? []))
+        !== JSON.stringify(normalized(rightDivision.teams[franchise] ?? []))) return false;
+    }
+    if (JSON.stringify(normalized(leftDivision.freeAgents))
+      !== JSON.stringify(normalized(rightDivision.freeAgents))) return false;
+  }
+  return true;
+}
+
 export class LeagueSheetsService {
   constructor(private readonly gateway: LeagueSheetsGateway, private readonly config: LeagueSheetsConfig) {}
 
@@ -285,7 +301,7 @@ export class LeagueSheetsService {
       || (left.rosterStatus === right.rosterStatus ? left.player.localeCompare(right.player) : left.rosterStatus === 'Captain' ? -1 : 1));
     const now = `${record.effectiveDate}T00:00:00.000Z`;
     const rosterValues = sortedRosters.map((row) => [
-      row.division, row.franchise, `="${row.teamRoleId}"`, row.team, `="${row.discordId}"`, safeUserEnteredText(row.player),
+      row.division, row.franchise, row.teamRoleId, row.team, row.discordId, row.player,
       row.rosterStatus, 'OK', 'Ratatoskr approved transaction', now,
     ]);
     while (rosterValues.length < originalRosters.length) rosterValues.push(['', '', '', '', '', '', '', '', '', '']);
@@ -297,7 +313,7 @@ export class LeagueSheetsService {
       const previous = loaded.snapshot.names.find((row) => row.sheetRow === next.sheetRow);
       if (!previous) throw new Error(`Player Name History row ${next.sheetRow} disappeared.`);
       if (previous.currentLeagueName !== next.currentLeagueName) {
-        adminUpdates.push({ range: `'Player Name History'!B${next.sheetRow}`, values: [[safeUserEnteredText(next.currentLeagueName)]] });
+        adminUpdates.push({ range: `'Player Name History'!B${next.sheetRow}`, values: [[next.currentLeagueName]] });
       }
       if (previous.division !== next.division || previous.franchise !== next.franchise || previous.leagueStatus !== next.leagueStatus) {
         adminUpdates.push({ range: `'Player Name History'!E${next.sheetRow}:G${next.sheetRow}`, values: [[next.division, next.franchise, next.leagueStatus]] });
@@ -305,7 +321,7 @@ export class LeagueSheetsService {
     }
 
     try {
-      await this.gateway.batchUpdate(this.config.adminSpreadsheetId, adminUpdates, 'USER_ENTERED');
+      await this.gateway.batchUpdate(this.config.adminSpreadsheetId, adminUpdates, 'RAW');
       await this.gateway.batchUpdate(this.config.publicSpreadsheetId, prepared.publicUpdates, 'RAW');
 
       if (plan.nameHistoryAppend) {
@@ -314,7 +330,7 @@ export class LeagueSheetsService {
           row.discordId, row.currentLeagueName, row.knownName, row.nameStatus, row.division, row.franchise,
           row.leagueStatus, record.effectiveDate, record.effectiveDate, 'Ratatoskr approved rename',
           'Preserved so historical stats continue matching this player.',
-        ]]);
+        ]], 'RAW');
       }
 
       const verification = await this.load(loaded.snapshot.discordMembers, loaded.snapshot.freeAgentRoleId);
@@ -328,10 +344,26 @@ export class LeagueSheetsService {
         else if (change.to === '') target.splice(index, 1);
         else target[index] = change.to;
       }
-      const expectedRosterAssignments = sortedRosters.map((row) => `${row.discordId}:${row.teamRoleId}`).sort();
-      const actualRosterAssignments = verification.snapshot.rosters.map((row) => `${row.discordId}:${row.teamRoleId}`).sort();
-      if (JSON.stringify(expectedRosterAssignments) !== JSON.stringify(actualRosterAssignments)
-        || JSON.stringify(expectedPublic) !== JSON.stringify(verification.snapshot.publicRosters)) {
+      const rosterProjection = (rows: LeagueRosterRow[]) => rows.map((row) => ({
+        division: row.division,
+        franchise: row.franchise,
+        teamRoleId: row.teamRoleId,
+        team: row.team,
+        discordId: row.discordId,
+        player: row.player,
+        rosterStatus: row.rosterStatus,
+      }));
+      const namesMatch = plan.nameUpdates.every((expected) => {
+        const actual = verification.snapshot.names.find((row) => row.sheetRow === expected.sheetRow);
+        return actual?.discordId === expected.discordId
+          && actual.currentLeagueName === expected.currentLeagueName
+          && actual.division === expected.division
+          && actual.franchise === expected.franchise
+          && actual.leagueStatus === expected.leagueStatus;
+      });
+      if (JSON.stringify(rosterProjection(sortedRosters)) !== JSON.stringify(rosterProjection(verification.snapshot.rosters))
+        || !namesMatch
+        || !samePublicRosters(expectedPublic, verification.snapshot.publicRosters)) {
         throw new Error('Post-write values do not match the approved transaction.');
       }
     } catch (error) {
@@ -362,6 +394,6 @@ export class LeagueSheetsService {
       plan.playerIds[0] ?? '',
       plan.players[0] ?? '', record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
     ]];
-    await this.gateway.append(this.config.adminSpreadsheetId, "'Transaction History'!A:L", transactionRows);
+    await this.gateway.append(this.config.adminSpreadsheetId, "'Transaction History'!A:L", transactionRows, 'RAW');
   }
 }

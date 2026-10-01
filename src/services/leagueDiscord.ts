@@ -71,7 +71,7 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     }
   }
 
-  async announce(announcement: LeagueAnnouncement): Promise<string> {
+  async announce(announcement: LeagueAnnouncement, reference: string): Promise<string> {
     const channel = await this.guild.channels.fetch(this.transactionsChannelId);
     if (!channel || channel.type !== ChannelType.GuildText || channel.guild.id !== this.guild.id) {
       throw new Error('The configured transactions channel is unavailable.');
@@ -80,6 +80,8 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
       content: announcement.content,
       embeds: [new EmbedBuilder().setTitle(announcement.title).setDescription(announcement.description).setFooter({ text: announcement.footer })],
       allowedMentions: { parse: [], roles: announcement.allowedRoleIds },
+      nonce: reference,
+      enforceNonce: true,
     });
     return message.id;
   }

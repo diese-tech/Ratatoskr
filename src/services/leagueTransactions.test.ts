@@ -38,6 +38,7 @@ function snapshot(): LeagueSnapshot {
 function fixture(sheetFailure?: Error, prepareFailure?: Error) {
   const db = openDatabase(':memory:');
   const events: string[] = [];
+  const announcementReferences: string[] = [];
   const current = snapshot();
   const sheets = {
     load: async () => ({ snapshot: current, sources: {} as never }),
@@ -53,9 +54,13 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
   const discord = {
     applyRoleChange: async (change: { discordId: string }) => { events.push(`discord:${change.discordId}`); },
     rollbackRoleChange: async (change: { discordId: string }) => { events.push(`rollback:${change.discordId}`); },
-    announce: async () => { events.push('announce'); return 'message'; },
+    announce: async (_announcement: unknown, reference: string) => {
+      announcementReferences.push(reference);
+      events.push('announce');
+      return 'message';
+    },
   };
-  return { db, events, current, sheets, discord };
+  return { db, events, announcementReferences, current, sheets, discord };
 }
 
 test('first mutation of the league day audits before Discord and completes the durable sequence', async () => {
@@ -153,18 +158,27 @@ test('an ambiguous sheet write never rolls Discord back and requires reconciliat
 
 test('startup recovery reuses a confirmed announcement and appends history idempotently', async () => {
   const f = fixture();
-  f.discord.announce = async () => { f.events.push('announce'); throw new Error('temporary'); };
+  f.discord.announce = async (_announcement, reference) => {
+    f.announcementReferences.push(reference);
+    f.events.push('announce');
+    throw new Error('temporary');
+  };
   const reference = await executeLeagueTransaction({
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
   }).then(() => '', (error: Error & { reference?: string }) => error.reference!);
   assert.equal(getLeagueTransaction(f.db, reference)?.status, 'announcement_pending');
-  f.discord.announce = async () => { f.events.push('recovered-announce'); return 'recovered-message'; };
+  f.discord.announce = async (_announcement, recoveryReference) => {
+    f.announcementReferences.push(recoveryReference);
+    f.events.push('recovered-announce');
+    return 'recovered-message';
+  };
   await reconcilePendingLeagueTransactions({ db: f.db, sheets: f.sheets, discord: f.discord });
   assert.equal(getLeagueTransaction(f.db, reference)?.status, 'completed');
   assert.equal(getLeagueTransaction(f.db, reference)?.announcementId, 'recovered-message');
   assert.deepEqual(f.events.slice(-2), ['recovered-announce', 'history']);
+  assert.deepEqual(f.announcementReferences, [reference, reference]);
   await reconcilePendingLeagueTransactions({ db: f.db, sheets: f.sheets, discord: f.discord });
   assert.equal(f.events.filter((event) => event === 'recovered-announce').length, 1);
   f.db.close();

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildTradePlan } from '../domain/leagueOperations.js';
+import { buildRenamePlan, buildTradePlan } from '../domain/leagueOperations.js';
 import { LeagueSheetsService, type LeagueSheetsGateway, type SheetValueUpdate } from './leagueSheets.js';
 
 type Rows = (string | number | boolean | null)[][];
@@ -9,7 +9,7 @@ function emptyPublic(): Rows { return Array.from({ length: 99 }, () => Array(15)
 
 class FakeGateway implements LeagueSheetsGateway {
   readonly data = new Map<string, Rows>();
-  readonly writes: { spreadsheetId: string; updates: SheetValueUpdate[] }[] = [];
+  readonly writes: { spreadsheetId: string; updates: SheetValueUpdate[]; option: 'RAW' | 'USER_ENTERED' }[] = [];
   changed = false;
 
   key(spreadsheetId: string, range: string) { return `${spreadsheetId}:${range}`; }
@@ -19,13 +19,17 @@ class FakeGateway implements LeagueSheetsGateway {
     return rows;
   }
   async batchUpdate(spreadsheetId: string, updates: SheetValueUpdate[], option: 'RAW' | 'USER_ENTERED' = 'RAW') {
-    this.writes.push({ spreadsheetId, updates });
+    this.writes.push({ spreadsheetId, updates, option });
     for (const update of updates) {
+      const evaluate = (cell: string | number | boolean | null) => {
+        if (option !== 'USER_ENTERED' || typeof cell !== 'string') return cell;
+        if (/^=\".*\"$/.test(cell)) return cell.slice(2, -1);
+        if (/^\d+$/.test(cell)) return Number(cell);
+        return cell;
+      };
       if (update.range.startsWith("'Current Rosters'!A6:")) {
         const key = this.key(spreadsheetId, "'Current Rosters'!A5:J1000");
         const header = this.data.get(key)![0]!;
-        const evaluate = (cell: string | number | boolean | null) => option === 'USER_ENTERED' && typeof cell === 'string' && /^=\".*\"$/.test(cell)
-          ? cell.slice(2, -1) : cell;
         this.data.set(key, [header, ...update.values.map((row) => row.map(evaluate))]);
       } else {
         const publicMatch = /^'([^']+) Roster'!([A-O])(\d+)$/.exec(update.range);
@@ -40,7 +44,7 @@ class FakeGateway implements LeagueSheetsGateway {
           const rows = this.data.get(key)!;
           const row = rows[Number(nameMatch[2]) - 5]!;
           const start = nameMatch[1]!.charCodeAt(0) - 65;
-          update.values[0]!.forEach((cell, index) => { row[start + index] = cell; });
+          update.values[0]!.forEach((cell, index) => { row[start + index] = evaluate(cell); });
         }
       }
     }
@@ -131,4 +135,38 @@ test('trade writes the sorted admin roster and only the two exact public player 
     { discordId: 'two', displayName: 'TwoLive', roleIds: ['team-a', 'division-v'] },
   ], 'free-agent');
   assert.equal(reloaded.snapshot.rosters.find((row) => row.discordId === 'one')?.teamRoleId, 'team-b');
+});
+
+test('public verification accepts a pickup written into an internal managed-block gap', async () => {
+  const { gateway, service } = serviceFixture();
+  const publicRows = gateway.data.get(gateway.key('public', "'Vanaheim Roster'!A1:O99"))!;
+  publicRows[6]![2] = 'Third';
+  const loaded = await service.load(members, 'free-agent');
+  const plan = {
+    kind: 'rename' as const,
+    rosters: loaded.snapshot.rosters,
+    nameUpdates: loaded.snapshot.names,
+    publicChanges: [{ division: 'Vanaheim' as const, area: 'team' as const, group: 'Dream Walkers', from: '', to: 'Inserted' }],
+    discordRoleChanges: [],
+    teams: [],
+    players: ['Inserted'],
+    playerIds: ['inserted'],
+  };
+  await service.apply(loaded, plan, {
+    reference: 'YSL-TRX-GAP', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
+  }, service.prepare(loaded, plan));
+  assert.equal(publicRows[5]![2], 'Inserted');
+});
+
+test('numeric-looking league names remain exact text in every managed admin update', async () => {
+  const { gateway, service } = serviceFixture();
+  const loaded = await service.load(members, 'free-agent');
+  const plan = buildRenamePlan(loaded.snapshot, 'one', '007');
+  await service.apply(loaded, plan, {
+    reference: 'YSL-TRX-TEXT', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
+  }, service.prepare(loaded, plan));
+  assert.equal(gateway.writes.filter((write) => write.spreadsheetId === 'admin').every((write) => write.option === 'RAW'), true);
+  const reloaded = await service.load(members, 'free-agent');
+  assert.equal(reloaded.snapshot.rosters.find((row) => row.discordId === 'one')?.player, '007');
+  assert.equal(reloaded.snapshot.names.find((row) => row.discordId === 'one')?.currentLeagueName, '007');
 });
