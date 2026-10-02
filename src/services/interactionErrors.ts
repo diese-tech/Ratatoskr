@@ -54,7 +54,15 @@ export async function handleInteractionError(interaction: Interaction, db: Datab
   const transaction = transactionReference ? getLeagueTransaction(db, transactionReference) : undefined;
   const durableTransactionAlert = transaction
     && ['applying_discord', 'applying_sheets', 'reconciliation_required'].includes(transaction.status);
-  const context = reconciliationTicket
+  const partialTransaction = transaction?.status === 'reconciliation_required';
+  const context = partialTransaction
+    ? {
+      guildId: interaction.guildId ?? fallbackGuildId,
+      action: 'League transaction reconciliation',
+      next: `${transaction.errorMessage ?? 'Discord roles or Google Sheets may be partially updated.'} `
+        + 'Inspect Discord roles and both managed sheets, reconcile them manually, and do not retry the command until they agree.',
+    }
+    : reconciliationTicket
     ? {
       guildId: interaction.guildId ?? fallbackGuildId,
       action: 'League sheet reconciliation',

@@ -97,6 +97,10 @@ test('a delivered immediate transaction reconciliation alert is not retried on r
   const error = Object.assign(new Error('Discord rollback failed.'), { reference: 'YSL-TRX-TEST' });
   await handleInteractionError(interaction, f.db, error, 'guild');
   assert.ok(getLeagueTransaction(f.db, 'YSL-TRX-TEST')?.reconciliationAlertedAt);
+  assert.match(f.sent[0].content, /League transaction reconciliation/);
+  assert.match(f.sent[0].content, /Discord rollback failed/);
+  assert.match(f.sent[0].content, /reconcile them manually/);
+  assert.match(f.sent[0].content, /do not retry/i);
   f.db.close();
 });
 
