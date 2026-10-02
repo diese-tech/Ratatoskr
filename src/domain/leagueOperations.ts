@@ -108,7 +108,19 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
   const teamsByPublicBlock = new Map<string, LeagueTeam>();
   const roleByDivision = new Map<LeagueDivision, string>();
   const divisionByRole = new Map<string, LeagueDivision>();
+  const configuredTeamRoleIds = new Set(activeTeams.map((team) => team.teamRoleId));
   const configuredDivisionRoleIds = new Set(activeTeams.map((team) => team.divisionRoleId));
+  for (const roleId of configuredTeamRoleIds) {
+    if (configuredDivisionRoleIds.has(roleId)) {
+      issues.push(`Role ${roleId} is configured as both a team role and a division role.`);
+    }
+  }
+  if (configuredTeamRoleIds.has(snapshot.freeAgentRoleId)) {
+    issues.push(`Free Agent role ${snapshot.freeAgentRoleId} is also configured as a team role.`);
+  }
+  if (configuredDivisionRoleIds.has(snapshot.freeAgentRoleId)) {
+    issues.push(`Free Agent role ${snapshot.freeAgentRoleId} is also configured as a division role.`);
+  }
   for (const team of activeTeams) {
     if (teamsByRole.has(team.teamRoleId)) issues.push(`Team role ${team.teamRoleId} is configured more than once.`);
     teamsByRole.set(team.teamRoleId, team);

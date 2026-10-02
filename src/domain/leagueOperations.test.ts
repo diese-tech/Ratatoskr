@@ -110,6 +110,23 @@ test('daily audit rejects ambiguous division-role mappings', () => {
     .some((issue) => issue.includes('Vanaheim') && issue.includes('more than one division role')));
 });
 
+test('daily audit rejects role IDs reused across team, division, and free-agent categories', () => {
+  const teamAndDivision = snapshot();
+  teamAndDivision.teams[0]!.teamRoleId = 'division-v';
+  assert.ok(auditLeagueRoster(teamAndDivision)
+    .some((issue) => issue.includes('division-v') && issue.includes('both a team role and a division role')));
+
+  const freeAgentAndTeam = snapshot();
+  freeAgentAndTeam.freeAgentRoleId = 'team-a';
+  assert.ok(auditLeagueRoster(freeAgentAndTeam)
+    .some((issue) => issue.includes('team-a') && issue.includes('also configured as a team role')));
+
+  const freeAgentAndDivision = snapshot();
+  freeAgentAndDivision.freeAgentRoleId = 'division-v';
+  assert.ok(auditLeagueRoster(freeAgentAndDivision)
+    .some((issue) => issue.includes('division-v') && issue.includes('also configured as a division role')));
+});
+
 test('daily audit rejects stale current-name assignment metadata for a rostered player', () => {
   const current = snapshot();
   const name = current.names.find((row) => row.discordId === 'one')!;
