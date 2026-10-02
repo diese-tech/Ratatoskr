@@ -54,7 +54,13 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
 
   async applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void> {
     const member = await fetchFreshMember(this.guild, change.discordId);
-    assertMemberRoleState(member, before);
+    try {
+      assertMemberRoleState(member, before);
+    } catch (error) {
+      throw new DiscordRoleReconciliationRequiredError(
+        `Discord roles changed before Ratatoskr updated ${change.discordId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     try {
       if (change.remove.length) await member.roles.remove(change.remove, 'Ratatoskr approved league transaction');
       if (change.add.length) await member.roles.add(change.add, 'Ratatoskr approved league transaction');
@@ -78,8 +84,15 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     }
   }
 
-  async rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState): Promise<void> {
+  async rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState, applied: LeagueRoleState): Promise<void> {
     const member = await fetchFreshMember(this.guild, change.discordId);
+    try {
+      assertMemberRoleState(member, applied);
+    } catch (error) {
+      throw new DiscordRoleReconciliationRequiredError(
+        `Discord roles changed before Ratatoskr could roll back ${change.discordId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     if (change.add.length) await member.roles.remove(change.add, 'Ratatoskr transaction rollback');
     if (change.remove.length) await member.roles.add(change.remove, 'Ratatoskr transaction rollback');
     const verified = await fetchFreshMember(this.guild, change.discordId);

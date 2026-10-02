@@ -56,7 +56,7 @@ export interface LeagueDiscordPort {
   getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
   applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
-  rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState): Promise<void>;
+  rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState, applied: LeagueRoleState): Promise<void>;
   findAnnouncement(reference: string): Promise<string | undefined>;
   announce(announcement: LeagueAnnouncement, reference: string): Promise<string>;
 }
@@ -260,8 +260,15 @@ async function rollbackDiscord(
   discord: LeagueDiscordPort,
   applied: DiscordRoleChange[],
   beforeByPlayer: Map<string, LeagueRoleState>,
+  afterByPlayer: Map<string, LeagueRoleState>,
 ): Promise<void> {
-  for (const change of [...applied].reverse()) await discord.rollbackRoleChange(change, beforeByPlayer.get(change.discordId)!);
+  for (const change of [...applied].reverse()) {
+    await discord.rollbackRoleChange(
+      change,
+      beforeByPlayer.get(change.discordId)!,
+      afterByPlayer.get(change.discordId)!,
+    );
+  }
 }
 
 export async function executeLeagueTransaction(input: ExecuteLeagueTransactionInput): Promise<{ reference: string; announcementId?: string }> {
@@ -334,7 +341,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         throw errorWithReference(error, reference);
       }
       try {
-        await rollbackDiscord(input.discord, applied, beforeByPlayer);
+        await rollbackDiscord(input.discord, applied, beforeByPlayer, afterByPlayer);
         transitionLeagueTransaction(input.db, reference, 'applying_discord', 'failed', { errorMessage: String(error) });
       } catch (rollbackError) {
         markLeagueTransactionReconciliationRequired(input.db, reference, `Discord rollback failed: ${String(rollbackError)}`);
@@ -348,7 +355,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     } catch (error) {
       if (error instanceof LeagueSheetDriftError) {
         try {
-          await rollbackDiscord(input.discord, applied, beforeByPlayer);
+          await rollbackDiscord(input.discord, applied, beforeByPlayer, afterByPlayer);
           transitionLeagueTransaction(input.db, reference, 'applying_sheets', 'failed', { errorMessage: error.message });
         } catch (rollbackError) {
           markLeagueTransactionReconciliationRequired(input.db, reference, `Discord rollback failed after sheet drift: ${String(rollbackError)}`);

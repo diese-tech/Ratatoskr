@@ -206,6 +206,25 @@ test('fresh role drift opens a durable no-write reconciliation ticket', async ()
   f.db.close();
 });
 
+test('role drift detected between participant mutations leaves a durable reconciliation transaction', async () => {
+  const f = fixture();
+  f.discord.applyRoleChange = async (change: { discordId: string }) => {
+    f.events.push(`discord:${change.discordId}`);
+    if (change.discordId === 'two') {
+      throw Object.assign(new Error('Discord roles changed before Ratatoskr updated two.'), { reconciliationRequired: true });
+    }
+  };
+  const reference = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
+  }).then(() => '', (error: Error & { reference?: string }) => error.reference!);
+  assert.equal(getLeagueTransaction(f.db, reference)?.status, 'reconciliation_required');
+  assert.equal(f.events.some((event) => event.startsWith('rollback:')), false);
+  assert.equal(f.events.includes('sheet-apply'), false);
+  f.db.close();
+});
+
 test('targeted preflight rejects stale current-name assignment metadata after the daily audit', async () => {
   const f = fixture();
   recordLeagueAudit(f.db, { guildId: 'guild', auditDate: '2026-09-30', status: 'passed', issues: [] });
