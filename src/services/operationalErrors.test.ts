@@ -11,7 +11,11 @@ import {
   transitionLeagueTransaction,
 } from '../db/repositories/leagueOperations.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
-import { handleInteractionError, interactionOperationContext } from './interactionErrors.js';
+import {
+  handleInteractionError,
+  interactionOperationContext,
+  leagueTransactionReconciliationContext,
+} from './interactionErrors.js';
 import { LeagueReconciliationTicketError } from './leagueTransactions.js';
 
 test('nested Scout failures identify their setup and operation without confusing division or page IDs', () => {
@@ -27,6 +31,14 @@ test('nested Scout failures identify their setup and operation without confusing
   assert.equal(context('scout:create:post:draft-id').setupId, undefined);
   assert.equal(context('scout:edituser:explicit:12:3:45').setupId, 12);
   assert.equal(context('scout:publishedswap:invalid:3').setupId, undefined);
+});
+
+test('startup transaction recovery includes partial-state manual-repair guidance', () => {
+  const context = leagueTransactionReconciliationContext('guild', 'Sheet verification failed.');
+  assert.equal(context.action, 'League transaction reconciliation');
+  assert.match(context.next ?? '', /Sheet verification failed/);
+  assert.match(context.next ?? '', /reconcile them manually/);
+  assert.match(context.next ?? '', /do not retry/i);
 });
 
 test('unexpected failure acknowledges privately before staff lookup and reports even if the token expires', async (t) => {

@@ -38,6 +38,15 @@ export function interactionOperationContext(interaction: Interaction, fallbackGu
   return context;
 }
 
+export function leagueTransactionReconciliationContext(guildId: string, detail?: string): OperationContext {
+  return {
+    guildId,
+    action: 'League transaction reconciliation',
+    next: `${detail || 'Discord roles or Google Sheets may be partially updated.'} `
+      + 'Inspect Discord roles and both managed sheets, reconcile them manually, and do not retry the command until they agree.',
+  };
+}
+
 export async function handleInteractionError(interaction: Interaction, db: Database.Database, error: unknown, fallbackGuildId: string): Promise<void> {
   const repliable = interaction.isRepliable() ? interaction : undefined;
   let deferredHere = false;
@@ -56,12 +65,7 @@ export async function handleInteractionError(interaction: Interaction, db: Datab
     && ['applying_discord', 'applying_sheets', 'reconciliation_required'].includes(transaction.status);
   const partialTransaction = transaction?.status === 'reconciliation_required';
   const context = partialTransaction
-    ? {
-      guildId: interaction.guildId ?? fallbackGuildId,
-      action: 'League transaction reconciliation',
-      next: `${transaction.errorMessage ?? 'Discord roles or Google Sheets may be partially updated.'} `
-        + 'Inspect Discord roles and both managed sheets, reconcile them manually, and do not retry the command until they agree.',
-    }
+    ? leagueTransactionReconciliationContext(interaction.guildId ?? fallbackGuildId, transaction.errorMessage ?? undefined)
     : reconciliationTicket
     ? {
       guildId: interaction.guildId ?? fallbackGuildId,

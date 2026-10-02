@@ -13,7 +13,7 @@ import { reconcileFinishedScoutPosts } from './services/scoutFinish.js';
 import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
 import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } from './services/scoutPublish.js';
 import { reportOperationalError } from './services/operationalErrors.js';
-import { handleInteractionError } from './services/interactionErrors.js';
+import { handleInteractionError, leagueTransactionReconciliationContext } from './services/interactionErrors.js';
 import { startScoutNotificationWorker } from './services/scoutNotifications.js';
 import { processDueScoutLifecycleCleanups } from './services/scoutLifecycleCleanup.js';
 import { sqliteScoutLifecycleCleanupDependencies } from './services/scoutLifecycleCleanupCompatibility.js';
@@ -114,7 +114,10 @@ client.once('clientReady', async () => {
         reportError: async (reference, error) => reportOperationalError(
           client,
           db,
-          { guildId: env.DISCORD_GUILD_ID, action: 'League transaction recovery' },
+          leagueTransactionReconciliationContext(
+            env.DISCORD_GUILD_ID,
+            error instanceof Error ? error.message : String(error),
+          ),
           error,
           { reference, retryUndelivered: true },
         ),

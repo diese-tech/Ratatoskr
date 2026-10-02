@@ -27,6 +27,7 @@ import {
   LeagueTransactionPreviewChangedError,
   leagueTransactionPlanFingerprint,
 } from '../services/leagueTransactions.js';
+import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
 
 export const transactionCommand = new SlashCommandBuilder()
   .setName('transaction')
@@ -111,6 +112,7 @@ export async function handleTransactionCommand(
     await interaction.reply({ content: 'This command can only be used in the YSL server.', flags: MessageFlags.Ephemeral });
     return;
   }
+  const guildId = interaction.guild.id;
   const member = await interaction.guild.members.fetch(interaction.user.id);
   if (!(await requireAccess(interaction, member, 'ADMIN'))) return;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -125,13 +127,15 @@ export async function handleTransactionCommand(
   const showPreview = async (message = '') => {
     const loaded = await sheets.load(await discord.getMembers(), transactionEnvironment.freeAgentRoleId);
     const plan = buildPlan(loaded.snapshot);
-    saveLeagueTransactionPreview(db, {
-      guildId: interaction.guild!.id,
-      actorUserId: interaction.user.id,
-      intentKey: previewIntent,
-      planFingerprint: leagueTransactionPlanFingerprint(plan),
-    });
-    await interaction.editReply(`${message}${preview(plan)}`);
+    await persistPreviewAfterDelivery(
+      () => interaction.editReply(`${message}${preview(plan)}`),
+      () => saveLeagueTransactionPreview(db, {
+        guildId,
+        actorUserId: interaction.user.id,
+        intentKey: previewIntent,
+        planFingerprint: leagueTransactionPlanFingerprint(plan),
+      }),
+    );
   };
 
   if (interaction.options.getBoolean('confirm') !== true) {
@@ -140,7 +144,7 @@ export async function handleTransactionCommand(
   }
 
   const expectedPlanFingerprint = getLeagueTransactionPreviewFingerprint(
-    db, interaction.guild.id, interaction.user.id, previewIntent,
+    db, guildId, interaction.user.id, previewIntent,
   );
   if (!expectedPlanFingerprint) {
     await showPreview('A matching preview is required before confirmation.\n\n');
@@ -153,7 +157,7 @@ export async function handleTransactionCommand(
     result = await executeLeagueTransaction({
       db,
       operationScope,
-      guildId: interaction.guild.id,
+      guildId,
       actorUserId: interaction.user.id,
       actorName,
       freeAgentRoleId: transactionEnvironment.freeAgentRoleId,
@@ -165,15 +169,17 @@ export async function handleTransactionCommand(
     });
   } catch (error) {
     if (!(error instanceof LeagueTransactionPreviewChangedError)) throw error;
-    saveLeagueTransactionPreview(db, {
-      guildId: interaction.guild.id,
-      actorUserId: interaction.user.id,
-      intentKey: previewIntent,
-      planFingerprint: leagueTransactionPlanFingerprint(error.plan),
-    });
-    await interaction.editReply(`League state changed after your preview. Review this updated transaction before confirming again.\n\n${preview(error.plan)}`);
+    await persistPreviewAfterDelivery(
+      () => interaction.editReply(`League state changed after your preview. Review this updated transaction before confirming again.\n\n${preview(error.plan)}`),
+      () => saveLeagueTransactionPreview(db, {
+        guildId,
+        actorUserId: interaction.user.id,
+        intentKey: previewIntent,
+        planFingerprint: leagueTransactionPlanFingerprint(error.plan),
+      }),
+    );
     return;
   }
-  deleteLeagueTransactionPreview(db, interaction.guild.id, interaction.user.id, previewIntent);
+  deleteLeagueTransactionPreview(db, guildId, interaction.user.id, previewIntent);
   await interaction.editReply(`Transaction completed. Reference: ${result.reference}`);
 }
