@@ -122,6 +122,7 @@ test('a forced member fetch rejects an additional configured division role', asy
 });
 
 test('post-change verification requires the complete destination role state', async () => {
+  let mutations = 0;
   const cache = new Collection<string, unknown>([
     ['team-a', {}],
     ['division-v', {}],
@@ -130,8 +131,9 @@ test('post-change verification requires the complete destination role state', as
     id: 'one',
     roles: {
       cache,
-      remove: async (roleIds: string[]) => { for (const roleId of roleIds) cache.delete(roleId); },
+      remove: async (roleIds: string[]) => { mutations += 1; for (const roleId of roleIds) cache.delete(roleId); },
       add: async (roleIds: string[]) => {
+        mutations += 1;
         for (const roleId of roleIds) cache.set(roleId, {});
         if (roleIds.includes('team-c')) cache.set('team-b', {});
       },
@@ -155,6 +157,10 @@ test('post-change verification requires the complete destination role state', as
     before,
     { ...before, expectedTeamRoleId: 'team-c' },
   ), (error: Error & { reconciliationRequired?: boolean }) => error.reconciliationRequired === true);
+  assert.equal(mutations, 2);
+  assert.equal(cache.has('team-a'), false);
+  assert.equal(cache.has('team-b'), true);
+  assert.equal(cache.has('team-c'), true);
 });
 
 test('rollback preserves a newer manual role change and requires reconciliation', async () => {

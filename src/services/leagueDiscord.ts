@@ -67,20 +67,9 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
       const verified = await fetchFreshMember(this.guild, change.discordId);
       assertMemberRoleState(verified, after);
     } catch (error) {
-      try {
-        const current = await fetchFreshMember(this.guild, change.discordId);
-        const missingOriginal = change.remove.filter((roleId) => !current.roles.cache.has(roleId));
-        const unexpectedDestination = change.add.filter((roleId) => current.roles.cache.has(roleId));
-        if (unexpectedDestination.length) await current.roles.remove(unexpectedDestination, 'Ratatoskr failed transaction repair');
-        if (missingOriginal.length) await current.roles.add(missingOriginal, 'Ratatoskr failed transaction repair');
-        const repaired = await fetchFreshMember(this.guild, change.discordId);
-        assertMemberRoleState(repaired, before);
-      } catch (repairError) {
-        throw new DiscordRoleReconciliationRequiredError(
-          `Discord role mutation may be partial for ${change.discordId}: ${repairError instanceof Error ? repairError.message : String(repairError)}`,
-        );
-      }
-      throw error;
+      throw new DiscordRoleReconciliationRequiredError(
+        `Discord role mutation may be partial for ${change.discordId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
