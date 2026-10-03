@@ -1,0 +1,94 @@
+name: Feature or workflow request
+description: Propose a concrete YSL job or workflow improvement for Ratatoskr
+title: "[Workflow]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ratatoskr is driven by real league jobs, not command-count growth.
+
+        Describe the problem and desired outcome first. Do not assume a new slash command is the correct interface.
+
+        For broad product-surface ideas, review [issue #24](https://github.com/diese-tech/Ratatoskr/issues/24). For command-domain and Fluxcord interaction boundaries, review [issue #124](https://github.com/diese-tech/Ratatoskr/issues/124).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: YSL job or problem
+      description: What real league job, pain point, risk, or repeated manual task should Ratatoskr address?
+      placeholder: Describe the problem without prescribing implementation first.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: actor
+    attributes:
+      label: Who performs or owns this job?
+      multiple: true
+      options:
+        - League admin
+        - Staff / moderator / production
+        - Captain / manager
+        - Player
+        - Automatic system behavior
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current workaround
+      description: How is this handled today, if at all?
+      placeholder: Describe the current manual process, external tool, Discord workflow, or gap.
+    validations:
+      required: false
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should be easier, safer, faster, or more reliable when this is solved?
+      placeholder: Describe the result a user/operator should get.
+    validations:
+      required: true
+
+  - type: textarea
+    id: state
+    attributes:
+      label: State, authorization, or history requirements
+      description: Note any durable state, permissions, approvals, audit/history, restart, concurrency, or recovery needs you already know about.
+      placeholder: Leave blank if not yet known.
+    validations:
+      required: false
+
+  - type: textarea
+    id: overlap
+    attributes:
+      label: Existing workflow or issue overlap
+      description: Link related Ratatoskr issues, commands, components, docs, or workflows if known.
+      placeholder: "Example: related to #24 and /scout"
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope or non-goals
+      description: What should explicitly not be included, if already known?
+      placeholder: Keep this narrow when possible.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing Ratatoskr issues and pull requests for overlapping work.
+          required: true
+        - label: I described the league job/problem before assuming a command or implementation shape.
+          required: true
+        - label: This request does not contain security vulnerability details or secrets.
+          required: true
