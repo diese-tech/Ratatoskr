@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildRenamePlan, buildTradePlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildRenamePlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
@@ -59,6 +59,7 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
     appendTransactionHistory: async () => { events.push('history'); },
   };
   const discord = {
+    validateMemberAbsent: async (discordId: string) => { events.push(`discord-absence:${discordId}`); },
     validateRoleState: async (discordId: string) => { events.push(`discord-preflight:${discordId}`); },
     applyRoleChange: async (change: { discordId: string }) => { events.push(`discord:${change.discordId}`); },
     rollbackRoleChange: async (change: { discordId: string }) => { events.push(`rollback:${change.discordId}`); },
@@ -124,6 +125,68 @@ test('trade announcement uses the locked Yggdrasil copy and pings only both team
     ].join('\n'),
     footer: 'Posted by Admin',
   });
+});
+
+test('departure announcement uses the locked copy, stored league name, and only the team ping', () => {
+  const current = snapshot();
+  current.discordMembers = current.discordMembers.filter((member) => member.discordId !== 'one');
+  const plan = buildDeparturePlan(current, 'one');
+  assert.deepEqual(buildLeagueAnnouncement(plan, 'Admin'), {
+    content: '<@&team-a>',
+    allowedRoleIds: ['team-a'],
+    title: 'Word Travels the Branches',
+    description: 'Ratatoskr carries word from <@&team-a>.\n\n**One** leaves <@&team-a> and the YSL server.',
+    footer: 'Posted by Admin',
+  });
+});
+
+test('departure resolves only its selected absent roster member and skips Discord role mutation', async () => {
+  const f = fixture();
+  f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
+  const result = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDeparturePlan(current, 'one'),
+    expectedPlanFingerprint: leagueTransactionPlanFingerprint(buildDeparturePlan(f.current, 'one')),
+  });
+  assert.deepEqual(f.events, [
+    'sheet-preflight', 'discord-absence:one', 'sheet-targets', 'sheet-apply', 'announce', 'history',
+  ]);
+  assert.equal(getLeagueTransaction(f.db, result.reference)?.kind, 'departure');
+  assert.equal(f.events.some((event) => event.startsWith('discord-preflight:')), false);
+  assert.equal(f.events.some((event) => event.startsWith('discord:one')), false);
+  f.db.close();
+});
+
+test('departure fails closed when fresh Discord absence cannot be confirmed', async () => {
+  const f = fixture();
+  f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
+  f.discord.validateMemberAbsent = async () => {
+    f.events.push('discord-absence:one');
+    throw new LeagueMutationValidationError('That player is back in the YSL server.');
+  };
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDeparturePlan(current, 'one'),
+  }), /back in the YSL server/i);
+  assert.deepEqual(f.events, ['sheet-preflight', 'discord-absence:one']);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
+  f.db.close();
+});
+
+test('departure still blocks unrelated absent roster members', async () => {
+  const f = fixture();
+  f.current.discordMembers = [];
+  const reference = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDeparturePlan(current, 'one'),
+  }).then(() => '', (error: Error & { reference?: string }) => error.reference!);
+  assert.ok(reference);
+  assert.equal(getLeagueReconciliationTicket(f.db, reference)?.status, 'open');
+  assert.deepEqual(f.events, []);
+  f.db.close();
 });
 
 test('failed daily audit blocks every mutation and records no transaction', async () => {

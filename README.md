@@ -14,7 +14,7 @@ Ratatoskr currently provides:
 - **Scout operations** — configure, create, monitor, review, publish, edit, cancel, finish, and recover division-scoped preseason Scout workflows.
 - **Readiness telemetry** — show current eligible-player and role coverage in Scout Ops using the same canonical eligibility and roster-matching rules used for roster formation.
 - **Persistent controls** — keep roster review, Swap, Replace player, cancellation, and completion actions attached to the relevant Scout workflow instead of expanding the slash-command surface unnecessarily.
-- **League transactions** — preview and execute approved trades, drops, pickups, and official name changes across Discord and the private/public roster sheets with drift protection.
+- **League transactions** — preview and execute approved trades, drops, pickups, departed-player deactivations, and official name changes across Discord and the private/public roster sheets with drift protection.
 - **Failure recovery** — persist authoritative workflow state in SQLite and reconcile Discord messages after transient failures, ambiguous delivery, or bot restarts.
 - **Operational reporting** — surface actionable reconciliation failures to staff instead of silently losing state.
 - **Private help** — `/help` provides a plain-language quickstart for the shipped command surface.

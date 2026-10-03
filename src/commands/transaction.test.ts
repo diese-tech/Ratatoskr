@@ -1,12 +1,44 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
-import { buildTradePlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildTradePlan, type LeagueRosterRow, type LeagueSnapshot } from '../domain/leagueOperations.js';
 
 process.env.ROLE_ALLFATHER_ID ??= 'allfather-test-role';
 process.env.ROLE_AESIR_ID ??= 'aesir-test-role';
 
-const { replyToTransactionValidation } = await import('./transaction.js');
+const { buildDepartureAutocompleteChoices, replyToTransactionValidation, transactionCommand } = await import('./transaction.js');
+
+test('departure uses roster-backed autocomplete instead of Discord user selection', () => {
+  const departure = transactionCommand.toJSON().options?.find((option) => option.name === 'departure');
+  const player = 'options' in departure! ? departure.options?.find((option) => option.name === 'player') : undefined;
+  assert.equal(player?.type, 3);
+  assert.equal('autocomplete' in player! ? player.autocomplete : false, true);
+});
+
+test('departure autocomplete is human-readable, division-ordered, and stores stable Discord IDs', () => {
+  const row = (overrides: Partial<LeagueRosterRow>): LeagueRosterRow => ({
+    sheetRow: 6,
+    division: 'Vanaheim',
+    franchise: 'Dream Walkers',
+    teamRoleId: 'team-a',
+    team: 'Dream Walkers VD',
+    discordId: 'one',
+    player: 'One',
+    rosterStatus: 'Player',
+    ...overrides,
+  });
+  const choices = buildDepartureAutocompleteChoices([
+    row({ division: 'Svartalfheim', franchise: 'The Sewer', discordId: 'three', player: 'Three' }),
+    row({ division: 'Alfheim', franchise: 'Wailing Banshees', discordId: 'two', player: 'Two' }),
+    row({}),
+  ], 'wailing');
+  assert.deepEqual(choices, [{ name: 'Two — Wailing Banshees (Alfheim)', value: 'two' }]);
+  assert.deepEqual(buildDepartureAutocompleteChoices([
+    row({ division: 'Svartalfheim', discordId: 'three', player: 'Three' }),
+    row({ division: 'Alfheim', discordId: 'two', player: 'Two' }),
+    row({}),
+  ], '').map((choice) => choice.value), ['one', 'two', 'three']);
+});
 
 test('a transaction preview becomes confirmable only after Discord confirms delivery', async () => {
   const events: string[] = [];

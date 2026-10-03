@@ -11,7 +11,7 @@ import {
 } from './scout.js';
 import { handleSeasonCommand, seasonCommand } from './season.js';
 import { handleServerCommand, serverCommand } from './server.js';
-import { handleTransactionCommand, transactionCommand } from './transaction.js';
+import { handleTransactionAutocomplete, handleTransactionCommand, transactionCommand } from './transaction.js';
 
 export const commandData = [
   divisionCommand.toJSON(),
@@ -35,6 +35,7 @@ export async function handleInteraction(
   const db = storage.legacyDatabase;
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === 'scout') await handleScoutAutocomplete(interaction);
+    else if (interaction.commandName === 'transaction') await handleTransactionAutocomplete(interaction);
     return;
   }
 
