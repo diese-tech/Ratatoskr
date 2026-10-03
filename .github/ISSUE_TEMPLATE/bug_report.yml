@@ -1,0 +1,105 @@
+name: Bug report
+description: Report a reproducible problem in Ratatoskr behavior
+title: "[Bug]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a Ratatoskr bug.
+
+        **Do not include security vulnerabilities, leaked credentials, exploit details, private Discord content, or other sensitive information here.** Follow [SECURITY.md](../../SECURITY.md) and use GitHub private vulnerability reporting instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is going wrong? Keep this focused on the observable failure.
+      placeholder: Describe the problem clearly and concisely.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+      placeholder: Describe the expected result.
+    validations:
+      required: true
+
+  - type: input
+    id: area
+    attributes:
+      label: Affected workflow or subsystem
+      description: Name the command, workflow, service, or area if known.
+      placeholder: "Example: /scout, division lifecycle, transaction publish, archive worker"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where did this happen?
+      description: Choose the environment where you observed the problem.
+      multiple: true
+      options:
+        - Local development
+        - Automated tests / CI
+        - Railway deployment
+        - Live Discord
+        - Migration / persistence operation
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reliable sequence that reproduces the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: What did Ratatoskr do, show, log, or persist?
+      placeholder: Include exact user-visible behavior where useful.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, errors, screenshots, or other evidence
+      description: Remove tokens, secrets, private data, and unrelated Discord content before posting.
+      placeholder: Paste sanitized logs/errors or attach screenshots only when they materially help.
+    validations:
+      required: false
+
+  - type: textarea
+    id: regression
+    attributes:
+      label: Regression information
+      description: If known, note whether this worked before and what changed around the time it broke.
+      placeholder: "Example: worked before PR #123 / started after deployment on ..."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing Ratatoskr issues and pull requests for the same problem.
+          required: true
+        - label: I removed secrets, credentials, and unnecessary private Discord data from this report.
+          required: true
+        - label: This is not a security vulnerability requiring private disclosure.
+          required: true
