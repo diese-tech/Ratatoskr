@@ -145,10 +145,10 @@ function fixture() {
   const sent: any[] = [];
   const attempted: any[] = [];
   const roles = new Collection<string, any>([
-    ['guild', { id: 'guild', permissions: new PermissionsBitField() }],
-    ['staff', { id: 'staff', permissions: new PermissionsBitField() }],
-    ['production', { id: 'production', permissions: new PermissionsBitField() }],
-    ['player', { id: 'player', permissions: new PermissionsBitField() }],
+    ['guild', { id: 'guild', name: '@everyone', permissions: new PermissionsBitField() }],
+    ['staff', { id: 'staff', name: 'Valkyries', permissions: new PermissionsBitField() }],
+    ['production', { id: 'production', name: 'Norns', permissions: new PermissionsBitField() }],
+    ['player', { id: 'player', name: 'League Players', permissions: new PermissionsBitField() }],
   ]);
   let publicChannel = false;
   let playersAllowed = false;
@@ -217,6 +217,17 @@ test('staff-ops accepts the managed Production identity after its Discord role i
       scaffoldDomain: 'server', logicalKey: 'server:role:production',
     });
     assert.equal(await getValidatedStaffChannel(f.client, f.db, 'guild'), f.channel);
+  } finally { f.db.close(); }
+});
+
+test('unsafe staff-ops role diagnostics name the exact role and stable Discord ID', async () => {
+  const f = fixture();
+  try {
+    f.set('players');
+    await assert.rejects(
+      getValidatedStaffChannel(f.client, f.db, 'guild'),
+      /staff-ops permits a non-staff role: League Players \(player\)/,
+    );
   } finally { f.db.close(); }
 });
 
