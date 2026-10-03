@@ -66,7 +66,9 @@ export async function getValidatedStaffChannel(client: Client, db: Database.Data
     if (role.id === guild.id || staffIds.has(role.id) || role.permissions.has(PermissionFlagsBits.Administrator)
       || (role.managed && role.tags?.botId === client.user?.id)) continue;
     // Bot roles are not a justification for letting ordinary members read logs.
-    if (channel.permissionsFor(role)?.has(PermissionFlagsBits.ViewChannel, false)) throw new Error('staff-ops permits a non-staff role');
+    if (channel.permissionsFor(role)?.has(PermissionFlagsBits.ViewChannel, false)) {
+      throw new Error(`staff-ops permits a non-staff role: ${role.name} (${role.id})`);
+    }
   }
   for (const overwrite of channel.permissionOverwrites.cache.values()) {
     if (overwrite.type !== 1 || !overwrite.allow.has(PermissionFlagsBits.ViewChannel) || overwrite.id === bot.id) continue;
