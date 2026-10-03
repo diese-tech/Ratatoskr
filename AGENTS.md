@@ -2,9 +2,9 @@
 
 ## Agent skills
 
-### Issue tracker
+### Issue tracker and pull requests
 
-Work items and PRDs live in this repository's GitHub Issues. External pull requests are not a triage request surface. See `docs/agents/issue-tracker.md`.
+Work items and PRDs live in this repository's GitHub Issues. External pull requests are not a triage request surface. Use the repository's standard issue information model when creating implementation-facing issues, and use the repository's pull-request evidence model when opening or updating PRs. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
