@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildRenamePlan, buildTradePlan } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildRenamePlan, buildTradePlan } from '../domain/leagueOperations.js';
 import { LeagueSheetDriftError, LeagueSheetsService, type LeagueSheetsGateway, type SheetValueUpdate } from './leagueSheets.js';
 
 type Rows = (string | number | boolean | null)[][];
@@ -218,6 +218,26 @@ test('free-agent rename history records the affected division', async () => {
   });
   assert.equal(gateway.appends[0]?.values[0]?.[3], 'Vanaheim');
   assert.ok(gateway.reads.some((read) => read.range === "'Transaction History'!A6:A"));
+});
+
+test('departure history records the former team and inactive destination without role changes', async () => {
+  const { gateway, service } = serviceFixture();
+  const loaded = await service.load(members.filter((member) => member.discordId !== 'one'), 'free-agent');
+  const plan = buildDeparturePlan(loaded.snapshot, 'one');
+  await service.appendTransactionHistory(plan, {
+    reference: 'YSL-TRX-DEPARTURE', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
+  });
+  assert.deepEqual(gateway.appends[0]?.values[0], [
+    'YSL-TRX-DEPARTURE', 'departure', '2026-09-30', 'Vanaheim', 'Dream Walkers', 'Inactive',
+    'one', 'One', 'admin', '', 'Completed', 'Admin',
+  ]);
+});
+
+test('roster-player lookup reads only Current Rosters for autocomplete', async () => {
+  const { gateway, service } = serviceFixture();
+  const players = await service.listRosterPlayers();
+  assert.deepEqual(players.map((row) => row.discordId), ['one', 'two']);
+  assert.deepEqual(gateway.reads, [{ spreadsheetId: 'admin', range: "'Current Rosters'!A5:J" }]);
 });
 
 test('roster mutations preserve unrelated rows and internal blanks', async () => {

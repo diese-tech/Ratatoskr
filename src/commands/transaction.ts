@@ -1,11 +1,13 @@
 import {
   MessageFlags,
   SlashCommandBuilder,
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
+  buildDeparturePlan,
   buildDropPlan,
   buildPickupPlan,
   buildRenamePlan,
@@ -14,7 +16,7 @@ import {
   type LeagueMutationPlan,
   type LeagueSnapshot,
 } from '../domain/leagueOperations.js';
-import { requireAccess } from '../services/authorization.js';
+import { hasAccess, requireAccess } from '../services/authorization.js';
 import { loadLeagueOperationsConfig } from '../config/league-operations.js';
 import { DiscordLeagueGateway } from '../services/leagueDiscord.js';
 import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from '../services/leagueSheets.js';
@@ -46,6 +48,15 @@ export const transactionCommand = new SlashCommandBuilder()
     .addUserOption((option) => option.setName('player').setDescription('Rostered player to release.').setRequired(true))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
+    .setName('departure')
+    .setDescription('Remove a rostered player who has left the YSL server.')
+    .addStringOption((option) => option
+      .setName('player')
+      .setDescription('Departed rostered player.')
+      .setAutocomplete(true)
+      .setRequired(true))
+    .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
+  .addSubcommand((subcommand) => subcommand
     .setName('pickup')
     .setDescription('Add a division free agent to an active team.')
     .addUserOption((option) => option.setName('player').setDescription('Free agent joining the team.').setRequired(true))
@@ -65,6 +76,10 @@ function planBuilder(interaction: ChatInputCommandInteraction): (snapshot: Leagu
     const second = interaction.options.getUser('player_two', true).id;
     return (snapshot) => buildTradePlan(snapshot, first, second);
   }
+  if (subcommand === 'departure') {
+    const player = interaction.options.getString('player', true);
+    return (snapshot) => buildDeparturePlan(snapshot, player);
+  }
   const player = interaction.options.getUser('player', true).id;
   if (subcommand === 'drop') return (snapshot) => buildDropPlan(snapshot, player);
   if (subcommand === 'pickup') {
@@ -83,6 +98,9 @@ function intentKey(interaction: ChatInputCommandInteraction): string {
   if (subcommand === 'trade') {
     return JSON.stringify([subcommand, interaction.options.getUser('player_one', true).id, interaction.options.getUser('player_two', true).id]);
   }
+  if (subcommand === 'departure') {
+    return JSON.stringify([subcommand, interaction.options.getString('player', true)]);
+  }
   const player = interaction.options.getUser('player', true).id;
   if (subcommand === 'pickup') return JSON.stringify([subcommand, player, interaction.options.getRole('team', true).id]);
   if (subcommand === 'rename') return JSON.stringify([subcommand, player, interaction.options.getString('league_name', true)]);
@@ -100,8 +118,55 @@ function preview(plan: LeagueMutationPlan): string {
     ].join('\n');
   }
   if (plan.kind === 'drop') return `**Drop preview**\n${plan.players[0]}: ${plan.teams[0]!.franchise} → Free Agents\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
+  if (plan.kind === 'departure') return `**Departure preview**\n${plan.players[0]}: ${plan.teams[0]!.franchise} → Inactive\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
   if (plan.kind === 'pickup') return `**Pickup preview**\n${plan.players[0]}: Free Agents → ${plan.teams[0]!.franchise}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
   return `**Name-change preview**\nOfficial league name: ${plan.players[0]}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
+}
+
+const divisionOrder = new Map([['Vanaheim', 0], ['Alfheim', 1], ['Svartalfheim', 2]]);
+
+export function buildDepartureAutocompleteChoices(
+  rosters: Awaited<ReturnType<LeagueSheetsService['listRosterPlayers']>>,
+  focused: string,
+): { name: string; value: string }[] {
+  const query = focused.trim().toLocaleLowerCase();
+  return [...rosters]
+    .sort((left, right) => (divisionOrder.get(left.division)! - divisionOrder.get(right.division)!)
+      || left.franchise.localeCompare(right.franchise)
+      || left.player.localeCompare(right.player))
+    .filter((row) => `${row.player} ${row.franchise} ${row.division}`.toLocaleLowerCase().includes(query))
+    .slice(0, 25)
+    .map((row) => ({
+      name: `${row.player} — ${row.franchise} (${row.division})`.slice(0, 100),
+      value: row.discordId,
+    }));
+}
+
+export async function handleTransactionAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
+  if (interaction.options.getSubcommand(false) !== 'departure'
+    || interaction.options.getFocused(true).name !== 'player'
+    || !interaction.guild) {
+    await interaction.respond([]);
+    return;
+  }
+  try {
+    const member = interaction.guild.members.cache.get(interaction.user.id)
+      ?? await interaction.guild.members.fetch(interaction.user.id);
+    if (!hasAccess(member, 'ADMIN')) {
+      await interaction.respond([]);
+      return;
+    }
+    const { gateway, config } = createGoogleLeagueSheetsGateway();
+    const sheets = new LeagueSheetsService(gateway, config);
+    const choices = buildDepartureAutocompleteChoices(
+      await sheets.listRosterPlayers(),
+      interaction.options.getFocused(),
+    );
+    await interaction.respond(choices);
+  } catch (error) {
+    console.error('Transaction departure autocomplete failed:', error);
+    await interaction.respond([]);
+  }
 }
 
 export async function replyToTransactionValidation(

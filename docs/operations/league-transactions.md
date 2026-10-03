@@ -2,7 +2,7 @@
 
 ## Staff workflow
 
-1. Run `/transaction trade`, `/transaction drop`, `/transaction pickup`, or `/transaction rename` with the Discord player selections.
+1. Run `/transaction trade`, `/transaction drop`, `/transaction pickup`, `/transaction rename`, or `/transaction departure`.
 2. Read the private preview. Nothing changes during preview.
 3. Re-run the same command with `confirm:true` only after the approved move and detected teams are correct.
 4. Confirm the private completion reference and the public transaction notice when one is expected.
@@ -11,9 +11,12 @@ Ratatoskr stores the private preview by server, administrator, and exact command
 
 Only Allfather and Aesir role IDs may run these commands. Pickups accept only one of the 24 active division-suffixed team roles from **League Teams**. Plain franchise roles are leadership/advisor access and are never moved.
 
+`/transaction departure` is specifically for a rostered player who has already left the YSL server. Its player field searches **Current Rosters** rather than Discord's live User picker. The command confirms the player is absent, removes them from the private and public active rosters, marks them `Inactive`, preserves their Discord ID and name history, and does not add them to free agency or attempt a Discord role change. A current server member must use `/transaction drop` instead.
+
 ## Automatic safety checks
 
 - Every confirmed mutation runs a complete Discord/private-sheet/public-sheet audit.
+- Departure may resolve the selected player's expected absence; every unrelated absent player or other inconsistency still blocks the command.
 - Every confirmed mutation re-reads the managed sheet values and player roles immediately before changing anything.
 - A mismatch stops the command; Ratatoskr does not normalize or overwrite the unexpected value. It records one durable reconciliation ticket and alerts staff-ops.
 - Current Rosters updates are row-targeted. Unrelated rows, internal blanks, and manually maintained cells on unrelated rows are preserved.
@@ -40,4 +43,4 @@ Keep the service-account JSON sealed. Share both workbooks with the service-acco
 
 ## Production gate
 
-Passing tests and CI does not prove live acceptance. Before enabling staff use, back up the persistent SQLite database, deploy through migration 24 once, inspect startup logs, run one controlled preview, deliberately verify one safe drift produces a staff-ops ticket without writes, and perform a reversible live transaction with both sheet workbooks open. Do not run a second bot replica against the same database/guild.
+Passing tests and CI does not prove live acceptance. Before enabling staff use, back up the persistent SQLite database, deploy through migration 25 once, inspect startup logs, run one controlled departure preview against an already-absent test member, deliberately verify one unrelated safe drift produces a staff-ops ticket without writes, and perform a controlled live departure with both sheet workbooks open. Do not run a second bot replica against the same database/guild.

@@ -254,6 +254,11 @@ function samePublicRosters(
 export class LeagueSheetsService {
   constructor(private readonly gateway: LeagueSheetsGateway, private readonly config: LeagueSheetsConfig) {}
 
+  async listRosterPlayers(): Promise<LeagueRosterRow[]> {
+    const rows = await this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE);
+    return parseRosters(rows);
+  }
+
   async load(discordMembers: DiscordLeagueMember[], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot> {
     const [teams, rosters, names, ...publicRows] = await Promise.all([
       this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_TEAMS_RANGE),
@@ -416,7 +421,11 @@ export class LeagueSheetsService {
   ): Promise<void> {
     const existing = await this.gateway.getValues(this.config.adminSpreadsheetId, "'Transaction History'!A6:A");
     if (existing.some((row) => String(row[0] ?? '') === record.reference)) return;
-    const transactionRows = plan.discordRoleChanges.length > 0 ? plan.discordRoleChanges.map((change, index) => {
+    const transactionRows = plan.kind === 'departure' ? [[
+      record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
+      plan.teams[0]!.franchise, 'Inactive', plan.playerIds[0]!, plan.players[0]!,
+      record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
+    ]] : plan.discordRoleChanges.length > 0 ? plan.discordRoleChanges.map((change, index) => {
       const from = plan.teams.find((team) => change.remove.includes(team.teamRoleId));
       const to = plan.teams.find((team) => change.add.includes(team.teamRoleId));
       return [

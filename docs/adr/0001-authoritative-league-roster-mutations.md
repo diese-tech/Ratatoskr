@@ -10,7 +10,9 @@ The YSL-owned workbook remains the public presentation surface. The private **YS
 
 ## Decision
 
-Ratatoskr owns the execution of approved `/transaction trade`, `/transaction drop`, `/transaction pickup`, and `/transaction rename` commands. The administrator command is authoritative; the sheets are outputs and audit records, not a second command surface.
+Ratatoskr owns the execution of approved `/transaction trade`, `/transaction drop`, `/transaction pickup`, `/transaction rename`, and `/transaction departure` commands. The administrator command is authoritative; the sheets are outputs and audit records, not a second command surface.
+
+`drop` moves a current Discord member into their division free-agent pool. `departure` resolves a rostered player who has already left Discord: it selects the player from Current Rosters by stable Discord ID, removes the active private/public roster assignment, marks the player `Inactive`, preserves identity and name history, and performs no Discord role or free-agent mutation. The selected absence is the only full-audit exception; unrelated drift still fails closed.
 
 Before every confirmed mutation, Ratatoskr compares all configured player team roles in Discord with Current Rosters, canonical names, visible public team blocks, and division free-agent lists. The result is recorded in SQLite for that America/New_York league day. Every transaction also revalidates the exact managed sheet values immediately before mutation.
 
@@ -44,6 +46,18 @@ Trade notices use the locked public structure:
 > Posted by [admin]
 
 The message content pings the two configured team roles. The public card contains no emoji, database reference, raw audit detail, or service-account information.
+
+Departure notices use the stored league name because the departed player is no longer a selectable Discord member:
+
+> **Word Travels the Branches**
+>
+> Ratatoskr carries word from [Team].
+>
+> **[League Name]** leaves [Team] and the YSL server.
+>
+> Posted by [admin]
+
+The message content pings the configured team role.
 
 ## Consequences
 

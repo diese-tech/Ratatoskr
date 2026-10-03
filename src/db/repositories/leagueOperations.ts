@@ -11,7 +11,7 @@ export type LeagueTransactionStatus =
 export type LeagueTransaction = {
   reference: string;
   guildId: string;
-  kind: 'trade' | 'drop' | 'pickup' | 'rename';
+  kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure';
   actorUserId: string;
   payload: unknown;
   status: LeagueTransactionStatus;

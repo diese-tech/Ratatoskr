@@ -1,7 +1,37 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ChannelType, Collection, type Guild } from 'discord.js';
+import { ChannelType, Collection, RESTJSONErrorCodes, type Guild } from 'discord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
+
+test('departure absence validation accepts only Discord-confirmed unknown members', async () => {
+  const guild = {
+    id: 'guild',
+    members: { fetch: async () => { throw Object.assign(new Error('Unknown Member'), { code: RESTJSONErrorCodes.UnknownMember }); } },
+  } as unknown as Guild;
+  await new DiscordLeagueGateway(guild, 'transactions').validateMemberAbsent('departed');
+});
+
+test('departure absence validation rejects a member who is currently present', async () => {
+  const guild = {
+    id: 'guild',
+    members: { fetch: async () => ({ id: 'returned' }) },
+  } as unknown as Guild;
+  await assert.rejects(
+    () => new DiscordLeagueGateway(guild, 'transactions').validateMemberAbsent('returned'),
+    /back in the YSL server.*transaction drop/i,
+  );
+});
+
+test('departure absence validation does not mistake a transient Discord failure for departure', async () => {
+  const guild = {
+    id: 'guild',
+    members: { fetch: async () => { throw new Error('gateway unavailable'); } },
+  } as unknown as Guild;
+  await assert.rejects(
+    () => new DiscordLeagueGateway(guild, 'transactions').validateMemberAbsent('unknown'),
+    /could not confirm.*left the YSL server/i,
+  );
+});
 
 test('transaction announcements enforce the durable reference as the Discord nonce', async () => {
   const sent: Record<string, unknown>[] = [];

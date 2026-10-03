@@ -1,10 +1,11 @@
 import {
   ChannelType,
   EmbedBuilder,
+  RESTJSONErrorCodes,
   type Guild,
   type GuildMember,
 } from 'discord.js';
-import type { DiscordLeagueMember, DiscordRoleChange } from '../domain/leagueOperations.js';
+import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange } from '../domain/leagueOperations.js';
 import type { LeagueAnnouncement, LeagueDiscordPort, LeagueRoleState } from './leagueTransactions.js';
 
 export class DiscordRoleReconciliationRequiredError extends Error {
@@ -46,6 +47,17 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
   async getMembers(): Promise<DiscordLeagueMember[]> {
     const members = await this.guild.members.fetch();
     return members.filter((member) => !member.user.bot).map(roleSnapshot);
+  }
+
+  async validateMemberAbsent(discordId: string): Promise<void> {
+    try {
+      await fetchFreshMember(this.guild, discordId);
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      if (code === RESTJSONErrorCodes.UnknownMember) return;
+      throw new Error(`Ratatoskr could not confirm that ${discordId} has left the YSL server.`);
+    }
+    throw new LeagueMutationValidationError('That player is back in the YSL server. Use `/transaction drop` to move them into free agency.');
   }
 
   async validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void> {

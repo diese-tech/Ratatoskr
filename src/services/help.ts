@@ -66,9 +66,9 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     title: 'League Operations',
     entries: [
       {
-        usage: '/transaction trade | drop | pickup | rename',
+        usage: '/transaction trade | drop | pickup | rename | departure',
         description:
-          'Previews an approved roster change, then processes it with confirm:true. Ratatoskr verifies Discord and both roster sheets before changing roles, records the administrator, and posts completed moves in transactions.',
+          'Previews an approved roster change, then processes it with confirm:true. Departure selects an absent player from Current Rosters and marks them inactive instead of a free agent. Ratatoskr verifies Discord and both roster sheets, records the administrator, and posts completed moves in transactions.',
       },
     ],
   },

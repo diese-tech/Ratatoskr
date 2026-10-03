@@ -63,7 +63,7 @@ export type PublicRosterChange = {
 export type DiscordRoleChange = { discordId: string; remove: string[]; add: string[] };
 
 export type LeagueMutationPlan = {
-  kind: 'trade' | 'drop' | 'pickup' | 'rename';
+  kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure';
   rosters: LeagueRosterRow[];
   nameUpdates: LeagueNameRow[];
   nameHistoryAppend?: Omit<LeagueNameRow, 'sheetRow'>;
@@ -108,7 +108,10 @@ function canonicalNames(snapshot: LeagueSnapshot): Map<string, string> {
   return result;
 }
 
-export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
+export function auditLeagueRoster(
+  snapshot: LeagueSnapshot,
+  options: { allowAbsentRosterMemberId?: string } = {},
+): string[] {
   const issues: string[] = [];
   const activeTeams = snapshot.teams.filter((team) => team.active);
   const teamsByRole = new Map<string, LeagueTeam>();
@@ -227,7 +230,9 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
     }
   }
   for (const row of snapshot.rosters) {
-    if (!memberById.has(row.discordId)) issues.push(`Current Rosters member ${row.discordId} is not in the Discord member snapshot.`);
+    if (!memberById.has(row.discordId) && row.discordId !== options.allowAbsentRosterMemberId) {
+      issues.push(`Current Rosters member ${row.discordId} is not in the Discord member snapshot.`);
+    }
   }
   for (const rows of currentNameRows.values()) {
     if (rows.length !== 1 || rows[0]!.leagueStatus !== 'Free Agent') continue;
@@ -372,6 +377,29 @@ export function buildDropPlan(snapshot: LeagueSnapshot, discordId: string): Leag
       { division: team.division, area: 'free-agent', group: 'Free Agents', from: '', to: currentName.currentLeagueName },
     ],
     discordRoleChanges: [{ discordId, remove: [team.teamRoleId], add: [snapshot.freeAgentRoleId] }],
+    teams: [team],
+    players: [currentName.currentLeagueName],
+    playerIds: [discordId],
+  };
+}
+
+export function buildDeparturePlan(snapshot: LeagueSnapshot, discordId: string): LeagueMutationPlan {
+  const roster = requireRoster(snapshot, discordId);
+  if (snapshot.discordMembers.some((member) => member.discordId === discordId)) {
+    throw new LeagueMutationValidationError('That player is still in the YSL server. Use `/transaction drop` to move them into free agency.');
+  }
+  const team = requireTeam(snapshot, roster.teamRoleId);
+  const currentName = currentNameRow(snapshot, discordId);
+  return {
+    kind: 'departure',
+    rosters: snapshot.rosters.filter((row) => row.discordId !== discordId).map((row) => ({ ...row })),
+    nameUpdates: snapshot.names.map((row) => row.sheetRow === currentName.sheetRow
+      ? { ...row, franchise: '', leagueStatus: 'Inactive' }
+      : { ...row }),
+    publicChanges: [
+      { division: team.division, area: 'team', group: team.franchise, from: currentName.currentLeagueName, to: '' },
+    ],
+    discordRoleChanges: [],
     teams: [team],
     players: [currentName.currentLeagueName],
     playerIds: [discordId],

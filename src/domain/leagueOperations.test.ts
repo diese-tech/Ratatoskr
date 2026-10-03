@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   auditLeagueRoster,
+  buildDeparturePlan,
   buildDropPlan,
   buildPickupPlan,
   buildRenamePlan,
@@ -58,6 +59,14 @@ test('daily audit reports Discord and public-sheet drift instead of normalizing 
   const issues = auditLeagueRoster(current);
   assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('team role')));
   assert.ok(issues.some((issue) => issue.includes('Dream Walkers') && issue.includes('public roster')));
+});
+
+test('daily audit can exempt only the departed roster member being resolved', () => {
+  const current = snapshot();
+  current.discordMembers = current.discordMembers.filter((member) => member.discordId !== 'two' && member.discordId !== 'one');
+  const issues = auditLeagueRoster(current, { allowAbsentRosterMemberId: 'two' });
+  assert.equal(issues.some((issue) => issue.includes('two') && issue.includes('not in the Discord member snapshot')), false);
+  assert.equal(issues.some((issue) => issue.includes('one') && issue.includes('not in the Discord member snapshot')), true);
 });
 
 test('daily audit rejects contradictory free-agent and roster roles', () => {
@@ -235,6 +244,25 @@ test('drop removes the roster assignment, adds the free-agent role, and preserve
     { division: 'Vanaheim', area: 'team', group: 'The Sewer', from: 'Two', to: '' },
     { division: 'Vanaheim', area: 'free-agent', group: 'Free Agents', from: '', to: 'Two' },
   ]);
+});
+
+test('departure removes an absent player without creating a free agent or Discord role mutation', () => {
+  const current = snapshot();
+  current.discordMembers = current.discordMembers.filter((member) => member.discordId !== 'two');
+  const plan = buildDeparturePlan(current, 'two');
+  assert.equal(plan.kind, 'departure');
+  assert.equal(plan.rosters.some((row) => row.discordId === 'two'), false);
+  assert.deepEqual(plan.discordRoleChanges, []);
+  const name = plan.nameUpdates.find((row) => row.discordId === 'two');
+  assert.equal(name?.leagueStatus, 'Inactive');
+  assert.equal(name?.franchise, '');
+  assert.deepEqual(plan.publicChanges, [
+    { division: 'Vanaheim', area: 'team', group: 'The Sewer', from: 'Two', to: '' },
+  ]);
+});
+
+test('departure rejects a player who is still in the server', () => {
+  assert.throws(() => buildDeparturePlan(snapshot(), 'two'), /still in the YSL server.*transaction drop/i);
 });
 
 test('pickup fills the configured team, removes free-agent role, and rejects an occupied player', () => {

@@ -54,6 +54,7 @@ export interface LeagueSheetsPort {
 
 export interface LeagueDiscordPort {
   getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
+  validateMemberAbsent(discordId: string): Promise<void>;
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
   applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
   rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState, applied: LeagueRoleState): Promise<void>;
@@ -142,11 +143,16 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
   const teamsByRole = new Map(activeTeams.map((team) => [team.teamRoleId, team]));
   for (const discordId of plan.playerIds) {
     const member = snapshot.discordMembers.find((candidate) => candidate.discordId === discordId);
-    if (!member) throw new Error(`Discord member ${discordId} could not be loaded.`);
     const rosterRows = snapshot.rosters.filter((row) => row.discordId === discordId);
     if (rosterRows.length > 1) throw new Error(`Discord member ${discordId} has multiple roster assignments.`);
     const currentNames = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
     if (currentNames.length !== 1) throw new Error(`Discord member ${discordId} must have exactly one current name record.`);
+    if (!member) {
+      if (plan.kind === 'departure' && plan.playerIds.length === 1 && plan.discordRoleChanges.length === 0 && rosterRows.length === 1) {
+        continue;
+      }
+      throw new Error(`Discord member ${discordId} could not be loaded.`);
+    }
     const assignedTeamRoles = member.roleIds.filter((roleId) => teamsByRole.has(roleId));
     const roster = rosterRows[0];
     if (roster) {
@@ -244,6 +250,15 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
     };
   }
   const team = plan.teams[0]!;
+  if (plan.kind === 'departure') {
+    return {
+      content: mention(team.teamRoleId),
+      allowedRoleIds: [team.teamRoleId],
+      title: 'Word Travels the Branches',
+      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n**${plan.players[0]}** leaves ${mention(team.teamRoleId)} and the YSL server.`,
+      footer: `Posted by ${actorName}`,
+    };
+  }
   const line = plan.kind === 'drop'
     ? `<@${plan.playerIds[0]}> leaves ${mention(team.teamRoleId)} and enters free agency.`
     : `<@${plan.playerIds[0]}> leaves free agency to join ${mention(team.teamRoleId)}.`;
@@ -282,7 +297,10 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
-    const issues = auditLeagueRoster(loaded.snapshot);
+    const plan = input.buildPlan(loaded.snapshot);
+    const issues = auditLeagueRoster(loaded.snapshot, plan.kind === 'departure'
+      ? { allowAbsentRosterMemberId: plan.playerIds[0] }
+      : {});
     recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: issues.length ? 'failed' : 'passed', issues });
     if (issues.length) {
       throw openReconciliationTicket(
@@ -297,23 +315,24 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       throw openReconciliationTicket(input, auditDate, error);
     }
     resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
-    const plan = input.buildPlan(loaded.snapshot);
     if (input.expectedPlanFingerprint
       && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {
       throw new LeagueTransactionPreviewChangedError(plan);
     }
     assertDiscordPreconditions(loaded.snapshot, plan);
+    if (plan.kind === 'departure') await input.discord.validateMemberAbsent(plan.playerIds[0]!);
     const prepared = input.sheets.prepare(loaded, plan);
-    const beforeByPlayer = new Map(plan.playerIds.map((discordId) => [
+    const roleValidationPlayerIds = plan.kind === 'departure' ? [] : plan.playerIds;
+    const beforeByPlayer = new Map(roleValidationPlayerIds.map((discordId) => [
       discordId,
       expectedRoleState(loaded.snapshot, loaded.snapshot.rosters, loaded.snapshot.names, discordId),
     ]));
-    const afterByPlayer = new Map(plan.playerIds.map((discordId) => [
+    const afterByPlayer = new Map(roleValidationPlayerIds.map((discordId) => [
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
     ]));
     try {
-      for (const discordId of plan.playerIds) {
+      for (const discordId of roleValidationPlayerIds) {
         await input.discord.validateRoleState(discordId, beforeByPlayer.get(discordId)!);
       }
     } catch (error) {

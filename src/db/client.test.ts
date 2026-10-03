@@ -252,6 +252,31 @@ test('migration 11 preserves existing one-game roster slots', () => {
   }
 });
 
+test('migration 25 preserves existing league transactions while allowing departures', () => {
+  const db = new Database(':memory:');
+  try {
+    for (const migration of migrations.slice(0, 24)) db.exec(migration.sql);
+    db.prepare(`INSERT INTO league_transactions
+      (reference, guild_id, kind, actor_user_id, payload_json, status, announcement_id, reconciliation_alerted_at)
+      VALUES ('existing', 'guild', 'trade', 'admin', '{}', 'completed', 'message', '2026-10-03T00:00:00.000Z')`).run();
+
+    db.exec(migrations[24]!.sql);
+
+    assert.deepEqual(db.prepare(`SELECT kind, status, announcement_id, reconciliation_alerted_at
+      FROM league_transactions WHERE reference = 'existing'`).get(), {
+      kind: 'trade',
+      status: 'completed',
+      announcement_id: 'message',
+      reconciliation_alerted_at: '2026-10-03T00:00:00.000Z',
+    });
+    assert.doesNotThrow(() => db.prepare(`INSERT INTO league_transactions
+      (reference, guild_id, kind, actor_user_id, payload_json, status)
+      VALUES ('departure', 'guild', 'departure', 'admin', '{}', 'applying_discord')`).run());
+  } finally {
+    db.close();
+  }
+});
+
 test('managed resources can be inserted and read back by Discord ID and logical key', () => {
   const db = openDatabase(join(tempDir, 'managed-resources.db'));
   try {
