@@ -38,7 +38,7 @@ function safeLog(value: unknown) {
   try { console.error(JSON.stringify(value)); } catch { /* The reporter must never replace the original failure. */ }
 }
 
-async function validatedStaffChannel(client: Client, db: Database.Database, guildId: string): Promise<GuildTextBasedChannel> {
+export async function getValidatedStaffChannel(client: Client, db: Database.Database, guildId: string): Promise<GuildTextBasedChannel> {
   const row = getActiveManagedResourceByLogicalKey(db, guildId, serverChannelLogicalKey('admin', 'staff_ops', 'text_channel'));
   const managedChannelId = row && row.resourceType === 'text_channel' && row.scaffoldDomain === 'server' ? row.discordResourceId : undefined;
   // Fall back to the env var below when the channel isn't (yet) a managed
@@ -123,7 +123,7 @@ export async function reportOperationalError(
   if (records.size >= 200) records.delete(records.keys().next().value!);
   records.set(key, report); // Suppress ordinary duplicate alerts before the send.
   try {
-    const channel = await validatedStaffChannel(client, db, context.guildId);
+    const channel = await getValidatedStaffChannel(client, db, context.guildId);
     if (options) {
       const bot = channel.guild.members.me ?? await channel.guild.members.fetchMe();
       if (!channel.permissionsFor(bot)?.has(PermissionFlagsBits.ReadMessageHistory)) {

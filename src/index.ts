@@ -24,6 +24,8 @@ import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from './services
 import { DiscordLeagueGateway } from './services/leagueDiscord.js';
 import { reconcilePendingLeagueTransactions } from './services/leagueTransactions.js';
 import { runIsolatedStartupRecovery } from './services/startupRecovery.js';
+import { runLeagueAudit, startLeagueAuditWorker } from './services/leagueAudit.js';
+import { createLeagueAuditCardPort } from './services/leagueAuditDiscord.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -66,8 +68,10 @@ const scoutSignupDependencies: ScoutSignupDependencies = {
 };
 
 let stopScoutNotificationWorker: (() => void) | undefined;
+let stopLeagueAuditWorker: (() => void) | undefined;
 
 async function shutdown() {
+  stopLeagueAuditWorker?.();
   stopScoutNotificationWorker?.();
   await client.destroy();
   await storage.close();
@@ -103,14 +107,17 @@ client.once('clientReady', async () => {
   console.log(`Ratatoskr online as ${client.user?.tag ?? 'unknown user'}`);
   await registerGuildCommands(client, env.DISCORD_GUILD_ID);
   console.log('Guild slash commands registered.');
+  const leagueGuild = await client.guilds.fetch(env.DISCORD_GUILD_ID);
+  const leagueSheets = new LeagueSheetsService(leagueSheetsConnection.gateway, leagueSheetsConnection.config);
+  const leagueDiscord = new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId);
+  const leagueAuditCards = createLeagueAuditCardPort(client, db, env.DISCORD_GUILD_ID);
   const leagueRecovered = await runIsolatedStartupRecovery(
     'League transaction recovery',
     async () => {
-      const leagueGuild = await client.guilds.fetch(env.DISCORD_GUILD_ID);
       await reconcilePendingLeagueTransactions({
         db,
-        sheets: new LeagueSheetsService(leagueSheetsConnection.gateway, leagueSheetsConnection.config),
-        discord: new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId),
+        sheets: leagueSheets,
+        discord: leagueDiscord,
         reportError: async (reference, error) => reportOperationalError(
           client,
           db,
@@ -135,6 +142,28 @@ client.once('clientReady', async () => {
   console.log(leagueRecovered
     ? 'Pending league transaction notices reconciled.'
     : 'League transaction recovery failed; continuing existing Scout startup.');
+  const runAudit = (trigger: 'startup' | 'scheduled') => runLeagueAudit({
+    db,
+    operationScope: storage.operationScope,
+    guildId: env.DISCORD_GUILD_ID,
+    trigger,
+    now: new Date(),
+    freeAgentRoleId: leagueConfig.freeAgentRoleId,
+    members: leagueDiscord,
+    sheets: leagueSheets,
+    cards: leagueAuditCards,
+  });
+  void runAudit('startup')
+    .then((result) => console.log(`Startup league roster audit completed (${result.status}).`))
+    .catch((error) => console.error('Startup league roster audit delivery remains pending:', error))
+    .finally(() => {
+      stopLeagueAuditWorker = startLeagueAuditWorker({
+        db,
+        guildId: env.DISCORD_GUILD_ID,
+        run: async () => { await runAudit('scheduled'); },
+      });
+      console.log('Daily league roster audit worker started (06:00 America/New_York).');
+    });
   await reconcilePostingScoutSetups(client, db);
   console.log('Pending scout signup posts reconciled.');
   await reconcilePendingScoutPublishes(client, db);

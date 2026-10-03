@@ -297,6 +297,28 @@ test('migration 26 preserves departure transactions while allowing self-drops', 
   }
 });
 
+test('migration 27 adds durable rolling league-audit card state', () => {
+  const db = new Database(':memory:');
+  try {
+    for (const migration of migrations.slice(0, 26)) db.exec(migration.sql);
+    db.exec(migrations[26]!.sql);
+
+    db.prepare(`INSERT INTO league_audit_cards (
+      guild_id, result, findings_json, run_reference, run_at, trigger, phase,
+      send_attempted, current_message_id, stale_message_id, next_run_at
+    ) VALUES ('guild', 'dirty', '["mismatch"]', 'YSL-AUD-TEST', '2026-10-03T10:00:00.000Z',
+      'scheduled', 'settled', 1, 'message', NULL, '2026-10-04T10:00:00.000Z')`).run();
+
+    assert.deepEqual(db.prepare(`SELECT result, trigger, phase, current_message_id, next_run_at
+      FROM league_audit_cards WHERE guild_id = 'guild'`).get(), {
+      result: 'dirty', trigger: 'scheduled', phase: 'settled', current_message_id: 'message',
+      next_run_at: '2026-10-04T10:00:00.000Z',
+    });
+  } finally {
+    db.close();
+  }
+});
+
 test('managed resources can be inserted and read back by Discord ID and logical key', () => {
   const db = openDatabase(join(tempDir, 'managed-resources.db'));
   try {

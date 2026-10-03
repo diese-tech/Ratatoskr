@@ -21,6 +21,7 @@ import {
   type LoadedLeagueSnapshot,
   type PreparedLeagueSheetMutation,
 } from './leagueSheets.js';
+import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
 
 export type LeagueAnnouncement = {
   content: string;
@@ -84,16 +85,6 @@ export class LeagueTransactionPreviewChangedError extends Error {
 
 export function leagueTransactionPlanFingerprint(plan: LeagueMutationPlan): string {
   return createHash('sha256').update(JSON.stringify(plan)).digest('hex');
-}
-
-const activeGuilds = new WeakMap<object, Set<string>>();
-
-function acquire(scope: object, guildId: string): () => void {
-  let active = activeGuilds.get(scope);
-  if (!active) { active = new Set(); activeGuilds.set(scope, active); }
-  if (active.has(guildId)) throw new Error('Another league transaction is already running. Try again after it finishes.');
-  active.add(guildId);
-  return () => active!.delete(guildId);
 }
 
 function dateInLeagueTimezone(now: Date): string {
@@ -314,7 +305,7 @@ async function rollbackDiscord(
 }
 
 export async function executeLeagueTransaction(input: ExecuteLeagueTransactionInput): Promise<{ reference: string; announcementId?: string }> {
-  const release = acquire(input.operationScope, input.guildId);
+  const release = acquireLeagueTransaction(input.operationScope, input.guildId);
   try {
     const members = input.discord.getMembers ? await input.discord.getMembers() : [];
     const auditDate = dateInLeagueTimezone(input.now);
