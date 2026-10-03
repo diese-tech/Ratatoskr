@@ -277,6 +277,26 @@ test('migration 25 preserves existing league transactions while allowing departu
   }
 });
 
+test('migration 26 preserves departure transactions while allowing self-drops', () => {
+  const db = new Database(':memory:');
+  try {
+    for (const migration of migrations.slice(0, 25)) db.exec(migration.sql);
+    db.prepare(`INSERT INTO league_transactions
+      (reference, guild_id, kind, actor_user_id, payload_json, status)
+      VALUES ('departure', 'guild', 'departure', 'admin', '{}', 'completed')`).run();
+
+    db.exec(migrations[25]!.sql);
+
+    assert.deepEqual(db.prepare(`SELECT kind, status FROM league_transactions
+      WHERE reference = 'departure'`).get(), { kind: 'departure', status: 'completed' });
+    assert.doesNotThrow(() => db.prepare(`INSERT INTO league_transactions
+      (reference, guild_id, kind, actor_user_id, payload_json, status)
+      VALUES ('self-drop', 'guild', 'self-drop', 'admin', '{}', 'applying_discord')`).run());
+  } finally {
+    db.close();
+  }
+});
+
 test('managed resources can be inserted and read back by Discord ID and logical key', () => {
   const db = openDatabase(join(tempDir, 'managed-resources.db'));
   try {

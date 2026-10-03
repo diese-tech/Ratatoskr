@@ -9,17 +9,21 @@ import {
   type LeagueSnapshot,
   type LeagueTeam,
   type PublicRosterChange,
+  SELF_DROP_LEAGUE_STATUS,
 } from '../domain/leagueOperations.js';
 
 type Cell = string | number | boolean | null;
 type CellRows = Cell[][];
 
 export type SheetValueUpdate = { range: string; values: CellRows };
+export type SelfDropPresentation = { sheetId: number; legend: CellRows; ruleExists: boolean };
 
 export interface LeagueSheetsGateway {
   getValues(spreadsheetId: string, range: string): Promise<CellRows>;
   batchUpdate(spreadsheetId: string, updates: SheetValueUpdate[], valueInputOption?: 'RAW' | 'USER_ENTERED'): Promise<void>;
   append(spreadsheetId: string, range: string, values: CellRows, valueInputOption?: 'RAW' | 'USER_ENTERED'): Promise<void>;
+  getSelfDropPresentation(spreadsheetId: string): Promise<SelfDropPresentation>;
+  ensureSelfDropPresentation(spreadsheetId: string, presentation: { sheetId: number; writeLegend: boolean; addRule: boolean }): Promise<void>;
 }
 
 export type LeagueSheetsConfig = {
@@ -79,6 +83,69 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
         data: { majorDimension: 'ROWS', values },
       });
     },
+    async getSelfDropPresentation(spreadsheetId) {
+      const encoded = encodeURIComponent("'Player Name History'!J4:K4");
+      const [legendData, metadata] = await Promise.all([
+        request<{ values?: CellRows }>({
+          url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encoded}?valueRenderOption=FORMATTED_VALUE`,
+        }),
+        request<{ sheets?: Array<{
+          properties?: { sheetId?: number; title?: string };
+          conditionalFormats?: Array<{
+            ranges?: Array<{ startRowIndex?: number; startColumnIndex?: number; endColumnIndex?: number }>;
+            booleanRule?: { condition?: { type?: string; values?: Array<{ userEnteredValue?: string }> } };
+          }>;
+        }> }>({
+          url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(sheetId,title),conditionalFormats(ranges,booleanRule(condition(type,values(userEnteredValue)))))`,
+        }),
+      ]);
+      const sheet = metadata.sheets?.find((candidate) => candidate.properties?.title === 'Player Name History');
+      const sheetId = sheet?.properties?.sheetId;
+      if (!sheet || sheetId === undefined) throw new Error('Player Name History sheet metadata could not be loaded.');
+      const formula = `=$G6="${SELF_DROP_LEAGUE_STATUS}"`;
+      const ruleExists = (sheet.conditionalFormats ?? []).some((rule) =>
+        rule.booleanRule?.condition?.type === 'CUSTOM_FORMULA'
+        && rule.booleanRule.condition.values?.[0]?.userEnteredValue === formula
+        && (rule.ranges ?? []).some((range) => range.startRowIndex === 5
+          && range.startColumnIndex === 0 && range.endColumnIndex === 11));
+      return { sheetId, legend: legendData.values ?? [], ruleExists };
+    },
+    async ensureSelfDropPresentation(spreadsheetId, presentation) {
+      if (presentation.writeLegend) {
+        await request({
+          method: 'POST',
+          url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`,
+          data: {
+            valueInputOption: 'RAW',
+            data: [{
+              range: "'Player Name History'!J4:K4",
+              majorDimension: 'ROWS',
+              values: [['Red row', 'Self-Drop: suspended for the current season and banned for the next YSL season.']],
+            }],
+          },
+        });
+      }
+      if (presentation.addRule) {
+        await request({
+          method: 'POST',
+          url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+          data: {
+            requests: [{
+              addConditionalFormatRule: {
+                index: 0,
+                rule: {
+                  ranges: [{ sheetId: presentation.sheetId, startRowIndex: 5, startColumnIndex: 0, endColumnIndex: 11 }],
+                  booleanRule: {
+                    condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=$G6="${SELF_DROP_LEAGUE_STATUS}"` }] },
+                    format: { backgroundColorStyle: { rgbColor: { red: 0.96, green: 0.80, blue: 0.80 } } },
+                  },
+                },
+              },
+            }],
+          },
+        });
+      }
+    },
   };
   return {
     gateway,
@@ -126,6 +193,7 @@ export type LeagueSheetSources = {
   rosters: CellRows;
   names: CellRows;
   publicByDivision: Record<LeagueDivision, CellRows>;
+  selfDropPresentation: SelfDropPresentation;
 };
 
 export type LoadedLeagueSnapshot = { snapshot: LeagueSnapshot; sources: LeagueSheetSources };
@@ -140,6 +208,7 @@ export type LeagueTransactionRecord = {
 
 export type PreparedLeagueSheetMutation = {
   publicUpdates: SheetValueUpdate[];
+  selfDropPresentation?: { sheetId: number; writeLegend: boolean; addRule: boolean };
 };
 
 export class LeagueSheetDriftError extends Error {}
@@ -260,11 +329,12 @@ export class LeagueSheetsService {
   }
 
   async load(discordMembers: DiscordLeagueMember[], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot> {
-    const [teams, rosters, names, ...publicRows] = await Promise.all([
+    const [teams, rosters, names, publicRows, selfDropPresentation] = await Promise.all([
       this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_TEAMS_RANGE),
       this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE),
       this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_NAMES_RANGE),
-      ...divisions.map((division) => this.gateway.getValues(this.config.publicSpreadsheetId, `'${division} Roster'!${PUBLIC_RANGE}`)),
+      Promise.all(divisions.map((division) => this.gateway.getValues(this.config.publicSpreadsheetId, `'${division} Roster'!${PUBLIC_RANGE}`))),
+      this.gateway.getSelfDropPresentation(this.config.adminSpreadsheetId),
     ]);
     const publicByDivision = Object.fromEntries(divisions.map((division, index) => [division, publicRows[index] ?? []])) as Record<LeagueDivision, CellRows>;
     return {
@@ -276,7 +346,7 @@ export class LeagueSheetsService {
         publicRosters: Object.fromEntries(divisions.map((division) => [division, parsePublic(publicByDivision[division])])),
         freeAgentRoleId,
       },
-      sources: { teams, rosters, names, publicByDivision },
+      sources: { teams, rosters, names, publicByDivision, selfDropPresentation },
     };
   }
 
@@ -318,7 +388,22 @@ export class LeagueSheetsService {
   }
 
   prepare(loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan): PreparedLeagueSheetMutation {
-    return { publicUpdates: this.resolvePublicChanges(loaded, plan.publicChanges) };
+    const prepared: PreparedLeagueSheetMutation = { publicUpdates: this.resolvePublicChanges(loaded, plan.publicChanges) };
+    if (plan.kind === 'self-drop') {
+      const expectedLegend = ['Red row', 'Self-Drop: suspended for the current season and banned for the next YSL season.'];
+      const actualLegend = loaded.sources.selfDropPresentation.legend[0] ?? [];
+      const legendBlank = actualLegend.every((cell) => String(cell ?? '').trim() === '');
+      const legendMatches = expectedLegend.every((cell, index) => String(actualLegend[index] ?? '') === cell);
+      if (!legendBlank && !legendMatches) {
+        throw new LeagueSheetDriftError('Player Name History legend cells J4:K4 are occupied by unexpected values. Nothing was written.');
+      }
+      prepared.selfDropPresentation = {
+        sheetId: loaded.sources.selfDropPresentation.sheetId,
+        writeLegend: !legendMatches,
+        addRule: !loaded.sources.selfDropPresentation.ruleExists,
+      };
+    }
+    return prepared;
   }
 
   async apply(
@@ -334,11 +419,11 @@ export class LeagueSheetsService {
       row.division, row.franchise, row.teamRoleId, row.team, row.discordId, row.player,
       row.rosterStatus, 'OK', 'Ratatoskr approved transaction', now,
     ];
-    const nextByPlayer = new Map(plan.rosters.map((row) => [row.discordId, row]));
-    const originalByPlayer = new Map(originalRosters.map((row) => [row.discordId, row]));
+    const nextBySheetRow = new Map(plan.rosters.map((row) => [row.sheetRow, row]));
+    const originalBySheetRow = new Map(originalRosters.map((row) => [row.sheetRow, row]));
     const adminUpdates: SheetValueUpdate[] = [];
     for (const previous of originalRosters) {
-      const next = nextByPlayer.get(previous.discordId);
+      const next = nextBySheetRow.get(previous.sheetRow);
       if (!next) {
         adminUpdates.push({ range: `'Current Rosters'!A${previous.sheetRow}:J${previous.sheetRow}`, values: [Array(10).fill('')] });
       } else if (JSON.stringify(rosterValue(previous).slice(0, 7)) !== JSON.stringify(rosterValue(next).slice(0, 7))) {
@@ -346,7 +431,7 @@ export class LeagueSheetsService {
       }
     }
     for (const next of plan.rosters) {
-      if (!originalByPlayer.has(next.discordId)) {
+      if (!originalBySheetRow.has(next.sheetRow)) {
         adminUpdates.push({ range: `'Current Rosters'!A${next.sheetRow}:J${next.sheetRow}`, values: [rosterValue(next)] });
       }
     }
@@ -365,6 +450,9 @@ export class LeagueSheetsService {
     try {
       await this.gateway.batchUpdate(this.config.adminSpreadsheetId, adminUpdates, 'RAW');
       await this.gateway.batchUpdate(this.config.publicSpreadsheetId, prepared.publicUpdates, 'RAW');
+      if (prepared.selfDropPresentation) {
+        await this.gateway.ensureSelfDropPresentation(this.config.adminSpreadsheetId, prepared.selfDropPresentation);
+      }
 
       if (plan.nameHistoryAppend) {
         const row = plan.nameHistoryAppend;
@@ -403,8 +491,14 @@ export class LeagueSheetsService {
           && actual.franchise === expected.franchise
           && actual.leagueStatus === expected.leagueStatus;
       });
+      const presentationMatches = plan.kind !== 'self-drop'
+        || (verification.sources.selfDropPresentation.ruleExists
+          && verification.sources.selfDropPresentation.legend[0]?.[0] === 'Red row'
+          && verification.sources.selfDropPresentation.legend[0]?.[1]
+            === 'Self-Drop: suspended for the current season and banned for the next YSL season.');
       if (JSON.stringify(rosterProjection(plan.rosters)) !== JSON.stringify(rosterProjection(verification.snapshot.rosters))
         || !namesMatch
+        || !presentationMatches
         || !samePublicRosters(expectedPublic, verification.snapshot.publicRosters)) {
         throw new Error('Post-write values do not match the approved transaction.');
       }
@@ -421,11 +515,22 @@ export class LeagueSheetsService {
   ): Promise<void> {
     const existing = await this.gateway.getValues(this.config.adminSpreadsheetId, "'Transaction History'!A6:A");
     if (existing.some((row) => String(row[0] ?? '') === record.reference)) return;
-    const transactionRows = plan.kind === 'departure' ? [[
-      record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
-      plan.teams[0]!.franchise, 'Inactive', plan.playerIds[0]!, plan.players[0]!,
-      record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
-    ]] : plan.discordRoleChanges.length > 0 ? plan.discordRoleChanges.map((change, index) => {
+    const exitDestination = plan.kind === 'drop'
+      ? 'Free Agents'
+      : plan.kind === 'departure' ? 'Inactive'
+        : plan.kind === 'self-drop' ? SELF_DROP_LEAGUE_STATUS : undefined;
+    const transactionRows = exitDestination ? [
+      [
+        record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
+        plan.teams[0]!.franchise, exitDestination, plan.playerIds[0]!, plan.players[0]!,
+        record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
+      ],
+      ...(plan.playerIds[1] ? [[
+        record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
+        'Free Agents', plan.teams[0]!.franchise, plan.playerIds[1], plan.players[1]!,
+        record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
+      ]] : []),
+    ] : plan.discordRoleChanges.length > 0 ? plan.discordRoleChanges.map((change, index) => {
       const from = plan.teams.find((team) => change.remove.includes(team.teamRoleId));
       const to = plan.teams.find((team) => change.add.includes(team.teamRoleId));
       return [

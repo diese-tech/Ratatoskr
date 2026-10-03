@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDeparturePlan, buildRenamePlan, buildTradePlan } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan } from '../domain/leagueOperations.js';
 import { LeagueSheetDriftError, LeagueSheetsService, type LeagueSheetsGateway, type SheetValueUpdate } from './leagueSheets.js';
 
 type Rows = (string | number | boolean | null)[][];
@@ -12,6 +12,8 @@ class FakeGateway implements LeagueSheetsGateway {
   readonly writes: { spreadsheetId: string; updates: SheetValueUpdate[]; option: 'RAW' | 'USER_ENTERED' }[] = [];
   readonly appends: { spreadsheetId: string; range: string; values: Rows; option: 'RAW' | 'USER_ENTERED' }[] = [];
   readonly reads: { spreadsheetId: string; range: string }[] = [];
+  readonly presentationWrites: { sheetId: number; writeLegend: boolean; addRule: boolean }[] = [];
+  selfDropRuleExists = false;
   changed = false;
 
   key(spreadsheetId: string, range: string) { return `${spreadsheetId}:${range}`; }
@@ -58,6 +60,22 @@ class FakeGateway implements LeagueSheetsGateway {
   async append(spreadsheetId: string, range: string, values: Rows, option: 'RAW' | 'USER_ENTERED' = 'RAW') {
     this.appends.push({ spreadsheetId, range, values, option });
   }
+  async getSelfDropPresentation(spreadsheetId: string) {
+    return {
+      sheetId: 137554234,
+      legend: structuredClone(this.data.get(this.key(spreadsheetId, "'Player Name History'!J4:K4")) ?? []),
+      ruleExists: this.selfDropRuleExists,
+    };
+  }
+  async ensureSelfDropPresentation(spreadsheetId: string, presentation: { sheetId: number; writeLegend: boolean; addRule: boolean }) {
+    this.presentationWrites.push(presentation);
+    if (presentation.writeLegend) {
+      this.data.set(this.key(spreadsheetId, "'Player Name History'!J4:K4"), [[
+        'Red row', 'Self-Drop: suspended for the current season and banned for the next YSL season.',
+      ]]);
+    }
+    if (presentation.addRule) this.selfDropRuleExists = true;
+  }
 }
 
 function serviceFixture() {
@@ -76,13 +94,15 @@ function serviceFixture() {
     ['Discord ID', 'Current League Name', 'Known Name', 'Name Status', 'Division', 'Franchise', 'League Status', 'Recorded On', 'Last Confirmed', 'Found In', 'Notes'],
     ['one', 'One', 'OneLive', 'Current Discord Name', 'Vanaheim', 'Dream Walkers', 'Captain', '', '', '', ''],
     ['two', 'Two', 'TwoLive', 'Current Discord Name', 'Vanaheim', 'The Sewer', 'Player', '', '', '', ''],
+    ['free', 'Free', 'FreeLive', 'Current Discord Name', 'Vanaheim', '', 'Free Agent', '', '', '', ''],
   ];
   gateway.data.set(gateway.key('admin', "'League Teams'!A5:L100"), teams);
   gateway.data.set(gateway.key('admin', "'Current Rosters'!A5:J"), rosters);
   gateway.data.set(gateway.key('admin', "'Player Name History'!A5:K"), names);
+  gateway.data.set(gateway.key('admin', "'Player Name History'!J4:K4"), []);
   for (const division of ['Vanaheim', 'Alfheim', 'Svartalfheim']) {
     const rows = emptyPublic();
-    if (division === 'Vanaheim') { rows[4]![2] = 'One'; rows[15]![6] = 'Two'; }
+    if (division === 'Vanaheim') { rows[4]![2] = 'One'; rows[15]![6] = 'Two'; rows[24]![6] = 'Free'; }
     gateway.data.set(gateway.key('public', `'${division} Roster'!A1:O99`), rows);
   }
   return { gateway, service: new LeagueSheetsService(gateway, { adminSpreadsheetId: 'admin', publicSpreadsheetId: 'public' }) };
@@ -91,6 +111,7 @@ function serviceFixture() {
 const members = [
   { discordId: 'one', displayName: 'OneLive', roleIds: ['team-a', 'division-v'] },
   { discordId: 'two', displayName: 'TwoLive', roleIds: ['team-b', 'division-v'] },
+  { discordId: 'free', displayName: 'FreeLive', roleIds: ['free-agent', 'division-v'] },
 ];
 
 test('league sheet reader maps only the configured managed tabs and cells', async () => {
@@ -99,7 +120,7 @@ test('league sheet reader maps only the configured managed tabs and cells', asyn
   assert.equal(loaded.snapshot.teams.length, 2);
   assert.equal(loaded.snapshot.rosters[0]?.discordId, 'one');
   assert.deepEqual(loaded.snapshot.publicRosters.Vanaheim?.teams['Dream Walkers'], ['One']);
-  assert.deepEqual(loaded.snapshot.publicRosters.Vanaheim?.freeAgents, []);
+  assert.deepEqual(loaded.snapshot.publicRosters.Vanaheim?.freeAgents, ['Free']);
 });
 
 test('sheet preflight aborts before all writes when any audited value drifted', async () => {
@@ -164,6 +185,39 @@ test('trade writes only the affected admin rows and the two exact public player 
   assert.equal(reloaded.snapshot.rosters.find((row) => row.discordId === 'one')?.teamRoleId, 'team-b');
 });
 
+test('self-drop replacement writes one vacated roster row and installs the guarded red-row presentation', async () => {
+  const { gateway, service } = serviceFixture();
+  const loaded = await service.load(members, 'free-agent');
+  const plan = buildSelfDropPlan(loaded.snapshot, 'one', 'free');
+  const prepared = service.prepare(loaded, plan);
+  await service.apply(loaded, plan, {
+    reference: 'YSL-TRX-SELF-DROP', effectiveDate: '2026-10-03', processedById: 'admin', processedBy: 'Admin',
+  }, prepared);
+
+  const rosterRanges = gateway.writes.filter((write) => write.spreadsheetId === 'admin')
+    .flatMap((write) => write.updates.map((update) => update.range))
+    .filter((range) => range.startsWith("'Current Rosters'!"));
+  assert.deepEqual(rosterRanges, ["'Current Rosters'!A6:J6"]);
+  assert.deepEqual(gateway.presentationWrites, [{ sheetId: 137554234, writeLegend: true, addRule: true }]);
+  const reloaded = await service.load([
+    { discordId: 'one', displayName: 'OneLive', roleIds: ['division-v'] },
+    { discordId: 'two', displayName: 'TwoLive', roleIds: ['team-b', 'division-v'] },
+    { discordId: 'free', displayName: 'FreeLive', roleIds: ['team-a', 'division-v'] },
+  ], 'free-agent');
+  assert.equal(reloaded.snapshot.rosters.find((row) => row.discordId === 'free')?.sheetRow, 6);
+  assert.match(reloaded.snapshot.names.find((row) => row.discordId === 'one')!.leagueStatus, /Self-Drop/);
+  assert.equal(reloaded.sources.selfDropPresentation.ruleExists, true);
+});
+
+test('self-drop refuses to overwrite an unexpected legend value', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.set(gateway.key('admin', "'Player Name History'!J4:K4"), [['Manual legend', 'Keep me']]);
+  const loaded = await service.load(members, 'free-agent');
+  assert.throws(() => service.prepare(loaded, buildSelfDropPlan(loaded.snapshot, 'one')), /legend cells J4:K4.*unexpected/i);
+  assert.equal(gateway.writes.length, 0);
+  assert.equal(gateway.presentationWrites.length, 0);
+});
+
 test('public verification accepts a pickup written into an internal managed-block gap', async () => {
   const { gateway, service } = serviceFixture();
   const publicRows = gateway.data.get(gateway.key('public', "'Vanaheim Roster'!A1:O99"))!;
@@ -205,13 +259,7 @@ test('numeric-looking league names remain exact text in every managed admin upda
 
 test('free-agent rename history records the affected division', async () => {
   const { gateway, service } = serviceFixture();
-  gateway.data.get(gateway.key('admin', "'Player Name History'!A5:K"))!.push(
-    ['free', 'Free', 'FreeLive', 'Current Discord Name', 'Vanaheim', '', 'Free Agent', '', '', '', ''],
-  );
-  const loaded = await service.load([
-    ...members,
-    { discordId: 'free', displayName: 'FreeLive', roleIds: ['free-agent', 'division-v'] },
-  ], 'free-agent');
+  const loaded = await service.load(members, 'free-agent');
   const plan = buildRenamePlan(loaded.snapshot, 'free', 'Free Prime');
   await service.appendTransactionHistory(plan, {
     reference: 'YSL-TRX-FREE-RENAME', effectiveDate: '2026-09-30', processedById: 'admin', processedBy: 'Admin',
@@ -230,6 +278,20 @@ test('departure history records the former team and inactive destination without
   assert.deepEqual(gateway.appends[0]?.values[0], [
     'YSL-TRX-DEPARTURE', 'departure', '2026-09-30', 'Vanaheim', 'Dream Walkers', 'Inactive',
     'one', 'One', 'admin', '', 'Completed', 'Admin',
+  ]);
+});
+
+test('combined self-drop history records outgoing discipline and incoming replacement under one reference', async () => {
+  const { gateway, service } = serviceFixture();
+  const loaded = await service.load(members, 'free-agent');
+  const plan = buildSelfDropPlan(loaded.snapshot, 'one', 'free');
+  await service.appendTransactionHistory(plan, {
+    reference: 'YSL-TRX-SELF-DROP', effectiveDate: '2026-10-03', processedById: 'admin', processedBy: 'Admin',
+  });
+  assert.equal(gateway.appends[0]?.values.length, 2);
+  assert.deepEqual(gateway.appends[0]?.values.map((row) => [row[4], row[5], row[6]]), [
+    ['Dream Walkers', 'Suspended - Self-Drop (Current + Next Season)', 'one'],
+    ['Free Agents', 'Dream Walkers', 'free'],
   ]);
 });
 

@@ -663,4 +663,39 @@ export const migrations: Migration[] = [
         ON league_transactions (guild_id, status, created_at);
     `,
   },
+  {
+    id: 26,
+    name: 'league_self_drop_transactions',
+    sql: `
+      CREATE TABLE league_transactions_v26 (
+        reference TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('trade', 'drop', 'pickup', 'rename', 'departure', 'self-drop')),
+        actor_user_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'applying_discord', 'applying_sheets', 'announcement_pending', 'completed', 'failed', 'reconciliation_required'
+        )),
+        announcement_id TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        reconciliation_alerted_at TEXT
+      );
+
+      INSERT INTO league_transactions_v26 (
+        reference, guild_id, kind, actor_user_id, payload_json, status,
+        announcement_id, error_message, created_at, updated_at, reconciliation_alerted_at
+      )
+      SELECT
+        reference, guild_id, kind, actor_user_id, payload_json, status,
+        announcement_id, error_message, created_at, updated_at, reconciliation_alerted_at
+      FROM league_transactions;
+
+      DROP TABLE league_transactions;
+      ALTER TABLE league_transactions_v26 RENAME TO league_transactions;
+      CREATE INDEX idx_league_transactions_guild_status
+        ON league_transactions (guild_id, status, created_at);
+    `,
+  },
 ];

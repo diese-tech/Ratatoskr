@@ -6,7 +6,9 @@ import {
   buildDropPlan,
   buildPickupPlan,
   buildRenamePlan,
+  buildSelfDropPlan,
   buildTradePlan,
+  SELF_DROP_LEAGUE_STATUS,
   type LeagueSnapshot,
 } from './leagueOperations.js';
 
@@ -246,6 +248,38 @@ test('drop removes the roster assignment, adds the free-agent role, and preserve
   ]);
 });
 
+test('drop with replacement atomically reuses the roster and free-agent slots', () => {
+  const plan = buildDropPlan(snapshot(), 'two', 'free');
+  assert.equal(plan.rosters.some((row) => row.discordId === 'two'), false);
+  assert.deepEqual(plan.rosters.find((row) => row.discordId === 'free'), {
+    sheetRow: 7, division: 'Vanaheim', franchise: 'The Sewer', teamRoleId: 'team-b',
+    team: 'The Sewer VD', discordId: 'free', player: 'Free', rosterStatus: 'Player',
+  });
+  assert.deepEqual(plan.publicChanges, [
+    { division: 'Vanaheim', area: 'team', group: 'The Sewer', from: 'Two', to: 'Free' },
+    { division: 'Vanaheim', area: 'free-agent', group: 'Free Agents', from: 'Free', to: 'Two' },
+  ]);
+  assert.deepEqual(plan.discordRoleChanges, [
+    { discordId: 'two', remove: ['team-b'], add: ['free-agent'] },
+    { discordId: 'free', remove: ['free-agent'], add: ['team-b'] },
+  ]);
+});
+
+test('self-drop records the suspension without free agency and can fill the vacated slot', () => {
+  const plan = buildSelfDropPlan(snapshot(), 'two', 'free');
+  assert.equal(plan.kind, 'self-drop');
+  assert.equal(plan.nameUpdates.find((row) => row.discordId === 'two')?.leagueStatus, SELF_DROP_LEAGUE_STATUS);
+  assert.equal(plan.nameUpdates.find((row) => row.discordId === 'free')?.leagueStatus, 'Player');
+  assert.deepEqual(plan.discordRoleChanges, [
+    { discordId: 'two', remove: ['team-b'], add: [] },
+    { discordId: 'free', remove: ['free-agent'], add: ['team-b'] },
+  ]);
+  assert.deepEqual(plan.publicChanges, [
+    { division: 'Vanaheim', area: 'team', group: 'The Sewer', from: 'Two', to: 'Free' },
+    { division: 'Vanaheim', area: 'free-agent', group: 'Free Agents', from: 'Free', to: '' },
+  ]);
+});
+
 test('departure removes an absent player without creating a free agent or Discord role mutation', () => {
   const current = snapshot();
   current.discordMembers = current.discordMembers.filter((member) => member.discordId !== 'two');
@@ -259,6 +293,24 @@ test('departure removes an absent player without creating a free agent or Discor
   assert.deepEqual(plan.publicChanges, [
     { division: 'Vanaheim', area: 'team', group: 'The Sewer', from: 'Two', to: '' },
   ]);
+});
+
+test('departure with replacement mutates only the present replacement roles', () => {
+  const current = snapshot();
+  current.discordMembers = current.discordMembers.filter((member) => member.discordId !== 'two');
+  const plan = buildDeparturePlan(current, 'two', 'free');
+  assert.deepEqual(plan.discordRoleChanges, [
+    { discordId: 'free', remove: ['free-agent'], add: ['team-b'] },
+  ]);
+  assert.equal(plan.nameUpdates.find((row) => row.discordId === 'two')?.leagueStatus, 'Inactive');
+  assert.equal(plan.rosters.find((row) => row.discordId === 'free')?.sheetRow, 7);
+});
+
+test('replacement rejects the outgoing player and cross-division free agents', () => {
+  assert.throws(() => buildDropPlan(snapshot(), 'two', 'two'), /cannot replace themselves/i);
+  const current = snapshot();
+  current.names.find((row) => row.discordId === 'free')!.division = 'Alfheim';
+  assert.throws(() => buildSelfDropPlan(current, 'two', 'free'), /cross-division replacements/i);
 });
 
 test('departure rejects a player who is still in the server', () => {

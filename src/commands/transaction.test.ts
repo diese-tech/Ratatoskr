@@ -15,6 +15,18 @@ test('departure uses roster-backed autocomplete instead of Discord user selectio
   assert.equal('autocomplete' in player! ? player.autocomplete : false, true);
 });
 
+test('exit commands expose an optional Discord replacement and self-drop is a distinct transaction', () => {
+  const options = transactionCommand.toJSON().options ?? [];
+  for (const name of ['drop', 'departure', 'self-drop']) {
+    const command = options.find((option) => option.name === name);
+    const replacement = command && 'options' in command
+      ? command.options?.find((option) => option.name === 'replacement')
+      : undefined;
+    assert.equal(replacement?.type, 6, `${name} replacement must use Discord's user picker`);
+    assert.equal(replacement?.required ?? false, false);
+  }
+});
+
 test('departure autocomplete is human-readable, division-ordered, and stores stable Discord IDs', () => {
   const row = (overrides: Partial<LeagueRosterRow>): LeagueRosterRow => ({
     sheetRow: 6,

@@ -148,7 +148,10 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
     const currentNames = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
     if (currentNames.length !== 1) throw new Error(`Discord member ${discordId} must have exactly one current name record.`);
     if (!member) {
-      if (plan.kind === 'departure' && plan.playerIds.length === 1 && plan.discordRoleChanges.length === 0 && rosterRows.length === 1) {
+      const isDepartedPlayer = plan.kind === 'departure'
+        && discordId === plan.playerIds[0]
+        && !plan.discordRoleChanges.some((change) => change.discordId === discordId);
+      if (isDepartedPlayer && rosterRows.length === 1) {
         continue;
       }
       throw new Error(`Discord member ${discordId} could not be loaded.`);
@@ -251,11 +254,35 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
   }
   const team = plan.teams[0]!;
   if (plan.kind === 'departure') {
+    const replacement = plan.players[1] && plan.playerIds[1]
+      ? ` ${mention(team.teamRoleId)} picks up <@${plan.playerIds[1]}> in their place.`
+      : '';
     return {
       content: mention(team.teamRoleId),
       allowedRoleIds: [team.teamRoleId],
       title: 'Word Travels the Branches',
-      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n**${plan.players[0]}** leaves ${mention(team.teamRoleId)} and the YSL server.`,
+      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n**${plan.players[0]}** leaves ${mention(team.teamRoleId)} and the YSL server.${replacement}`,
+      footer: `Posted by ${actorName}`,
+    };
+  }
+  if (plan.kind === 'self-drop') {
+    const replacement = plan.playerIds[1]
+      ? ` ${mention(team.teamRoleId)} picks up <@${plan.playerIds[1]}> in their place.`
+      : '';
+    return {
+      content: mention(team.teamRoleId),
+      allowedRoleIds: [team.teamRoleId],
+      title: 'Word Travels the Branches',
+      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n<@${plan.playerIds[0]}> self-drops from ${mention(team.teamRoleId)}.${replacement}`,
+      footer: `Posted by ${actorName}`,
+    };
+  }
+  if (plan.kind === 'drop' && plan.playerIds[1]) {
+    return {
+      content: mention(team.teamRoleId),
+      allowedRoleIds: [team.teamRoleId],
+      title: 'Word Travels the Branches',
+      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${mention(team.teamRoleId)} drops <@${plan.playerIds[0]}> into free agency and picks up <@${plan.playerIds[1]}>.`,
       footer: `Posted by ${actorName}`,
     };
   }
@@ -321,8 +348,13 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     }
     assertDiscordPreconditions(loaded.snapshot, plan);
     if (plan.kind === 'departure') await input.discord.validateMemberAbsent(plan.playerIds[0]!);
-    const prepared = input.sheets.prepare(loaded, plan);
-    const roleValidationPlayerIds = plan.kind === 'departure' ? [] : plan.playerIds;
+    let prepared: PreparedLeagueSheetMutation;
+    try {
+      prepared = input.sheets.prepare(loaded, plan);
+    } catch (error) {
+      throw openReconciliationTicket(input, auditDate, error);
+    }
+    const roleValidationPlayerIds = plan.kind === 'departure' ? plan.playerIds.slice(1) : plan.playerIds;
     const beforeByPlayer = new Map(roleValidationPlayerIds.map((discordId) => [
       discordId,
       expectedRoleState(loaded.snapshot, loaded.snapshot.rosters, loaded.snapshot.names, discordId),

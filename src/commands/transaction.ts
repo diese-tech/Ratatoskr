@@ -11,6 +11,7 @@ import {
   buildDropPlan,
   buildPickupPlan,
   buildRenamePlan,
+  buildSelfDropPlan,
   buildTradePlan,
   LeagueMutationValidationError,
   type LeagueMutationPlan,
@@ -46,6 +47,13 @@ export const transactionCommand = new SlashCommandBuilder()
     .setName('drop')
     .setDescription('Release a rostered player into their division free-agent pool.')
     .addUserOption((option) => option.setName('player').setDescription('Rostered player to release.').setRequired(true))
+    .addUserOption((option) => option.setName('replacement').setDescription('Optional same-division free agent replacing them.'))
+    .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
+  .addSubcommand((subcommand) => subcommand
+    .setName('self-drop')
+    .setDescription('Record a self-drop and optional same-division replacement.')
+    .addUserOption((option) => option.setName('player').setDescription('Rostered player who self-dropped.').setRequired(true))
+    .addUserOption((option) => option.setName('replacement').setDescription('Optional same-division free agent replacing them.'))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('departure')
@@ -55,6 +63,7 @@ export const transactionCommand = new SlashCommandBuilder()
       .setDescription('Departed rostered player.')
       .setAutocomplete(true)
       .setRequired(true))
+    .addUserOption((option) => option.setName('replacement').setDescription('Optional same-division free agent replacing them.'))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('pickup')
@@ -78,10 +87,18 @@ function planBuilder(interaction: ChatInputCommandInteraction): (snapshot: Leagu
   }
   if (subcommand === 'departure') {
     const player = interaction.options.getString('player', true);
-    return (snapshot) => buildDeparturePlan(snapshot, player);
+    const replacement = interaction.options.getUser('replacement')?.id;
+    return (snapshot) => buildDeparturePlan(snapshot, player, replacement);
   }
   const player = interaction.options.getUser('player', true).id;
-  if (subcommand === 'drop') return (snapshot) => buildDropPlan(snapshot, player);
+  if (subcommand === 'drop') {
+    const replacement = interaction.options.getUser('replacement')?.id;
+    return (snapshot) => buildDropPlan(snapshot, player, replacement);
+  }
+  if (subcommand === 'self-drop') {
+    const replacement = interaction.options.getUser('replacement')?.id;
+    return (snapshot) => buildSelfDropPlan(snapshot, player, replacement);
+  }
   if (subcommand === 'pickup') {
     const teamRole = interaction.options.getRole('team', true).id;
     return (snapshot) => buildPickupPlan(snapshot, player, teamRole);
@@ -99,9 +116,12 @@ function intentKey(interaction: ChatInputCommandInteraction): string {
     return JSON.stringify([subcommand, interaction.options.getUser('player_one', true).id, interaction.options.getUser('player_two', true).id]);
   }
   if (subcommand === 'departure') {
-    return JSON.stringify([subcommand, interaction.options.getString('player', true)]);
+    return JSON.stringify([subcommand, interaction.options.getString('player', true), interaction.options.getUser('replacement')?.id ?? null]);
   }
   const player = interaction.options.getUser('player', true).id;
+  if (subcommand === 'drop' || subcommand === 'self-drop') {
+    return JSON.stringify([subcommand, player, interaction.options.getUser('replacement')?.id ?? null]);
+  }
   if (subcommand === 'pickup') return JSON.stringify([subcommand, player, interaction.options.getRole('team', true).id]);
   if (subcommand === 'rename') return JSON.stringify([subcommand, player, interaction.options.getString('league_name', true)]);
   return JSON.stringify([subcommand, player]);
@@ -117,8 +137,12 @@ function preview(plan: LeagueMutationPlan): string {
       'No changes were made. Re-run this command with `confirm:True` to process the approved trade.',
     ].join('\n');
   }
-  if (plan.kind === 'drop') return `**Drop preview**\n${plan.players[0]}: ${plan.teams[0]!.franchise} → Free Agents\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
-  if (plan.kind === 'departure') return `**Departure preview**\n${plan.players[0]}: ${plan.teams[0]!.franchise} → Inactive\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
+  if (plan.kind === 'drop' || plan.kind === 'departure' || plan.kind === 'self-drop') {
+    const destination = plan.kind === 'drop' ? 'Free Agents' : plan.kind === 'departure' ? 'Inactive' : 'Self-Drop Suspension';
+    const replacement = plan.players[1] ? `\n${plan.players[1]}: Free Agents → ${plan.teams[0]!.franchise}` : '';
+    const label = plan.kind === 'self-drop' ? 'Self-drop' : plan.kind[0]!.toUpperCase() + plan.kind.slice(1);
+    return `**${label} preview**\n${plan.players[0]}: ${plan.teams[0]!.franchise} → ${destination}${replacement}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
+  }
   if (plan.kind === 'pickup') return `**Pickup preview**\n${plan.players[0]}: Free Agents → ${plan.teams[0]!.franchise}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
   return `**Name-change preview**\nOfficial league name: ${plan.players[0]}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
 }
