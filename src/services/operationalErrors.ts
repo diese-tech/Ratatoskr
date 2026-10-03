@@ -23,6 +23,13 @@ const OperationalErrorsEnvSchema = z.object({
 });
 const operationalErrorsEnv = OperationalErrorsEnvSchema.parse(process.env);
 
+// The live YSL Valkyrie staff role predates Ratatoskr's current permanent-
+// scaffold binding and is intentionally permitted in staff-ops. Keep this
+// stable ID bridge narrow: never infer staff access from the singular name.
+// Issue #67 owns the explicit managed-resource reconciliation that will make
+// this compatibility entry removable.
+const LEGACY_YSL_VALKYRIE_ROLE_ID = '1541186877145485424';
+
 export function redactOperationalText(value: string): string {
   let result = value;
   for (const [name, secret] of Object.entries(process.env)) {
@@ -56,6 +63,7 @@ export async function getValidatedStaffChannel(client: Client, db: Database.Data
     const role = getActiveManagedResourceByLogicalKey(db, guildId, serverRoleLogicalKey(key));
     return role?.resourceType === 'role' ? [role.discordResourceId] : [];
   }));
+  staffIds.add(LEGACY_YSL_VALKYRIE_ROLE_ID);
   for (const id of [process.env.ROLE_ALLFATHER_ID, process.env.ROLE_AESIR_ID]) if (id) staffIds.add(id);
   if (channel.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel, false)) throw new Error('staff-ops is public');
   const bot = guild.members.me ?? await guild.members.fetchMe();

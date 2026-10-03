@@ -148,11 +148,13 @@ function fixture() {
     ['guild', { id: 'guild', name: '@everyone', permissions: new PermissionsBitField() }],
     ['staff', { id: 'staff', name: 'Valkyries', permissions: new PermissionsBitField() }],
     ['production', { id: 'production', name: 'Norns', permissions: new PermissionsBitField() }],
+    ['1541186877145485424', { id: '1541186877145485424', name: 'Valkyrie', permissions: new PermissionsBitField() }],
     ['player', { id: 'player', name: 'League Players', permissions: new PermissionsBitField() }],
   ]);
   let publicChannel = false;
   let playersAllowed = false;
   let productionAllowed = false;
+  let legacyValkyrieAllowed = false;
   let sendAllowed = true;
   let readHistoryAllowed = true;
   let failSend = false;
@@ -167,6 +169,7 @@ function fixture() {
         ...(readHistoryAllowed ? [PermissionFlagsBits.ReadMessageHistory] : [])] : []
       : target.id === 'staff' || (target.id === 'guild' && publicChannel) || (target.id === 'player' && playersAllowed)
         || (target.id === 'production' && productionAllowed)
+        || (target.id === '1541186877145485424' && legacyValkyrieAllowed)
         ? [PermissionFlagsBits.ViewChannel] : []),
     messages: { fetch: async ({ limit, before }: { limit: number; before?: string }) => {
       const rows = [...history.values()]
@@ -199,6 +202,7 @@ function fixture() {
       publicChannel = which === 'public';
       playersAllowed = which === 'players';
       productionAllowed = which === 'production';
+      legacyValkyrieAllowed = which === 'legacy-valkyrie';
       sendAllowed = which !== 'denied';
       readHistoryAllowed = which !== 'no-history';
       failSend = which === 'failure';
@@ -216,6 +220,14 @@ test('staff-ops accepts the managed Production identity after its Discord role i
       guildId: 'guild', discordResourceId: 'production', resourceType: 'role',
       scaffoldDomain: 'server', logicalKey: 'server:role:production',
     });
+    assert.equal(await getValidatedStaffChannel(f.client, f.db, 'guild'), f.channel);
+  } finally { f.db.close(); }
+});
+
+test('staff-ops accepts the explicitly approved legacy Valkyrie role by stable ID', async () => {
+  const f = fixture();
+  try {
+    f.set('legacy-valkyrie');
     assert.equal(await getValidatedStaffChannel(f.client, f.db, 'guild'), f.channel);
   } finally { f.db.close(); }
 });
