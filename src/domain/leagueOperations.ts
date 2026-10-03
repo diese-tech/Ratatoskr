@@ -74,6 +74,13 @@ export type LeagueMutationPlan = {
   playerIds: string[];
 };
 
+export class LeagueMutationValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LeagueMutationValidationError';
+  }
+}
+
 function sorted(values: Iterable<string>): string[] {
   return [...values].map((value) => value.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
@@ -269,19 +276,21 @@ export function auditLeagueRoster(snapshot: LeagueSnapshot): string[] {
 
 function requireRoster(snapshot: LeagueSnapshot, discordId: string): LeagueRosterRow {
   const rows = snapshot.rosters.filter((row) => row.discordId === discordId);
-  if (rows.length !== 1) throw new Error(rows.length ? `${discordId} has multiple roster assignments.` : `${discordId} is not rostered.`);
+  if (!rows.length) throw new LeagueMutationValidationError(`<@${discordId}> is not rostered on an active YSL team.`);
+  if (rows.length !== 1) throw new Error(`${discordId} has multiple roster assignments.`);
   return rows[0]!;
 }
 
 function requireTeam(snapshot: LeagueSnapshot, roleId: string): LeagueTeam {
   const team = snapshot.teams.find((candidate) => candidate.active && candidate.teamRoleId === roleId);
-  if (!team) throw new Error('The selected role is not an active YSL team role.');
+  if (!team) throw new LeagueMutationValidationError('The selected role is not an active YSL team role.');
   return team;
 }
 
 function currentNameRow(snapshot: LeagueSnapshot, discordId: string): LeagueNameRow {
   const rows = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
-  if (rows.length !== 1) throw new Error(`${discordId} must have exactly one current name record.`);
+  if (!rows.length) throw new LeagueMutationValidationError(`<@${discordId}> is not registered in Player Name History.`);
+  if (rows.length !== 1) throw new Error(`${discordId} has multiple current name records.`);
   return rows[0]!;
 }
 
@@ -309,19 +318,19 @@ function freeAgentAreaUsesName(snapshot: LeagueSnapshot, division: LeagueDivisio
 }
 
 export function buildTradePlan(snapshot: LeagueSnapshot, firstId: string, secondId: string): LeagueMutationPlan {
-  if (firstId === secondId) throw new Error('A trade requires two different players.');
+  if (firstId === secondId) throw new LeagueMutationValidationError('A trade requires two different players.');
   const first = requireRoster(snapshot, firstId);
   const second = requireRoster(snapshot, secondId);
   const firstTeam = requireTeam(snapshot, first.teamRoleId);
   const secondTeam = requireTeam(snapshot, second.teamRoleId);
-  if (firstTeam.division !== secondTeam.division) throw new Error('Cross-division trades are not supported.');
-  if (firstTeam.teamRoleId === secondTeam.teamRoleId) throw new Error('Both players are already on the same team.');
+  if (firstTeam.division !== secondTeam.division) throw new LeagueMutationValidationError('Cross-division trades are not supported.');
+  if (firstTeam.teamRoleId === secondTeam.teamRoleId) throw new LeagueMutationValidationError('Both players are already on the same team.');
   const names = canonicalNames(snapshot);
   const firstName = names.get(firstId)!;
   const secondName = names.get(secondId)!;
   if (teamAreaUsesName(snapshot, secondTeam.teamRoleId, firstName, new Set([secondId]))
     || teamAreaUsesName(snapshot, firstTeam.teamRoleId, secondName, new Set([firstId]))) {
-    throw new Error('A traded player name is already used in the destination roster area.');
+    throw new LeagueMutationValidationError('A traded player name is already used in the destination roster area.');
   }
   return {
     kind: 'trade',
@@ -350,7 +359,7 @@ export function buildDropPlan(snapshot: LeagueSnapshot, discordId: string): Leag
   const team = requireTeam(snapshot, roster.teamRoleId);
   const currentName = currentNameRow(snapshot, discordId);
   if (freeAgentAreaUsesName(snapshot, team.division, currentName.currentLeagueName)) {
-    throw new Error('That player name is already used in the destination free-agent area.');
+    throw new LeagueMutationValidationError('That player name is already used in the destination free-agent area.');
   }
   return {
     kind: 'drop',
@@ -370,16 +379,16 @@ export function buildDropPlan(snapshot: LeagueSnapshot, discordId: string): Leag
 }
 
 export function buildPickupPlan(snapshot: LeagueSnapshot, discordId: string, teamRoleId: string): LeagueMutationPlan {
-  if (snapshot.rosters.some((row) => row.discordId === discordId)) throw new Error('The selected player is not a free agent.');
+  if (snapshot.rosters.some((row) => row.discordId === discordId)) throw new LeagueMutationValidationError('The selected player is not a free agent.');
   const team = requireTeam(snapshot, teamRoleId);
   const currentName = currentNameRow(snapshot, discordId);
-  if (currentName.leagueStatus !== 'Free Agent') throw new Error('The selected player is not a free agent.');
-  if (currentName.division !== team.division) throw new Error('Cross-division pickups are not supported.');
+  if (currentName.leagueStatus !== 'Free Agent') throw new LeagueMutationValidationError('The selected player is not a free agent.');
+  if (currentName.division !== team.division) throw new LeagueMutationValidationError('Cross-division pickups are not supported.');
   if (teamAreaUsesName(snapshot, team.teamRoleId, currentName.currentLeagueName)) {
-    throw new Error('That player name is already used in the destination roster area.');
+    throw new LeagueMutationValidationError('That player name is already used in the destination roster area.');
   }
   const member = snapshot.discordMembers.find((candidate) => candidate.discordId === discordId);
-  if (!member?.roleIds.includes(snapshot.freeAgentRoleId)) throw new Error('The selected player does not have the Free Agent role.');
+  if (!member?.roleIds.includes(snapshot.freeAgentRoleId)) throw new LeagueMutationValidationError('The selected player does not have the Free Agent role.');
   const nextRow = Math.max(5, ...snapshot.rosters.map((row) => row.sheetRow)) + 1;
   return {
     kind: 'pickup',
@@ -409,10 +418,10 @@ export function buildPickupPlan(snapshot: LeagueSnapshot, discordId: string, tea
 
 export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, requestedName: string): LeagueMutationPlan {
   const nextName = requestedName.trim();
-  if (!nextName) throw new Error('League name cannot be blank.');
+  if (!nextName) throw new LeagueMutationValidationError('League name cannot be blank.');
   const current = currentNameRow(snapshot, discordId);
   const roster = snapshot.rosters.find((row) => row.discordId === discordId);
-  if (current.currentLeagueName === nextName) throw new Error('That is already the player\'s Current League Name.');
+  if (current.currentLeagueName === nextName) throw new LeagueMutationValidationError('That is already the player\'s Current League Name.');
   const nameUsedInSameArea = snapshot.names.some((row) => {
     if (row.discordId === discordId || row.nameStatus !== 'Current Discord Name' || row.currentLeagueName !== nextName) return false;
     const otherRoster = snapshot.rosters.find((candidate) => candidate.discordId === row.discordId);
@@ -420,7 +429,7 @@ export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, req
       ? otherRoster?.teamRoleId === roster.teamRoleId
       : !otherRoster && row.leagueStatus === 'Free Agent' && row.division === current.division;
   });
-  if (nameUsedInSameArea) throw new Error('That league name is already used by another player in this roster area.');
+  if (nameUsedInSameArea) throw new LeagueMutationValidationError('That league name is already used by another player in this roster area.');
   const existingAlias = snapshot.names.some((row) => row.discordId === discordId && row.knownName === current.currentLeagueName);
   return {
     kind: 'rename',
