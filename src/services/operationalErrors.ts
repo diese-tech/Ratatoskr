@@ -49,7 +49,10 @@ export async function getValidatedStaffChannel(client: Client, db: Database.Data
   if (!channel || channel.type !== ChannelType.GuildText || channel.guild.id !== guildId) throw new Error('staff-ops channel is unavailable or belongs to another guild');
   const guild = channel.guild;
   await guild.roles.fetch();
-  const staffIds = new Set(['allfather', 'aesir', 'valkyries'].flatMap((key) => {
+  // Production is the stable managed identity for the live Norns role. Its
+  // Discord display name may change, but its stored resource ID remains the
+  // authority for the intentional staff-ops access granted by league admins.
+  const staffIds = new Set(['allfather', 'aesir', 'valkyries', 'production'].flatMap((key) => {
     const role = getActiveManagedResourceByLogicalKey(db, guildId, serverRoleLogicalKey(key));
     return role?.resourceType === 'role' ? [role.discordResourceId] : [];
   }));
