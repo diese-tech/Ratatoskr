@@ -2,8 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ChannelType, Collection, PermissionFlagsBits, PermissionsBitField, type Client } from 'discord.js';
 import { openDatabase, insertManagedResource } from '../db/index.js';
+import {
+  createLeagueTransaction,
+  createOrGetLeagueReconciliationTicket,
+  getLeagueTransaction,
+  getLeagueReconciliationTicket,
+  markLeagueTransactionReconciliationRequired,
+  transitionLeagueTransaction,
+} from '../db/repositories/leagueOperations.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
-import { handleInteractionError, interactionOperationContext } from './interactionErrors.js';
+import {
+  handleInteractionError,
+  interactionOperationContext,
+  leagueTransactionReconciliationContext,
+} from './interactionErrors.js';
+import { LeagueReconciliationTicketError } from './leagueTransactions.js';
 
 test('nested Scout failures identify their setup and operation without confusing division or page IDs', () => {
   const context = (customId: string, values: string[] = []) => interactionOperationContext({
@@ -18,6 +31,14 @@ test('nested Scout failures identify their setup and operation without confusing
   assert.equal(context('scout:create:post:draft-id').setupId, undefined);
   assert.equal(context('scout:edituser:explicit:12:3:45').setupId, 12);
   assert.equal(context('scout:publishedswap:invalid:3').setupId, undefined);
+});
+
+test('startup transaction recovery includes partial-state manual-repair guidance', () => {
+  const context = leagueTransactionReconciliationContext('guild', 'Sheet verification failed.');
+  assert.equal(context.action, 'League transaction reconciliation');
+  assert.match(context.next ?? '', /Sheet verification failed/);
+  assert.match(context.next ?? '', /reconcile them manually/);
+  assert.match(context.next ?? '', /do not retry/i);
 });
 
 test('unexpected failure acknowledges privately before staff lookup and reports even if the token expires', async (t) => {
@@ -50,6 +71,75 @@ test('unexpected failure acknowledges privately before staff lookup and reports 
   } finally { f.db.close(); }
 });
 
+test('a delivered league reconciliation ticket is marked alerted and gives staff manual-repair guidance', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  createOrGetLeagueReconciliationTicket(f.db, {
+    reference: 'YSL-REC-TEST', guildId: 'guild', actorUserId: 'admin', fingerprint: 'fingerprint', summary: 'Roster drift.',
+  });
+  const interaction: any = {
+    client: f.client, guildId: 'guild', isChatInputCommand: () => true, commandName: 'transaction',
+    options: { getSubcommand: () => 'trade' }, isRepliable: () => true, replied: false, deferred: false,
+    deferReply: async () => { interaction.deferred = true; }, editReply: async () => undefined,
+  };
+  await handleInteractionError(
+    interaction,
+    f.db,
+    new LeagueReconciliationTicketError('Ratatoskr made no changes. Reconcile league data, then retry.', 'YSL-REC-TEST'),
+    'guild',
+  );
+  assert.ok(getLeagueReconciliationTicket(f.db, 'YSL-REC-TEST')?.alertedAt);
+  assert.match(f.sent[0].content, /League sheet reconciliation/);
+  assert.match(f.sent[0].content, /Ratatoskr made no changes/);
+  f.db.close();
+});
+
+test('a delivered immediate transaction reconciliation alert is not retried on restart', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  createLeagueTransaction(f.db, {
+    reference: 'YSL-TRX-TEST', guildId: 'guild', kind: 'trade', actorUserId: 'admin', payload: {},
+  });
+  markLeagueTransactionReconciliationRequired(f.db, 'YSL-TRX-TEST', 'Discord rollback failed.');
+  const interaction: any = {
+    client: f.client, guildId: 'guild', isChatInputCommand: () => true, commandName: 'transaction',
+    options: { getSubcommand: () => 'trade' }, isRepliable: () => true, replied: false, deferred: false,
+    deferReply: async () => { interaction.deferred = true; }, editReply: async () => undefined,
+  };
+  const error = Object.assign(new Error('Discord rollback failed.'), { reference: 'YSL-TRX-TEST' });
+  await handleInteractionError(interaction, f.db, error, 'guild');
+  assert.ok(getLeagueTransaction(f.db, 'YSL-TRX-TEST')?.reconciliationAlertedAt);
+  assert.match(f.sent[0].content, /League transaction reconciliation/);
+  assert.match(f.sent[0].content, /Discord rollback failed/);
+  assert.match(f.sent[0].content, /reconcile them manually/);
+  assert.match(f.sent[0].content, /do not retry/i);
+  f.db.close();
+});
+
+test('a safely failed transaction reports without requiring message history', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  createLeagueTransaction(f.db, {
+    reference: 'YSL-TRX-FAILED', guildId: 'guild', kind: 'trade', actorUserId: 'admin', payload: {},
+  });
+  transitionLeagueTransaction(f.db, 'YSL-TRX-FAILED', 'applying_discord', 'failed', { errorMessage: 'Rolled back.' });
+  f.set('no-history');
+  const interaction: any = {
+    client: f.client, guildId: 'guild', isChatInputCommand: () => true, commandName: 'transaction',
+    options: { getSubcommand: () => 'trade' }, isRepliable: () => true, replied: false, deferred: false,
+    deferReply: async () => { interaction.deferred = true; }, editReply: async () => undefined,
+  };
+  await handleInteractionError(
+    interaction,
+    f.db,
+    Object.assign(new Error('Rolled back safely.'), { reference: 'YSL-TRX-FAILED' }),
+    'guild',
+  );
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].content, /Reference:/);
+  f.db.close();
+});
+
 function fixture() {
   const db = openDatabase(':memory:');
   const sent: any[] = [];
@@ -62,23 +152,55 @@ function fixture() {
   let publicChannel = false;
   let playersAllowed = false;
   let sendAllowed = true;
+  let readHistoryAllowed = true;
   let failSend = false;
+  let loseSendResponse = false;
   let missing = false;
   const bot = { id: 'bot' };
   const guild = { id: 'guild', roles: { everyone: roles.get('guild'), cache: roles, fetch: async () => roles }, members: { me: bot } };
   const channel = { type: ChannelType.GuildText, guild,
     permissionOverwrites: { cache: new Collection() },
     permissionsFor: (target: any) => new PermissionsBitField(target.id === 'bot'
-      ? sendAllowed ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] : []
+      ? sendAllowed ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
+        ...(readHistoryAllowed ? [PermissionFlagsBits.ReadMessageHistory] : [])] : []
       : target.id === 'staff' || (target.id === 'guild' && publicChannel) || (target.id === 'player' && playersAllowed)
         ? [PermissionFlagsBits.ViewChannel] : []),
-    send: async (payload: any) => { attempted.push(payload); if (failSend) throw new Error('Forbidden'); sent.push(payload); },
+    messages: { fetch: async ({ limit, before }: { limit: number; before?: string }) => {
+      const rows = [...history.values()]
+        .filter((message) => before === undefined || Number(message.id) < Number(before))
+        .sort((left, right) => Number(right.id) - Number(left.id))
+        .slice(0, limit);
+      return new Collection(rows.map((message) => [message.id, message]));
+    } },
+    send: async (payload: any) => {
+      attempted.push(payload);
+      if (failSend) throw new Error('Forbidden');
+      sent.push(payload);
+      const message = { id: String(++nextMessageId), author: bot, content: payload.content, nonce: payload.nonce };
+      history.set(message.id, message);
+      if (loseSendResponse) throw new Error('Response lost');
+      return message;
+    },
   };
+  let nextMessageId = 0;
+  const history = new Collection<string, any>();
   const client = { user: bot, channels: { fetch: async (id: string) => { assert.equal(id, 'staff-ops'); return missing ? null : channel; } } } as unknown as Client;
   insertManagedResource(db, { guildId: 'guild', discordResourceId: 'staff-ops', resourceType: 'text_channel', scaffoldDomain: 'server', logicalKey: 'server:channel:admin:staff_ops:text_channel' });
   insertManagedResource(db, { guildId: 'guild', discordResourceId: 'staff', resourceType: 'role', scaffoldDomain: 'server', logicalKey: 'server:role:valkyries' });
   return { db, client, sent, attempted, channel,
-    set: (which: string) => { publicChannel = which === 'public'; playersAllowed = which === 'players'; sendAllowed = which !== 'denied'; failSend = which === 'failure'; missing = which === 'missing'; } };
+    addHistory: (content: string) => {
+      const message = { id: String(++nextMessageId), author: bot, content, nonce: null };
+      history.set(message.id, message);
+    },
+    set: (which: string) => {
+      publicChannel = which === 'public';
+      playersAllowed = which === 'players';
+      sendAllowed = which !== 'denied';
+      readHistoryAllowed = which !== 'no-history';
+      failSend = which === 'failure';
+      loseSendResponse = which === 'lost-response';
+      missing = which === 'missing';
+    } };
 }
 
 test('operational report shares a reference, redacts credentials and suppresses repeated staff alerts', async (t) => {
@@ -133,6 +255,47 @@ test('a lifecycle staff report retries failed delivery with a stable reference a
     assert.match(f.sent[0].content, /Reference: lifecycle-reference/);
 
     await reportOperationalError(f.client, f.db, context, new Error('Discord edit failed'), options);
+    assert.equal(f.sent.length, 1);
+  } finally { f.db.close(); }
+});
+
+test('a delayed staff-report retry finds an accepted message after its send response was lost', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  const context = { guildId: 'guild', action: 'League transaction reconciliation' };
+  const options = { reference: 'YSL-TRX-LOST-RESPONSE', retryUndelivered: true } as const;
+  try {
+    f.set('lost-response');
+    const uncertain = await reportOperationalError(f.client, f.db, context, new Error('Response lost'), options);
+    assert.equal(uncertain.staffDelivered, false);
+    assert.equal(f.sent.length, 1);
+    for (let index = 0; index < 105; index += 1) f.addHistory(`Later staff message ${index}`);
+
+    f.set('available');
+    const recovered = await reportOperationalError(f.client, f.db, context, new Error('Response lost'), options);
+    assert.equal(recovered.staffDelivered, true);
+    assert.equal(f.sent.length, 1, 'history recovery must not send a duplicate alert');
+    assert.equal(f.attempted.length, 1);
+  } finally { f.db.close(); }
+});
+
+test('ordinary alerts remain deliverable without message history while durable retries fail safely', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  try {
+    f.set('no-history');
+    const ordinary = await reportOperationalError(
+      f.client, f.db, { guildId: 'guild', action: 'Ordinary failure' }, new Error('Failed'),
+    );
+    assert.equal(ordinary.staffDelivered, true);
+    const durable = await reportOperationalError(
+      f.client,
+      f.db,
+      { guildId: 'guild', action: 'Durable recovery' },
+      new Error('Failed'),
+      { reference: 'durable-reference', retryUndelivered: true },
+    );
+    assert.equal(durable.staffDelivered, false);
     assert.equal(f.sent.length, 1);
   } finally { f.db.close(); }
 });

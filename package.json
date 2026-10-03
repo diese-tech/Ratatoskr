@@ -22,6 +22,7 @@
     "chrono-node": "^2.10.1",
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",
+    "google-auth-library": "^10.9.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {

@@ -13,12 +13,17 @@ import { reconcileFinishedScoutPosts } from './services/scoutFinish.js';
 import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
 import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } from './services/scoutPublish.js';
 import { reportOperationalError } from './services/operationalErrors.js';
-import { handleInteractionError } from './services/interactionErrors.js';
+import { handleInteractionError, leagueTransactionReconciliationContext } from './services/interactionErrors.js';
 import { startScoutNotificationWorker } from './services/scoutNotifications.js';
 import { processDueScoutLifecycleCleanups } from './services/scoutLifecycleCleanup.js';
 import { sqliteScoutLifecycleCleanupDependencies } from './services/scoutLifecycleCleanupCompatibility.js';
 import { refreshScoutStatusCardSafely, type ScoutCardDependencies } from './services/scoutCardLifecycle.js';
 import type { ScoutSignupDependencies } from './services/scoutSignups.js';
+import { loadLeagueOperationsConfig } from './config/league-operations.js';
+import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from './services/leagueSheets.js';
+import { DiscordLeagueGateway } from './services/leagueDiscord.js';
+import { reconcilePendingLeagueTransactions } from './services/leagueTransactions.js';
+import { runIsolatedStartupRecovery } from './services/startupRecovery.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -26,6 +31,13 @@ import type { ScoutSignupDependencies } from './services/scoutSignups.js';
 const storage = openApplicationStorage();
 const db = storage.legacyDatabase;
 console.log(`Storage ready (${storage.backend}).`);
+
+// League mutations are a configured production capability. Validate every
+// required ID and the service-account payload before Discord login so Railway
+// restarts a bad deployment instead of leaving an apparently-online bot with
+// part of startup silently skipped.
+const leagueConfig = loadLeagueOperationsConfig();
+const leagueSheetsConnection = createGoogleLeagueSheetsGateway();
 
 const client = new Client({
   intents: [
@@ -91,6 +103,38 @@ client.once('clientReady', async () => {
   console.log(`Ratatoskr online as ${client.user?.tag ?? 'unknown user'}`);
   await registerGuildCommands(client, env.DISCORD_GUILD_ID);
   console.log('Guild slash commands registered.');
+  const leagueRecovered = await runIsolatedStartupRecovery(
+    'League transaction recovery',
+    async () => {
+      const leagueGuild = await client.guilds.fetch(env.DISCORD_GUILD_ID);
+      await reconcilePendingLeagueTransactions({
+        db,
+        sheets: new LeagueSheetsService(leagueSheetsConnection.gateway, leagueSheetsConnection.config),
+        discord: new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId),
+        reportError: async (reference, error) => reportOperationalError(
+          client,
+          db,
+          leagueTransactionReconciliationContext(
+            env.DISCORD_GUILD_ID,
+            error instanceof Error ? error.message : String(error),
+          ),
+          error,
+          { reference, retryUndelivered: true },
+        ),
+      });
+    },
+    async (error) => {
+      await reportOperationalError(
+        client,
+        db,
+        { guildId: env.DISCORD_GUILD_ID, action: 'League transaction startup recovery' },
+        error,
+      );
+    },
+  );
+  console.log(leagueRecovered
+    ? 'Pending league transaction notices reconciled.'
+    : 'League transaction recovery failed; continuing existing Scout startup.');
   await reconcilePostingScoutSetups(client, db);
   console.log('Pending scout signup posts reconciled.');
   await reconcilePendingScoutPublishes(client, db);

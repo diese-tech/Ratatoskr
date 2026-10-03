@@ -63,6 +63,16 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     ],
   },
   {
+    title: 'League Operations',
+    entries: [
+      {
+        usage: '/transaction trade | drop | pickup | rename',
+        description:
+          'Previews an approved roster change, then processes it with confirm:true. Ratatoskr verifies Discord and both roster sheets before changing roles, records the administrator, and posts completed moves in transactions.',
+      },
+    ],
+  },
+  {
     title: '🛡️ Admin Setup Commands',
     entries: [
       {
