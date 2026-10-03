@@ -10,7 +10,7 @@ import {
   markLeagueTransactionReconciliationRequired,
   transitionLeagueTransaction,
 } from '../db/repositories/leagueOperations.js';
-import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
+import { getValidatedStaffChannel, reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import {
   handleInteractionError,
   interactionOperationContext,
@@ -147,10 +147,12 @@ function fixture() {
   const roles = new Collection<string, any>([
     ['guild', { id: 'guild', permissions: new PermissionsBitField() }],
     ['staff', { id: 'staff', permissions: new PermissionsBitField() }],
+    ['production', { id: 'production', permissions: new PermissionsBitField() }],
     ['player', { id: 'player', permissions: new PermissionsBitField() }],
   ]);
   let publicChannel = false;
   let playersAllowed = false;
+  let productionAllowed = false;
   let sendAllowed = true;
   let readHistoryAllowed = true;
   let failSend = false;
@@ -164,6 +166,7 @@ function fixture() {
       ? sendAllowed ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
         ...(readHistoryAllowed ? [PermissionFlagsBits.ReadMessageHistory] : [])] : []
       : target.id === 'staff' || (target.id === 'guild' && publicChannel) || (target.id === 'player' && playersAllowed)
+        || (target.id === 'production' && productionAllowed)
         ? [PermissionFlagsBits.ViewChannel] : []),
     messages: { fetch: async ({ limit, before }: { limit: number; before?: string }) => {
       const rows = [...history.values()]
@@ -195,6 +198,7 @@ function fixture() {
     set: (which: string) => {
       publicChannel = which === 'public';
       playersAllowed = which === 'players';
+      productionAllowed = which === 'production';
       sendAllowed = which !== 'denied';
       readHistoryAllowed = which !== 'no-history';
       failSend = which === 'failure';
@@ -202,6 +206,19 @@ function fixture() {
       missing = which === 'missing';
     } };
 }
+
+test('staff-ops accepts the managed Production identity after its Discord role is renamed to Norns', async () => {
+  const f = fixture();
+  try {
+    f.set('production');
+    await assert.rejects(getValidatedStaffChannel(f.client, f.db, 'guild'), /non-staff role/);
+    insertManagedResource(f.db, {
+      guildId: 'guild', discordResourceId: 'production', resourceType: 'role',
+      scaffoldDomain: 'server', logicalKey: 'server:role:production',
+    });
+    assert.equal(await getValidatedStaffChannel(f.client, f.db, 'guild'), f.channel);
+  } finally { f.db.close(); }
+});
 
 test('operational report shares a reference, redacts credentials and suppresses repeated staff alerts', async (t) => {
   const f = fixture();
