@@ -105,7 +105,7 @@ function preview(plan: LeagueMutationPlan): string {
 }
 
 export async function replyToTransactionValidation(
-  interaction: Pick<ChatInputCommandInteraction, 'editReply'>,
+  interaction: { editReply(content: string): Promise<unknown> },
   error: unknown,
 ): Promise<boolean> {
   if (!(error instanceof LeagueMutationValidationError)) return false;
