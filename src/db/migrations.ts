@@ -698,4 +698,24 @@ export const migrations: Migration[] = [
         ON league_transactions (guild_id, status, created_at);
     `,
   },
+  {
+    id: 27,
+    name: 'scheduled_league_audit_cards',
+    sql: `
+      CREATE TABLE league_audit_cards (
+        guild_id TEXT PRIMARY KEY,
+        result TEXT NOT NULL CHECK (result IN ('clean', 'dirty', 'error')),
+        findings_json TEXT NOT NULL,
+        run_reference TEXT NOT NULL,
+        run_at TEXT NOT NULL,
+        trigger TEXT NOT NULL CHECK (trigger IN ('startup', 'scheduled')),
+        phase TEXT NOT NULL CHECK (phase IN ('send_pending', 'delete_pending', 'settled')),
+        send_attempted INTEGER NOT NULL DEFAULT 0 CHECK (send_attempted IN (0, 1)),
+        current_message_id TEXT,
+        stale_message_id TEXT,
+        next_run_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `,
+  },
 ];

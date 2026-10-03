@@ -24,6 +24,8 @@ The private preview is durable and scoped to the server, administrator, and exac
 
 Manual sheet changes are never silently normalized. Ratatoskr updates only the roster rows and public cells owned by the approved transaction. If a manual entry makes the managed sources disagree, the command makes no changes and opens a durable, deduplicated reconciliation ticket. The ticket is delivered to the private staff-ops channel and remains retryable across restarts until delivery is confirmed. Staff reconcile the named Discord and sheet surfaces manually; the next clean full audit resolves the open ticket.
 
+Ratatoskr also runs that full comparison after startup and every day at 6:00 AM in `America/New_York`. Scheduled audits are read-only and do not create a second synchronization authority. Drift is shown as one unpinged rolling staff-ops card: Ratatoskr posts and durably records the fresh card before deleting the previous card. Failed delivery retains the prior card; failed cleanup is retried without posting another duplicate. A clean audit removes the outstanding card and resolves its durable state. Scheduling is timezone-based so the run remains at 6:00 AM through daylight-saving changes.
+
 The mutation lifecycle is durable:
 
 1. Validate authorization, the saved preview, and current Discord/sheet state.
@@ -78,5 +80,6 @@ A standalone self-drop uses the same self-drop sentence without the replacement 
 - Staff get one previewed command instead of several manual edits.
 - Unexpected manual edits stop automation instead of being overwritten.
 - Every confirmed mutation detects broad drift; command preflight protects the exact transaction from later drift.
+- Startup and daily audits surface drift before staff need the next transaction while keeping only one authoritative audit card in staff-ops.
 - The first release intentionally rejects cross-division moves and leaves captain/staff role changes manual.
 - Production rollout requires the Google service-account secret, both workbook IDs, the Free Agent role ID, and the transactions channel ID.

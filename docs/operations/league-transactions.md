@@ -20,11 +20,20 @@ Drop, self-drop, and departure accept an optional **replacement** selected from 
 ## Automatic safety checks
 
 - Every confirmed mutation runs a complete Discord/private-sheet/public-sheet audit.
+- Ratatoskr runs the same read-only comparison after startup and daily at **6:00 AM America/New_York**. This requires no administrator action and follows EST/EDT automatically.
 - Departure may resolve the selected player's expected absence; every unrelated absent player or other inconsistency still blocks the command.
 - Every confirmed mutation re-reads the managed sheet values and player roles immediately before changing anything.
 - A mismatch stops the command; Ratatoskr does not normalize or overwrite the unexpected value. It records one durable reconciliation ticket and alerts staff-ops.
 - Current Rosters updates are row-targeted. Unrelated rows, internal blanks, and manually maintained cells on unrelated rows are preserved.
 - Public writes are restricted to the eight seven-player team blocks and the two free-agent columns on each visible roster tab. Draft tabs are never read or written by the transaction service.
+
+## Rolling staff-ops audit card
+
+- A dirty or unreadable scheduled audit posts one unpinged **League Roster Audit** card in staff-ops. It never changes a Discord role or spreadsheet cell.
+- Every startup or daily run with persistent drift posts the new timestamped card first, records it, and then deletes the previous card.
+- If the new post cannot be confirmed, the previous card remains. If old-card deletion fails, Ratatoskr keeps the new card authoritative and retries cleanup without another duplicate post.
+- A clean audit deletes the outstanding card and resolves the saved audit state. Missing already-deleted messages are treated as clean recovery.
+- Transaction reconciliation tickets remain separate because they describe a specific blocked or interrupted command. Discord people/name-history synchronization remains separate under issue #128.
 
 ## Required Railway variables
 
