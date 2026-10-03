@@ -62,7 +62,6 @@ src/
   domain/         Deterministic league concepts and business rules
   services/       Application and Discord-facing workflow services
   knowledge/      Future approved-document retrieval layer
-
 docs/
   architecture/   Architecture and workflow decisions
   canon/          Approved YSL source-of-truth material
@@ -164,3 +163,19 @@ Operational rollout and recovery guidance lives under [`docs/operations/`](docs/
 Ratatoskr's roadmap is intentionally driven by **league jobs**, not feature parity with general-purpose Discord bots. Candidate future domains include fuller season lifecycle management, team/roster operations, durable transactions, match operations, notification preferences, and grounded league-rule lookup.
 
 Those ideas are planning inputs, not automatic implementation commitments. See [issue #24](https://github.com/diese-tech/Ratatoskr/issues/24) for the current product-scope map.
+
+## Contributing
+
+Contributions are welcome when they align with Ratatoskr's YSL-focused scope and repository conventions. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture expectations, validation requirements, pull request standards, and guidance for agent-authored work.
+
+## Security
+
+Please do not report security vulnerabilities through public issues. See [SECURITY.md](SECURITY.md) for Ratatoskr's supported-version policy and private vulnerability reporting process.
+
+## License and attribution
+
+Ratatoskr's software is licensed under the [Apache License 2.0](LICENSE.md). See [NOTICE](NOTICE) for required attribution and intellectual-property notices.
+
+The Apache 2.0 license covers the Ratatoskr software except where material is explicitly identified otherwise. Yggdrasil Smite League names, logos, branding, and league-specific creative assets are not licensed for public reuse unless explicitly stated otherwise.
+
+SMITE, Hi-Rez Studios, and related game names, characters, artwork, trademarks, and other third-party game assets remain the property of their respective rights holders. Ratatoskr is an independent community project and is not affiliated with, endorsed by, or sponsored by Hi-Rez Studios.
