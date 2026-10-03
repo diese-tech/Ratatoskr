@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDeparturePlan, buildRenamePlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDropPlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
@@ -32,12 +32,14 @@ function snapshot(): LeagueSnapshot {
     names: [
       { sheetRow: 6, discordId: 'one', currentLeagueName: 'One', knownName: 'One', nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: 'A', leagueStatus: 'Captain' },
       { sheetRow: 7, discordId: 'two', currentLeagueName: 'Two', knownName: 'Two', nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: 'B', leagueStatus: 'Player' },
+      { sheetRow: 8, discordId: 'free', currentLeagueName: 'Free', knownName: 'Free', nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: '', leagueStatus: 'Free Agent' },
     ],
     discordMembers: [
       { discordId: 'one', displayName: 'One', roleIds: ['team-a', 'division'] },
       { discordId: 'two', displayName: 'Two', roleIds: ['team-b', 'division'] },
+      { discordId: 'free', displayName: 'Free', roleIds: ['free-agent', 'division'] },
     ],
-    publicRosters: { Vanaheim: { teams: { A: ['One'], B: ['Two'] }, freeAgents: [] } },
+    publicRosters: { Vanaheim: { teams: { A: ['One'], B: ['Two'] }, freeAgents: ['Free'] } },
     freeAgentRoleId: 'free-agent',
   };
 }
@@ -111,6 +113,13 @@ test('confirmation rejects a plan that differs from the administrator preview', 
   f.db.close();
 });
 
+test('replacement selection changes the durable preview fingerprint', () => {
+  assert.notEqual(
+    leagueTransactionPlanFingerprint(buildDropPlan(snapshot(), 'one')),
+    leagueTransactionPlanFingerprint(buildDropPlan(snapshot(), 'one', 'free')),
+  );
+});
+
 test('trade announcement uses the locked Yggdrasil copy and pings only both team roles', () => {
   const plan = buildTradePlan(snapshot(), 'one', 'two');
   assert.deepEqual(buildLeagueAnnouncement(plan, 'Admin'), {
@@ -140,6 +149,22 @@ test('departure announcement uses the locked copy, stored league name, and only 
   });
 });
 
+test('combined exit announcements use one team notice and the locked transaction language', () => {
+  const drop = buildDropPlan(snapshot(), 'one', 'free');
+  assert.equal(buildLeagueAnnouncement(drop, 'Admin')?.description,
+    'Ratatoskr carries word from <@&team-a>.\n\n<@&team-a> drops <@one> into free agency and picks up <@free>.');
+
+  const selfDrop = buildSelfDropPlan(snapshot(), 'one', 'free');
+  assert.equal(buildLeagueAnnouncement(selfDrop, 'Admin')?.description,
+    'Ratatoskr carries word from <@&team-a>.\n\n<@one> self-drops from <@&team-a>. <@&team-a> picks up <@free> in their place.');
+
+  const departed = snapshot();
+  departed.discordMembers = departed.discordMembers.filter((member) => member.discordId !== 'one');
+  const departure = buildDeparturePlan(departed, 'one', 'free');
+  assert.equal(buildLeagueAnnouncement(departure, 'Admin')?.description,
+    'Ratatoskr carries word from <@&team-a>.\n\n**One** leaves <@&team-a> and the YSL server. <@&team-a> picks up <@free> in their place.');
+});
+
 test('departure resolves only its selected absent roster member and skips Discord role mutation', async () => {
   const f = fixture();
   f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
@@ -155,6 +180,36 @@ test('departure resolves only its selected absent roster member and skips Discor
   assert.equal(getLeagueTransaction(f.db, result.reference)?.kind, 'departure');
   assert.equal(f.events.some((event) => event.startsWith('discord-preflight:')), false);
   assert.equal(f.events.some((event) => event.startsWith('discord:one')), false);
+  f.db.close();
+});
+
+test('departure with replacement validates and mutates only the present replacement', async () => {
+  const f = fixture();
+  f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
+  await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDeparturePlan(current, 'one', 'free'),
+  });
+  assert.deepEqual(f.events, [
+    'sheet-preflight', 'discord-absence:one', 'sheet-targets', 'discord-preflight:free',
+    'discord:free', 'sheet-apply', 'announce', 'history',
+  ]);
+  f.db.close();
+});
+
+test('self-drop with replacement performs both live Discord role changes under one transaction', async () => {
+  const f = fixture();
+  const result = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildSelfDropPlan(current, 'one', 'free'),
+  });
+  assert.equal(getLeagueTransaction(f.db, result.reference)?.kind, 'self-drop');
+  assert.deepEqual(f.events, [
+    'sheet-preflight', 'sheet-targets', 'discord-preflight:one', 'discord-preflight:free',
+    'discord:one', 'discord:free', 'sheet-apply', 'announce', 'history',
+  ]);
   f.db.close();
 });
 

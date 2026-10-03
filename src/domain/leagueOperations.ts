@@ -63,7 +63,7 @@ export type PublicRosterChange = {
 export type DiscordRoleChange = { discordId: string; remove: string[]; add: string[] };
 
 export type LeagueMutationPlan = {
-  kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure';
+  kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure' | 'self-drop';
   rosters: LeagueRosterRow[];
   nameUpdates: LeagueNameRow[];
   nameHistoryAppend?: Omit<LeagueNameRow, 'sheetRow'>;
@@ -73,6 +73,8 @@ export type LeagueMutationPlan = {
   players: string[];
   playerIds: string[];
 };
+
+export const SELF_DROP_LEAGUE_STATUS = 'Suspended - Self-Drop (Current + Next Season)';
 
 export class LeagueMutationValidationError extends Error {
   constructor(message: string) {
@@ -359,51 +361,126 @@ export function buildTradePlan(snapshot: LeagueSnapshot, firstId: string, second
   };
 }
 
-export function buildDropPlan(snapshot: LeagueSnapshot, discordId: string): LeagueMutationPlan {
+type ExitKind = 'drop' | 'departure' | 'self-drop';
+
+function buildExitPlan(
+  snapshot: LeagueSnapshot,
+  kind: ExitKind,
+  discordId: string,
+  replacementId?: string,
+): LeagueMutationPlan {
+  if (replacementId === discordId) throw new LeagueMutationValidationError('The outgoing player cannot replace themselves.');
   const roster = requireRoster(snapshot, discordId);
+  if (kind === 'departure' && snapshot.discordMembers.some((member) => member.discordId === discordId)) {
+    throw new LeagueMutationValidationError('That player is still in the YSL server. Use `/transaction drop` or `/transaction self-drop`.');
+  }
   const team = requireTeam(snapshot, roster.teamRoleId);
   const currentName = currentNameRow(snapshot, discordId);
-  if (freeAgentAreaUsesName(snapshot, team.division, currentName.currentLeagueName)) {
+  if (kind === 'drop' && freeAgentAreaUsesName(snapshot, team.division, currentName.currentLeagueName)) {
     throw new LeagueMutationValidationError('That player name is already used in the destination free-agent area.');
   }
+
+  let replacementName: LeagueNameRow | undefined;
+  if (replacementId) {
+    if (snapshot.rosters.some((row) => row.discordId === replacementId)) {
+      throw new LeagueMutationValidationError('The selected replacement is not a free agent.');
+    }
+    replacementName = currentNameRow(snapshot, replacementId);
+    if (replacementName.leagueStatus !== 'Free Agent') {
+      throw new LeagueMutationValidationError('The selected replacement is not a free agent.');
+    }
+    if (replacementName.division !== team.division) {
+      throw new LeagueMutationValidationError('Cross-division replacements are not supported.');
+    }
+    const member = snapshot.discordMembers.find((candidate) => candidate.discordId === replacementId);
+    if (!member?.roleIds.includes(snapshot.freeAgentRoleId)) {
+      throw new LeagueMutationValidationError('The selected replacement does not have the Free Agent role.');
+    }
+    if (teamAreaUsesName(snapshot, team.teamRoleId, replacementName.currentLeagueName, new Set([discordId]))) {
+      throw new LeagueMutationValidationError('That player name is already used in the destination roster area.');
+    }
+  }
+
+  const outgoingStatus = kind === 'drop'
+    ? 'Free Agent'
+    : kind === 'departure' ? 'Inactive' : SELF_DROP_LEAGUE_STATUS;
+  const nextRosters = snapshot.rosters
+    .filter((row) => row.discordId !== discordId)
+    .map((row) => ({ ...row }));
+  if (replacementId && replacementName) {
+    nextRosters.push({
+      sheetRow: roster.sheetRow,
+      division: team.division,
+      franchise: team.franchise,
+      teamRoleId: team.teamRoleId,
+      team: team.teamRole,
+      discordId: replacementId,
+      player: replacementName.currentLeagueName,
+      rosterStatus: 'Player',
+    });
+    nextRosters.sort((left, right) => left.sheetRow - right.sheetRow);
+  }
+
+  const publicChanges: PublicRosterChange[] = [{
+    division: team.division,
+    area: 'team',
+    group: team.franchise,
+    from: currentName.currentLeagueName,
+    to: replacementName?.currentLeagueName ?? '',
+  }];
+  if (kind === 'drop') {
+    publicChanges.push({
+      division: team.division,
+      area: 'free-agent',
+      group: 'Free Agents',
+      from: replacementName?.currentLeagueName ?? '',
+      to: currentName.currentLeagueName,
+    });
+  } else if (replacementName) {
+    publicChanges.push({
+      division: team.division,
+      area: 'free-agent',
+      group: 'Free Agents',
+      from: replacementName.currentLeagueName,
+      to: '',
+    });
+  }
+
+  const discordRoleChanges = kind === 'departure' ? [] : [{
+    discordId,
+    remove: [team.teamRoleId],
+    add: kind === 'drop' ? [snapshot.freeAgentRoleId] : [],
+  }];
+  if (replacementId) {
+    discordRoleChanges.push({ discordId: replacementId, remove: [snapshot.freeAgentRoleId], add: [team.teamRoleId] });
+  }
+
   return {
-    kind: 'drop',
-    rosters: snapshot.rosters.filter((row) => row.discordId !== discordId).map((row) => ({ ...row })),
+    kind,
+    rosters: nextRosters,
     nameUpdates: snapshot.names.map((row) => row.sheetRow === currentName.sheetRow
-      ? { ...row, franchise: '', leagueStatus: 'Free Agent' }
-      : { ...row }),
-    publicChanges: [
-      { division: team.division, area: 'team', group: team.franchise, from: currentName.currentLeagueName, to: '' },
-      { division: team.division, area: 'free-agent', group: 'Free Agents', from: '', to: currentName.currentLeagueName },
-    ],
-    discordRoleChanges: [{ discordId, remove: [team.teamRoleId], add: [snapshot.freeAgentRoleId] }],
+      ? { ...row, franchise: '', leagueStatus: outgoingStatus }
+      : replacementName && row.sheetRow === replacementName.sheetRow
+        ? { ...row, franchise: team.franchise, leagueStatus: 'Player' }
+        : { ...row }),
+    publicChanges,
+    discordRoleChanges,
     teams: [team],
-    players: [currentName.currentLeagueName],
-    playerIds: [discordId],
+    players: [currentName.currentLeagueName, ...(replacementName ? [replacementName.currentLeagueName] : [])],
+    playerIds: [discordId, ...(replacementId ? [replacementId] : [])],
   };
 }
 
-export function buildDeparturePlan(snapshot: LeagueSnapshot, discordId: string): LeagueMutationPlan {
-  const roster = requireRoster(snapshot, discordId);
-  if (snapshot.discordMembers.some((member) => member.discordId === discordId)) {
-    throw new LeagueMutationValidationError('That player is still in the YSL server. Use `/transaction drop` to move them into free agency.');
-  }
-  const team = requireTeam(snapshot, roster.teamRoleId);
-  const currentName = currentNameRow(snapshot, discordId);
-  return {
-    kind: 'departure',
-    rosters: snapshot.rosters.filter((row) => row.discordId !== discordId).map((row) => ({ ...row })),
-    nameUpdates: snapshot.names.map((row) => row.sheetRow === currentName.sheetRow
-      ? { ...row, franchise: '', leagueStatus: 'Inactive' }
-      : { ...row }),
-    publicChanges: [
-      { division: team.division, area: 'team', group: team.franchise, from: currentName.currentLeagueName, to: '' },
-    ],
-    discordRoleChanges: [],
-    teams: [team],
-    players: [currentName.currentLeagueName],
-    playerIds: [discordId],
-  };
+export function buildDropPlan(snapshot: LeagueSnapshot, discordId: string, replacementId?: string): LeagueMutationPlan {
+  return buildExitPlan(snapshot, 'drop', discordId, replacementId);
+}
+
+export function buildDeparturePlan(snapshot: LeagueSnapshot, discordId: string, replacementId?: string): LeagueMutationPlan {
+  return buildExitPlan(snapshot, 'departure', discordId, replacementId);
+}
+
+export function buildSelfDropPlan(snapshot: LeagueSnapshot, discordId: string, replacementId?: string): LeagueMutationPlan {
+  return buildExitPlan(snapshot, 'self-drop', discordId, replacementId);
 }
 
 export function buildPickupPlan(snapshot: LeagueSnapshot, discordId: string, teamRoleId: string): LeagueMutationPlan {

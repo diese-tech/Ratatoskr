@@ -10,9 +10,13 @@ The YSL-owned workbook remains the public presentation surface. The private **YS
 
 ## Decision
 
-Ratatoskr owns the execution of approved `/transaction trade`, `/transaction drop`, `/transaction pickup`, `/transaction rename`, and `/transaction departure` commands. The administrator command is authoritative; the sheets are outputs and audit records, not a second command surface.
+Ratatoskr owns the execution of approved `/transaction trade`, `/transaction drop`, `/transaction self-drop`, `/transaction pickup`, `/transaction rename`, and `/transaction departure` commands. The administrator command is authoritative; the sheets are outputs and audit records, not a second command surface.
 
 `drop` moves a current Discord member into their division free-agent pool. `departure` resolves a rostered player who has already left Discord: it selects the player from Current Rosters by stable Discord ID, removes the active private/public roster assignment, marks the player `Inactive`, preserves identity and name history, and performs no Discord role or free-agent mutation. The selected absence is the only full-audit exception; unrelated drift still fails closed.
+
+`self-drop` is a disciplinary roster exit, not a Free Agent move. It removes the active team assignment and team role, records `Suspended - Self-Drop (Current + Next Season)` in Player Name History, and uses that explicit transaction language as the staff eligibility trigger. There is no Discord suspension role. Player Name History displays the semantic status with guarded red conditional formatting and a human-readable legend; the color is never the authoritative record.
+
+Drop, self-drop, and departure may include one same-division Free Agent replacement. The exit and pickup share one preview fingerprint, durable transaction reference, role/sheet mutation, history append, and public notice. The vacated Current Rosters row and public team slot are reused, while the Free Agent list changes according to the exit type. The domain and transaction services remain independent of Discord component or Fluxcord session state so a later Fluxcord surface can reuse the same behavior.
 
 Before every confirmed mutation, Ratatoskr compares all configured player team roles in Discord with Current Rosters, canonical names, visible public team blocks, and division free-agent lists. The result is recorded in SQLite for that America/New_York league day. Every transaction also revalidates the exact managed sheet values immediately before mutation.
 
@@ -58,6 +62,16 @@ Departure notices use the stored league name because the departed player is no l
 > Posted by [admin]
 
 The message content pings the configured team role.
+
+Combined exit/replacement notices keep the same title, lead, footer, and single team-role ping. Their transaction line is explicit:
+
+> [Team] drops [outgoing player] into free agency and picks up [replacement].
+
+> [outgoing player] self-drops from [Team]. [Team] picks up [replacement] in their place.
+
+> **[departed league name]** leaves [Team] and the YSL server. [Team] picks up [replacement] in their place.
+
+A standalone self-drop uses the same self-drop sentence without the replacement sentence. Existing standalone drop and departure wording remains unchanged.
 
 ## Consequences
 
