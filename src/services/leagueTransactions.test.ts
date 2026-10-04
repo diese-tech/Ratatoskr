@@ -351,7 +351,7 @@ test('targeted preflight rejects stale current-name assignment metadata after th
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
-  }), /current name record.*does not match/i);
+  }), /Player Name History.*Current Rosters.*make the assignments match/i);
   assert.deepEqual(f.events, []);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
