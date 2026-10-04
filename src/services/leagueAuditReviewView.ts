@@ -8,6 +8,19 @@ export type LeagueAuditReviewView = {
 
 export type LeagueAuditResolutionAction = 'use-league-name' | 'use-roster-name' | 'repair-roles' | 'sync-public-roster' | 'mark-inactive';
 
+export function buildLeagueAuditRepairReply(
+  result: { status: 'clean' | 'dirty' | 'error'; issues: string[] },
+  reference: string,
+): string {
+  if (result.status === 'error') {
+    return `Repair completed, but Ratatoskr could not refresh the audit card because Discord or a roster sheet was temporarily unavailable. The repair was saved, and the audit will retry automatically. Reference: ${reference}`;
+  }
+  if (result.status === 'clean') {
+    return `Repair completed. Ratatoskr refreshed the audit card; no issues remain. Reference: ${reference}`;
+  }
+  return `Repair completed. Ratatoskr refreshed the audit card; ${result.issues.length} issue${result.issues.length === 1 ? '' : 's'} remain. Reference: ${reference}`;
+}
+
 function categoryFor(finding: string): string {
   if (finding.includes('Current Rosters:') && finding.includes('Player Name History:') && finding.includes('Make the names match.')) return 'Player names';
   if (finding.includes('no longer in the Discord server')) return 'Departures and inactive players';
