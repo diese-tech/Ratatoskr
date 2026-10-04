@@ -144,6 +144,22 @@ test('rename exemption does not bypass unrelated league drift', async () => {
   f.db.close();
 });
 
+test('rename exemption does not overwrite a different manual Current Rosters name', async () => {
+  const f = fixture();
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  f.current.rosters.find((row) => row.discordId === 'one')!.player = 'Manual Third Name';
+
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  }), /Discord name now:[\s\S]*Current Rosters sheet: “Manual Third Name”[\s\S]*Player Name History sheet: “One”/i);
+
+  assert.equal(f.events.includes('sheet-apply'), false);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
+  f.db.close();
+});
+
 test('confirmation rejects a plan that differs from the administrator preview', async () => {
   const f = fixture();
   const previewed = buildTradePlan(f.current, 'one', 'two');

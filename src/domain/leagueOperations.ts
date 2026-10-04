@@ -205,7 +205,9 @@ export function auditLeagueRoster(
     const member = memberById.get(discordId);
     if (!member) continue;
     const roster = rosterById.get(discordId);
-    if (discordId !== options.allowDiscordNameRepairMemberId
+    const managedNamesAgree = !roster || roster.player === rows[0]!.currentLeagueName;
+    const expectedDiscordRename = discordId === options.allowDiscordNameRepairMemberId && managedNamesAgree;
+    if (!expectedDiscordRename
       && (rows[0]!.currentLeagueName !== member.displayName || (roster && roster.player !== member.displayName))) {
       issues.push(`Managed player names for ${discordId} do not match the current Discord display name.`);
     }
