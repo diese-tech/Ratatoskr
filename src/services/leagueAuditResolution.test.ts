@@ -153,6 +153,42 @@ test('confirmed sheet repair rechecks the exact finding before applying and retu
   } finally { db.close(); }
 });
 
+test('Discord-name repair stops before writing if the authoritative name changes during confirmation', async () => {
+  const current = snapshot();
+  const finding = humanizeLeagueAuditIssues(current, auditLeagueRoster(current))[0]!;
+  let memberReads = 0;
+  let sheetWrites = 0;
+  const db = openDatabase(':memory:');
+  try {
+    await assert.rejects(() => executeLeagueAuditRepair({
+      db, operationScope: {}, guildId: 'guild', auditReference: 'YSL-AUD-1234',
+      actorUserId: 'admin', actorName: 'Admin', now: new Date('2026-10-04T12:00:00Z'),
+      expectedFinding: finding, action: 'use-discord-name', freeAgentRoleId: 'free-agent',
+      members: {
+        getMembers: async () => {
+          memberReads += 1;
+          return memberReads === 1
+            ? current.discordMembers
+            : current.discordMembers.map((member) => member.discordId === playerId
+              ? { ...member, displayName: 'Newer Discord Name' }
+              : member);
+        },
+      },
+      sheets: {
+        load: async () => ({ snapshot: current, sources: {} as never }),
+        prepare: () => ({ publicUpdates: [] }),
+        apply: async () => { sheetWrites += 1; },
+      },
+      discord: { reconcileManagedRoles: async () => undefined },
+    }), /changed since this review page opened/i);
+
+    assert.equal(memberReads, 2);
+    assert.equal(sheetWrites, 0);
+    const repair = db.prepare('SELECT status FROM league_audit_repairs').get() as { status: string };
+    assert.equal(repair.status, 'failed');
+  } finally { db.close(); }
+});
+
 test('confirmed repair refuses stale findings without writing either system', async () => {
   const current = snapshot();
   let writes = 0;

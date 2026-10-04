@@ -324,9 +324,12 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     const plan = input.buildPlan(loaded.snapshot);
     const issues = humanizeLeagueAuditIssues(
       loaded.snapshot,
-      auditLeagueRoster(loaded.snapshot, plan.kind === 'departure'
-        ? { allowAbsentRosterMemberId: plan.playerIds[0] }
-        : {}),
+      auditLeagueRoster(loaded.snapshot,
+        plan.kind === 'departure'
+          ? { allowAbsentRosterMemberId: plan.playerIds[0] }
+          : plan.kind === 'rename'
+            ? { allowDiscordNameRepairMemberId: plan.playerIds[0] }
+            : {}),
     );
     recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: issues.length ? 'failed' : 'passed', issues });
     if (issues.length) {

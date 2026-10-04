@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDeparturePlan, buildDropPlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
@@ -92,6 +92,36 @@ test('every confirmed mutation audits before Discord and completes the durable s
   ]);
   assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   assert.equal(getLeagueTransaction(f.db, result.reference)?.announcementId, 'message');
+  f.db.close();
+});
+
+test('rename can repair only its targeted Discord-name drift without bypassing the remaining audit', async () => {
+  const f = fixture();
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+
+  const result = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  });
+
+  assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
+  assert.ok(f.events.includes('sheet-apply'));
+  f.db.close();
+});
+
+test('rename exemption does not bypass unrelated league drift', async () => {
+  const f = fixture();
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  f.current.discordMembers.find((member) => member.discordId === 'two')!.roleIds.push('team-a');
+
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  }), /multiple team roles/i);
+
+  assert.equal(f.events.includes('sheet-apply'), false);
   f.db.close();
 });
 

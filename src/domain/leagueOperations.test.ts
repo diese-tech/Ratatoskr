@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   auditLeagueRoster,
   buildDeparturePlan,
+  buildDiscordRenamePlan,
   buildDropPlan,
   buildPickupPlan,
   buildRenamePlan,
@@ -353,6 +354,17 @@ test('rename changes the canonical name everywhere while retaining the old canon
   assert.deepEqual(plan.publicChanges, [
     { division: 'Vanaheim', area: 'team', group: 'Dream Walkers', from: 'One', to: 'One Prime' },
   ]);
+});
+
+test('Discord-authoritative rename accepts only the player current Discord display name', () => {
+  const current = snapshot();
+  current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+
+  assert.throws(
+    () => buildDiscordRenamePlan(current, 'one', 'Anything Else'),
+    /must exactly match.*Discord display name.*One Prime/i,
+  );
+  assert.equal(buildDiscordRenamePlan(current, 'one', 'One Prime').players[0], 'One Prime');
 });
 
 test('rename rejects a canonical name already used in the same managed roster area', () => {

@@ -328,7 +328,9 @@ async function applyDurableRepair(input: {
       throw new Error('The repair result could not be marked complete in Ratatoskr.');
     }
   } catch (error) {
-    if (error instanceof LeagueMutationValidationError || error instanceof LeagueSheetDriftError) {
+    if (error instanceof LeagueMutationValidationError
+      || error instanceof LeagueSheetDriftError
+      || error instanceof LeagueAuditRepairNoWriteError) {
       failLeagueAuditRepair(input.db, input.reference, error.message);
       throw new LeagueAuditRepairNoWriteError(error.message);
     }
@@ -393,13 +395,26 @@ export async function executeLeagueAuditRepair(input: {
     await applyDurableRepair({
       ...input,
       reference,
-      apply: () => input.sheets.apply(loaded, plan, {
-        reference,
-        effectiveDate: leagueDate(input.now),
-        processedById: input.actorUserId,
-        processedBy: input.actorName,
-        approvalNote: 'Ratatoskr approved roster audit repair',
-      }, prepared),
+      apply: async () => {
+        if (input.action === 'use-discord-name') {
+          let currentMembers: DiscordLeagueMember[];
+          try { currentMembers = await input.members.getMembers(); }
+          catch {
+            throw new LeagueAuditRepairNoWriteError(
+              'Ratatoskr could not recheck the player\'s current Discord name. No changes were made; try again.',
+            );
+          }
+          const currentName = currentMembers.find((member) => member.discordId === plan.playerIds[0])?.displayName.trim();
+          if (!currentName || currentName !== plan.players[0]) throw new LeagueAuditRepairStaleError();
+        }
+        await input.sheets.apply(loaded, plan, {
+          reference,
+          effectiveDate: leagueDate(input.now),
+          processedById: input.actorUserId,
+          processedBy: input.actorName,
+          approvalNote: 'Ratatoskr approved roster audit repair',
+        }, prepared);
+      },
     });
     return { reference };
   } finally {
