@@ -93,7 +93,9 @@ function cardFor(result: 'dirty' | 'error', issues: string[], now: Date, trigger
     ? 'Ratatoskr could not read Discord or one of the roster sheets. No changes were made. A Ratatoskr maintainer should check which connection failed; the next audit will retry automatically.'
     : `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.`;
   const categories = result === 'error' ? [] : [
-    ['Player names', issues.filter((issue) => issue.includes('Current Rosters:') && issue.includes('Player Name History:') && issue.includes('Make the names match.')).length],
+    ['Player names', issues.filter((issue) => (issue.includes('Discord name now:')
+      && issue.includes('Current Rosters sheet:') && issue.includes('Player Name History sheet:'))
+      || (issue.includes('Current Rosters:') && issue.includes('Player Name History:') && issue.includes('Make the names match.'))).length],
     ['Departures or inactive players', issues.filter((issue) => issue.includes('no longer in the Discord server')).length],
     ['Discord roles', issues.filter((issue) => !issue.includes('no longer in the Discord server') && /Discord .*role|role in Discord|Discord division|Discord team/i.test(issue)).length],
     ['Roster sheets and setup', 0],

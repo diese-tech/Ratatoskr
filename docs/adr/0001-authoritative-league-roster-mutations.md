@@ -6,7 +6,7 @@ Status: Accepted
 
 YSL administrators currently repeat an approved roster move in several places: a Discord transaction notice, player roles, the private roster workbook, and the public season roster. Those copies can drift, and Discord and Google Sheets cannot participate in one database transaction.
 
-The YSL-owned workbook remains the public presentation surface. The private **YSL League Operations — Admin** workbook supplies human-readable team-role configuration, canonical player names, current rosters, and transaction history. Discord role IDs remain the stable player/team identity.
+The YSL-owned workbook remains the public presentation surface. The private **YSL League Operations — Admin** workbook supplies human-readable team-role configuration, current player names, current rosters, and transaction history. Discord role IDs remain the stable player/team identity.
 
 ## Decision
 
@@ -27,6 +27,8 @@ Manual sheet changes are never silently normalized. Ratatoskr updates only the r
 Ratatoskr also runs that full comparison after startup and every day at 6:00 AM in `America/New_York`. Scheduled audits are read-only and do not create a second synchronization authority. Drift is shown as one unpinged rolling staff-ops card: Ratatoskr posts and durably records the fresh card before deleting the previous card. Failed delivery retains the prior card; failed cleanup is retried without posting another duplicate. A clean audit removes the outstanding card and resolves its durable state. Scheduling is timezone-based so the run remains at 6:00 AM through daylight-saving changes.
 
 The rolling card is a compact dashboard. Its **Review issues** control opens a private, one-item-at-a-time queue for league administrators. A supported repair requires an issue-specific choice and a second explicit confirmation. Confirmation reloads Discord and both workbooks, requires the exact reviewed finding to still exist, and changes only the affected managed roles, roster row, name row, or public roster block. The repair attempt and administrator are recorded durably before any write. A changed finding is rejected without writing; any possibly partial repair opens the existing staff reconciliation path. Ratatoskr then reruns the full audit and replaces or clears the rolling card. This admin-confirmed repair surface does not make the scheduled audit itself an automatic synchronization authority.
+
+For an active rostered player or Free Agent, the current Discord display name is the authoritative current name. Name findings show the Discord value, Current Rosters value, and Player Name History value with those source labels. Staff are not asked to choose between internal sheet concepts: the confirmed repair updates the managed sheets and matching public roster to the current Discord name while retaining prior names in Player Name History. No name is changed without the administrator preview and confirmation.
 
 The mutation lifecycle is durable:
 

@@ -741,4 +741,38 @@ export const migrations: Migration[] = [
         ON league_audit_repairs (guild_id, status, created_at);
     `,
   },
+  {
+    id: 29,
+    name: 'discord_authoritative_league_audit_names',
+    sql: `
+      CREATE TABLE league_audit_repairs_v29 (
+        reference TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        audit_reference TEXT NOT NULL,
+        actor_user_id TEXT NOT NULL,
+        finding TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN (
+          'use-discord-name', 'use-league-name', 'use-roster-name', 'repair-roles', 'sync-public-roster', 'mark-inactive'
+        )),
+        status TEXT NOT NULL CHECK (status IN ('applying', 'completed', 'failed', 'reconciliation_required')),
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
+      INSERT INTO league_audit_repairs_v29 (
+        reference, guild_id, audit_reference, actor_user_id, finding, action,
+        status, error_message, created_at, updated_at
+      )
+      SELECT
+        reference, guild_id, audit_reference, actor_user_id, finding, action,
+        status, error_message, created_at, updated_at
+      FROM league_audit_repairs;
+
+      DROP TABLE league_audit_repairs;
+      ALTER TABLE league_audit_repairs_v29 RENAME TO league_audit_repairs;
+      CREATE INDEX idx_league_audit_repairs_guild_status
+        ON league_audit_repairs (guild_id, status, created_at);
+    `,
+  },
 ];

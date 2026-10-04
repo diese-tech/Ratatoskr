@@ -14,11 +14,11 @@ test('league audit repairs durably record the reviewed audit, administrator, act
   try {
     createLeagueAuditRepair(db, {
       reference: 'YSL-AUD-FIX-1234', guildId: 'guild', auditReference: 'YSL-AUD-1234',
-      actorUserId: 'admin', finding: 'A human-readable issue.', action: 'repair-roles',
+      actorUserId: 'admin', finding: 'A human-readable issue.', action: 'use-discord-name',
     });
     assert.deepEqual(getLeagueAuditRepair(db, 'YSL-AUD-FIX-1234'), {
       reference: 'YSL-AUD-FIX-1234', guildId: 'guild', auditReference: 'YSL-AUD-1234',
-      actorUserId: 'admin', finding: 'A human-readable issue.', action: 'repair-roles',
+      actorUserId: 'admin', finding: 'A human-readable issue.', action: 'use-discord-name',
       status: 'applying', errorMessage: null,
     });
     assert.equal(completeLeagueAuditRepair(db, 'YSL-AUD-FIX-1234'), true);

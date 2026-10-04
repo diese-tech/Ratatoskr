@@ -21,6 +21,24 @@ function snapshot(): LeagueSnapshot {
   };
 }
 
+test('Discord-name repair updates every managed name while preserving the prior league name', () => {
+  const current = snapshot();
+  current.discordMembers[0]!.displayName = 'Discord Display';
+
+  const plan = buildLeagueAuditSheetRepair(
+    current,
+    `Managed player names for ${playerId} do not match the current Discord display name.`,
+    'use-discord-name',
+  );
+
+  assert.equal(plan.rosters[0]?.player, 'Discord Display');
+  assert.equal(plan.nameUpdates[0]?.currentLeagueName, 'Discord Display');
+  assert.ok(plan.nameUpdates.some((row) => row.discordId === playerId && row.knownName === 'Current Name'));
+  assert.deepEqual(plan.publicChanges, [{
+    division: 'Vanaheim', area: 'team', group: 'A', from: 'Current Name', to: 'Discord Display',
+  }]);
+});
+
 test('using Player Name History repairs Current Rosters without overwriting an already-correct public roster', () => {
   const plan = buildLeagueAuditSheetRepair(
     snapshot(),
@@ -112,7 +130,7 @@ test('confirmed sheet repair rechecks the exact finding before applying and retu
     const result = await executeLeagueAuditRepair({
       db, operationScope: {}, guildId: 'guild', auditReference: 'YSL-AUD-1234',
       actorUserId: 'admin', actorName: 'Admin', now: new Date('2026-10-04T12:00:00Z'),
-      expectedFinding: finding, action: 'use-league-name', freeAgentRoleId: 'free-agent',
+      expectedFinding: finding, action: 'use-discord-name', freeAgentRoleId: 'free-agent',
       members: { getMembers: async () => current.discordMembers },
       sheets: {
         load: async () => ({ snapshot: current, sources: {} as never }),
@@ -168,7 +186,7 @@ test('a possibly partial repair is durably marked for staff reconciliation', asy
         await executeLeagueAuditRepair({
           db, operationScope: {}, guildId: 'guild', auditReference: 'YSL-AUD-1234',
           actorUserId: 'admin', actorName: 'Admin', now: new Date('2026-10-04T12:00:00Z'),
-          expectedFinding: finding, action: 'use-league-name', freeAgentRoleId: 'free-agent',
+          expectedFinding: finding, action: 'use-discord-name', freeAgentRoleId: 'free-agent',
           members: { getMembers: async () => current.discordMembers },
           sheets: {
             load: async () => ({ snapshot: current, sources: {} as never }), prepare: () => ({ publicUpdates: [] }),

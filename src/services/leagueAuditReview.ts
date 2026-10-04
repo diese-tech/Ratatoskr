@@ -54,7 +54,7 @@ function parseReviewId(customId: string): {
     return { action: parts[1], reference: parts[2], page: Number(parts[3]) };
   }
   if ((parts[1] === 'choice' || parts[1] === 'confirm') && parts[2] && /^\d+$/.test(parts[3] ?? '')
-    && ['use-league-name', 'use-roster-name', 'repair-roles', 'sync-public-roster', 'mark-inactive'].includes(parts[4] ?? '')) {
+    && ['use-discord-name', 'use-league-name', 'use-roster-name', 'repair-roles', 'sync-public-roster', 'mark-inactive'].includes(parts[4] ?? '')) {
     return { action: parts[1], reference: parts[2], page: Number(parts[3]), resolution: parts[4] as LeagueAuditResolutionAction };
   }
   return undefined;

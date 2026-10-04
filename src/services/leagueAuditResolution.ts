@@ -28,7 +28,7 @@ import {
 } from '../db/repositories/leagueAuditRepairs.js';
 import { createOrGetLeagueReconciliationTicket } from '../db/repositories/leagueOperations.js';
 
-export type LeagueAuditRepairAction = 'use-league-name' | 'use-roster-name' | 'sync-public-roster' | 'mark-inactive';
+export type LeagueAuditRepairAction = 'use-discord-name' | 'use-league-name' | 'use-roster-name' | 'sync-public-roster' | 'mark-inactive';
 export type LeagueAuditResolutionAction = LeagueAuditRepairAction | 'repair-roles';
 
 export class LeagueAuditRepairNoWriteError extends Error {}
@@ -82,6 +82,51 @@ export function buildLeagueAuditSheetRepair(
   diagnostic: string,
   action: LeagueAuditRepairAction,
 ): LeagueMutationPlan {
+  const discordNameMatch = diagnostic.match(/^Managed player names for (\S+) do not match the current Discord display name\.$/);
+  if (discordNameMatch && action === 'use-discord-name') {
+    const discordId = discordNameMatch[1]!;
+    const member = snapshot.discordMembers.find((entry) => entry.discordId === discordId);
+    const name = snapshot.names.find((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
+    const roster = snapshot.rosters.find((row) => row.discordId === discordId);
+    if (!member || !name) throw new LeagueAuditRepairNoWriteError('That player no longer has both a Discord account and one current name record.');
+    const target = member.displayName.trim();
+    if (!target) throw new LeagueAuditRepairNoWriteError('Discord does not currently provide a usable display name for that player.');
+
+    if (name.currentLeagueName !== target) {
+      const plan = buildRenamePlan(snapshot, discordId, target);
+      const publicNames = roster
+        ? snapshot.publicRosters[roster.division]?.teams[roster.franchise] ?? []
+        : snapshot.publicRosters[name.division]?.freeAgents ?? [];
+      if (publicNames.includes(target)) {
+        plan.publicChanges = [];
+      } else if (!publicNames.includes(name.currentLeagueName) && roster && publicNames.includes(roster.player)) {
+        plan.publicChanges = [{
+          division: roster.division, area: 'team', group: roster.franchise,
+          from: roster.player, to: target,
+        }];
+      } else if (!publicNames.includes(name.currentLeagueName)) {
+        plan.publicChanges = [];
+      }
+      return plan;
+    }
+
+    const plan = basePlan(snapshot, []);
+    plan.rosters = snapshot.rosters.map((row) => row.discordId === discordId ? { ...row, player: target } : { ...row });
+    if (roster && roster.player !== target) {
+      const publicTeam = snapshot.publicRosters[roster.division]?.teams[roster.franchise] ?? [];
+      if (publicTeam.includes(roster.player)) {
+        plan.publicChanges = [{
+          division: roster.division, area: 'team', group: roster.franchise,
+          from: roster.player, to: target,
+        }];
+      }
+    }
+    plan.teams = roster ? snapshot.teams.filter((team) => team.teamRoleId === roster.teamRoleId) : [];
+    plan.players = [target];
+    plan.playerIds = [discordId];
+    return plan;
+  }
+
   const nameMatch = diagnostic.match(/^Current Rosters player name for (\S+) does not match its Current League Name\.$/);
   if (nameMatch && (action === 'use-league-name' || action === 'use-roster-name')) {
     const discordId = nameMatch[1]!;
