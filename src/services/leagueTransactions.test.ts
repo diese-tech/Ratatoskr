@@ -11,12 +11,13 @@ import {
   resolveOpenLeagueReconciliationTickets,
   transitionLeagueTransaction,
 } from '../db/repositories/leagueOperations.js';
-import { LeagueSheetDriftError, LeagueSheetReconciliationRequiredError } from './leagueSheets.js';
+import { LeagueSheetDriftError, LeagueSheetInputError, LeagueSheetReconciliationRequiredError } from './leagueSheets.js';
 import { createLeagueAuditRepair, getLeagueAuditRepair } from '../db/repositories/leagueAuditRepairs.js';
 import {
   buildLeagueAnnouncement,
   executeLeagueTransaction,
   leagueTransactionPlanFingerprint,
+  LeagueReconciliationTicketError,
   LeagueTransactionPreviewChangedError,
   reconcilePendingLeagueTransactions,
 } from './leagueTransactions.js';
@@ -261,6 +262,29 @@ test('failed daily audit blocks every mutation and records no transaction', asyn
   assert.equal(getLeagueReconciliationTicket(f.db, reference)?.status, 'open');
   assert.deepEqual(f.events, []);
   f.db.close();
+});
+
+test('a transaction sheet-load ticket preserves safe actionable input details', async () => {
+  const f = fixture();
+  f.sheets.load = async () => { throw new LeagueSheetInputError({
+    code: 'LEAGUE_SHEET_MISSING_DISCORD_ID',
+    summary: 'Player Name History row 234 has player information, but its Discord ID cell in column A is blank.',
+    next: 'Open Player Name History row 234, repair column A, then retry the action.',
+  }); };
+  try {
+    await assert.rejects(() => executeLeagueTransaction({
+      db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+      freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+      buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
+    }), (error: unknown) => error instanceof LeagueReconciliationTicketError
+      && error.operationalCode === 'LEAGUE_SHEET_MISSING_DISCORD_ID'
+      && /row 234/.test(error.operationalSummary ?? '')
+      && /retry the action/.test(error.operationalNext ?? '')
+      && error.operationalNoChanges === true);
+    assert.deepEqual(f.events, []);
+  } finally {
+    f.db.close();
+  }
 });
 
 test('the same unresolved sheet drift reuses one durable ticket and a clean audit resolves it', async () => {

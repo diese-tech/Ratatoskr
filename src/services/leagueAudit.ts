@@ -11,7 +11,7 @@ import {
   settleLeagueAuditCard,
 } from '../db/repositories/leagueAudits.js';
 import { recordLeagueAudit, resolveOpenLeagueReconciliationTickets } from '../db/repositories/leagueOperations.js';
-import type { LoadedLeagueSnapshot } from './leagueSheets.js';
+import { LeagueSheetInputError, type LoadedLeagueSnapshot } from './leagueSheets.js';
 import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 
@@ -90,7 +90,9 @@ function auditDate(now: Date): string {
 
 function cardFor(result: 'dirty' | 'error', issues: string[], now: Date, trigger: Input['trigger']): LeagueAuditCard {
   const intro = result === 'error'
-    ? 'Ratatoskr could not read Discord or one of the roster sheets. No changes were made. A Ratatoskr maintainer should check which connection failed; the next audit will retry automatically.'
+    ? issues.length > 1
+      ? `Ratatoskr stopped the audit because a roster sheet needs attention. No changes were made.\n\n${issues.join('\n')}\n\nAfter the sheet is corrected, the next audit will check it again automatically.`
+      : 'Ratatoskr could not read Discord or one of the roster sheets. No changes were made. A Ratatoskr maintainer should check which connection failed; the next audit will retry automatically.'
     : `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.`;
   const categories = result === 'error' ? [] : [
     ['Player names', issues.filter((issue) => (issue.includes('Discord name now:')
@@ -155,7 +157,13 @@ async function runLeagueAuditNow(input: Input): Promise<{ status: 'clean' | 'dir
     result = issues.length ? 'dirty' : 'clean';
   } catch (error) {
     console.error('League roster audit could not read every source:', error);
-    issues = ['The audit could not read every required Discord and roster-sheet source.'];
+    issues = error instanceof LeagueSheetInputError
+      ? [
+        `**What happened:** ${error.operationalSummary}`,
+        `**What to do:** ${error.operationalNext}`,
+        `**Error code:** ${error.operationalCode}`,
+      ]
+      : ['The audit could not read every required Discord and roster-sheet source.'];
     result = 'error';
   }
   recordLeagueAudit(input.db, {

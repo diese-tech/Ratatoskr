@@ -283,7 +283,7 @@ function parseNames(rows: CellRows): LeagueNameRow[] {
       throw new LeagueSheetInputError({
         code: 'LEAGUE_SHEET_MISSING_DISCORD_ID',
         summary: `Player Name History row ${sheetRow} has player information, but its Discord ID cell in column A is blank.`,
-        next: `Open Player Name History row ${sheetRow}. If the row was shifted, move the existing row values one column left so the Discord ID is in column A, then retry from the newest League Roster Audit card.`,
+        next: `Open Player Name History row ${sheetRow}. If the row was shifted, move the existing row values one column left so the Discord ID is in column A, then retry the action.`,
       });
     }
     if (String(row[1] ?? '').trim() === '') {

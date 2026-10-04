@@ -4,6 +4,7 @@ import { openDatabase } from '../db/client.js';
 import { getLeagueAuditState } from '../db/repositories/leagueAudits.js';
 import type { LeagueSnapshot } from '../domain/leagueOperations.js';
 import { nextLeagueAuditAt, recoverPendingLeagueAudit, runLeagueAudit, startLeagueAuditWorker, type LeagueAuditCard, type LeagueAuditCardPort } from './leagueAudit.js';
+import { LeagueSheetInputError } from './leagueSheets.js';
 
 function snapshot(): LeagueSnapshot {
   return {
@@ -324,6 +325,34 @@ test('an unreadable source posts an audit-failed card instead of claiming the le
     assert.match(cards.sent[0]!.card.title, /could not complete/i);
     assert.doesNotMatch(cards.sent[0]!.card.description, /Discord unavailable/);
     assert.equal(getLeagueAuditState(db, 'guild')?.result, 'error');
+  } finally {
+    db.close();
+  }
+});
+
+test('a known roster-sheet input problem gives staff the exact safe repair on the audit card', async () => {
+  const db = openDatabase(':memory:');
+  const cards = new Cards();
+  try {
+    const result = await runLeagueAudit({
+      db, operationScope: db, guildId: 'guild', trigger: 'scheduled',
+      now: new Date('2026-10-05T10:00:00.000Z'), freeAgentRoleId: 'free-agent',
+      members: { getMembers: async () => snapshot().discordMembers },
+      sheets: { load: async () => { throw new LeagueSheetInputError({
+        code: 'LEAGUE_SHEET_MISSING_DISCORD_ID',
+        summary: 'Player Name History row 234 has player information, but its Discord ID cell in column A is blank.',
+        next: 'Open Player Name History row 234, move the existing values one column left, then retry the action.',
+      }); } },
+      cards,
+    });
+
+    assert.equal(result.status, 'error');
+    const description = cards.sent[0]!.card.description;
+    assert.match(description, /Player Name History row 234/);
+    assert.match(description, /move the existing values one column left/);
+    assert.match(description, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
+    assert.match(description, /No changes were made/);
+    assert.doesNotMatch(description, /check which connection failed/i);
   } finally {
     db.close();
   }
