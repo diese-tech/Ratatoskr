@@ -8,9 +8,11 @@ import {
   getLeagueTransaction,
   hasSuccessfulLeagueAudit,
   recordLeagueAudit,
+  resolveOpenLeagueReconciliationTickets,
   transitionLeagueTransaction,
 } from '../db/repositories/leagueOperations.js';
 import { LeagueSheetDriftError, LeagueSheetReconciliationRequiredError } from './leagueSheets.js';
+import { createLeagueAuditRepair, getLeagueAuditRepair } from '../db/repositories/leagueAuditRepairs.js';
 import {
   buildLeagueAnnouncement,
   executeLeagueTransaction,
@@ -479,5 +481,33 @@ test('startup recovery delivers an undelivered sheet reconciliation ticket once'
   assert.ok(getLeagueReconciliationTicket(f.db, reference)?.alertedAt);
   await recover();
   assert.equal(attempts, 2);
+  f.db.close();
+});
+
+test('startup recovery turns an interrupted audit repair into one durable staff reconciliation alert', async () => {
+  const f = fixture();
+  createLeagueAuditRepair(f.db, {
+    reference: 'YSL-AUD-FIX-CRASH', guildId: 'guild', auditReference: 'YSL-AUD-1234', actorUserId: 'admin',
+    finding: 'A player role may not match the managed sheets.', action: 'repair-roles',
+  });
+  const reports: string[] = [];
+  const recover = () => reconcilePendingLeagueTransactions({
+    db: f.db, sheets: f.sheets, discord: f.discord,
+    reportError: async (reference, error) => {
+      assert.equal(reference, 'YSL-AUD-FIX-CRASH');
+      reports.push(error instanceof Error ? error.message : String(error));
+      return { staffDelivered: true };
+    },
+  });
+
+  await recover();
+  assert.equal(getLeagueAuditRepair(f.db, 'YSL-AUD-FIX-CRASH')?.status, 'reconciliation_required');
+  assert.ok(getLeagueReconciliationTicket(f.db, 'YSL-AUD-FIX-CRASH')?.alertedAt);
+  assert.match(reports[0]!, /interrupted.*may be partially applied/i);
+  await recover();
+  assert.equal(reports.length, 1);
+  resolveOpenLeagueReconciliationTickets(f.db, 'guild');
+  await recover();
+  assert.equal(reports.length, 1);
   f.db.close();
 });

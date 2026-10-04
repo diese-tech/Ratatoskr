@@ -204,6 +204,7 @@ export type LeagueTransactionRecord = {
   processedById: string;
   processedBy: string;
   announcementId?: string;
+  approvalNote?: string;
 };
 
 export type PreparedLeagueSheetMutation = {
@@ -415,9 +416,10 @@ export class LeagueSheetsService {
     await this.assertUnchanged(loaded);
     const originalRosters = loaded.snapshot.rosters;
     const now = `${record.effectiveDate}T00:00:00.000Z`;
+    const approvalNote = record.approvalNote ?? 'Ratatoskr approved transaction';
     const rosterValue = (row: LeagueRosterRow): Cell[] => [
       row.division, row.franchise, row.teamRoleId, row.team, row.discordId, row.player,
-      row.rosterStatus, 'OK', 'Ratatoskr approved transaction', now,
+      row.rosterStatus, 'OK', approvalNote, now,
     ];
     const nextBySheetRow = new Map(plan.rosters.map((row) => [row.sheetRow, row]));
     const originalBySheetRow = new Map(originalRosters.map((row) => [row.sheetRow, row]));
@@ -458,7 +460,7 @@ export class LeagueSheetsService {
         const row = plan.nameHistoryAppend;
         await this.gateway.append(this.config.adminSpreadsheetId, "'Player Name History'!A:K", [[
           row.discordId, row.currentLeagueName, row.knownName, row.nameStatus, row.division, row.franchise,
-          row.leagueStatus, record.effectiveDate, record.effectiveDate, 'Ratatoskr approved rename',
+          row.leagueStatus, record.effectiveDate, record.effectiveDate, approvalNote,
           'Preserved so historical stats continue matching this player.',
         ]], 'RAW');
       }
@@ -500,7 +502,7 @@ export class LeagueSheetsService {
         || !namesMatch
         || !presentationMatches
         || !samePublicRosters(expectedPublic, verification.snapshot.publicRosters)) {
-        throw new Error('Post-write values do not match the approved transaction.');
+        throw new Error('Post-write values do not match the approved league change.');
       }
     } catch (error) {
       throw new LeagueSheetReconciliationRequiredError(

@@ -71,14 +71,14 @@ test('a dirty startup audit posts one unpinged staff card and records it durably
     assert.equal(cards.sent.length, 1);
     assert.equal(cards.sent[0]?.card.allowedMentions, false);
     assert.match(cards.sent[0]!.card.title, /action required/i);
-    assert.match(cards.sent[0]!.card.description, /public roster/i);
+    assert.match(cards.sent[0]!.card.description, /roster sheets and setup/i);
     assert.equal(getLeagueAuditState(db, 'guild')?.currentMessageId, 'message-1');
   } finally {
     db.close();
   }
 });
 
-test('audit cards identify people, teams, conflicting values, and the admin action without exposing Discord IDs', async () => {
+test('audit cards stay compact and offer a private review queue instead of listing every player', async () => {
   const db = openDatabase(':memory:');
   const cards = new Cards();
   const current = snapshot();
@@ -100,19 +100,21 @@ test('audit cards identify people, teams, conflicting values, and the admin acti
       cards,
     });
 
-    const description = cards.sent[0]!.card.description;
-    assert.match(description, /A VD/);
-    assert.match(description, /Old League Name/);
-    assert.match(description, /Current League Name/);
-    assert.match(description, /make.*match/i);
+    const card = cards.sent[0]!.card;
+    const description = card.description;
+    assert.match(description, /player names/i);
+    assert.match(description, /review issues/i);
+    assert.doesNotMatch(description, /Old League Name/);
+    assert.doesNotMatch(description, /Current League Name/);
     assert.doesNotMatch(description, /143011986349883392/);
     assert.doesNotMatch(description, /inspect the audit log/i);
+    assert.deepEqual(card.actions, [{ id: 'league-audit:review', label: 'Review issues' }]);
   } finally {
     db.close();
   }
 });
 
-test('large audits stay within Discord limits and explain exactly how many named items remain', async () => {
+test('large audits stay compact while preserving the complete private review queue', async () => {
   const db = openDatabase(':memory:');
   const cards = new Cards();
   const current = snapshot();
@@ -132,10 +134,9 @@ test('large audits stay within Discord limits and explain exactly how many named
     });
 
     const description = cards.sent[0]!.card.description;
-    const hidden = Number(description.match(/• (\d+) additional items? could not fit/)?.[1] ?? 0);
-    const visibleFindings = description.split('\n').filter((line) => line.startsWith('• ')).length - (hidden ? 1 : 0);
-    assert.ok(description.length <= 4096);
-    assert.equal(visibleFindings + hidden, 60);
+    assert.ok(description.length < 700);
+    assert.match(description, /Player names: 60/);
+    assert.match(description, /Review issues/);
     assert.doesNotMatch(description, /\b\d{17,20}\b/);
   } finally {
     db.close();

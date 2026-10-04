@@ -15,6 +15,13 @@ export function interactionOperationContext(interaction: Interaction, fallbackGu
   }
   if (!('customId' in interaction)) return context;
   const [prefix, operation = '', detail = '', nestedSetupId] = interaction.customId.split(':');
+  if (prefix === 'league-audit') {
+    context.action = operation === 'confirm' ? 'League roster audit repair' : 'League roster audit review';
+    context.next = operation === 'confirm'
+      ? 'Open the newest League Roster Audit card and review the issue again before retrying.'
+      : 'Open the newest League Roster Audit card and continue from there.';
+    return context;
+  }
   if (prefix !== 'scout') return context;
   context.action = 'Scout interaction';
   let rawSetupId: string | undefined;

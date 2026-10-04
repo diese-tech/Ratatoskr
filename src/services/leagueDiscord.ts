@@ -85,6 +85,36 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     }
   }
 
+  async reconcileManagedRoles(
+    change: DiscordRoleChange,
+    expected: LeagueRoleState,
+    observedManagedRoleIds: string[],
+  ): Promise<void> {
+    const member = await fetchFreshMember(this.guild, change.discordId);
+    const managedRoleIds = new Set([
+      ...expected.configuredTeamRoleIds,
+      ...expected.configuredDivisionRoleIds,
+      expected.freeAgentRoleId,
+    ]);
+    const currentManagedRoleIds = [...member.roles.cache.keys()]
+      .filter((roleId) => managedRoleIds.has(roleId))
+      .sort();
+    if (JSON.stringify(currentManagedRoleIds) !== JSON.stringify([...observedManagedRoleIds].sort())) {
+      throw new LeagueMutationValidationError(
+        'This player’s managed Discord roles changed after the audit was loaded. Review the newest audit card; no roles were changed.',
+      );
+    }
+    try {
+      if (change.remove.length) await member.roles.remove(change.remove, 'Ratatoskr approved roster audit repair');
+      if (change.add.length) await member.roles.add(change.add, 'Ratatoskr approved roster audit repair');
+      assertMemberRoleState(await fetchFreshMember(this.guild, change.discordId), expected);
+    } catch (error) {
+      throw new DiscordRoleReconciliationRequiredError(
+        `Discord role repair may be partial for ${change.discordId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   async rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState, applied: LeagueRoleState): Promise<void> {
     const member = await fetchFreshMember(this.guild, change.discordId);
     try {
