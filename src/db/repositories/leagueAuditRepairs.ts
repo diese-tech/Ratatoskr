@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 
 export type LeagueAuditRepairAction =
+  | 'use-discord-name'
   | 'use-league-name'
   | 'use-roster-name'
   | 'repair-roles'

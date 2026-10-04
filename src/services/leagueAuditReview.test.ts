@@ -17,7 +17,7 @@ test('a failed post-repair refresh does not claim that a source error is a remai
 
 test('review issues opens one human-readable finding at a time with private pagination', () => {
   const findings = [
-    'Little Monsters VD — Current Rosters: “DilliD (Soka)”; Player Name History: “DilliD”. Make the names match.',
+    'Little Monsters VD\nDiscord name now: “DilliD (Soka)”\nCurrent Rosters sheet: “DilliD (Soka)”\nPlayer Name History sheet: “DilliD”\nRequired: update the managed roster sheets to the Discord name. Previous names stay in history.',
     'Morty — Discord division: Svartalfheim, Alfheim; expected: Svartalfheim. Make the division role match.',
     'imso cheeky is in Current Rosters but is no longer in the Discord server. Confirm whether this is a departure before changing the roster.',
   ];
@@ -34,33 +34,35 @@ test('review issues opens one human-readable finding at a time with private pagi
   ]);
 });
 
-test('name resolution offers both authoritative choices without changing anything yet', () => {
+test('name resolution offers one Discord-authoritative action without exposing sheet-model choices', () => {
   const view = buildLeagueAuditResolutionView(
-    'Little Monsters VD — Current Rosters: “DilliD (Soka)”; Player Name History: “DilliD”. Make the names match.',
+    'Little Monsters VD\nDiscord name now: “DilliD (Soka)”\nCurrent Rosters sheet: “DilliD (Soka)”\nPlayer Name History sheet: “DilliD”\nRequired: update the managed roster sheets to the Discord name. Previous names stay in history.',
     0,
     'YSL-AUD-1234',
   );
 
   assert.match(view.description, /No changes have been made/i);
+  assert.match(view.description, /Discord name/i);
+  assert.doesNotMatch(view.description, /official league name/i);
   assert.deepEqual(view.actions, [
-    { id: 'league-audit:choice:YSL-AUD-1234:0:use-league-name', label: 'Use league name', disabled: false },
-    { id: 'league-audit:choice:YSL-AUD-1234:0:use-roster-name', label: 'Use roster name', disabled: false },
+    { id: 'league-audit:choice:YSL-AUD-1234:0:use-discord-name', label: 'Preview Discord name update', disabled: false },
     { id: 'league-audit:page:YSL-AUD-1234:0', label: 'Back', disabled: false },
   ]);
 });
 
 test('a resolution choice requires a second explicit confirmation', () => {
   const view = buildLeagueAuditConfirmationView(
-    'Little Monsters VD — Current Rosters: “DilliD (Soka)”; Player Name History: “DilliD”. Make the names match.',
+    'Little Monsters VD\nDiscord name now: “DilliD (Soka)”\nCurrent Rosters sheet: “DilliD (Soka)”\nPlayer Name History sheet: “DilliD”\nRequired: update the managed roster sheets to the Discord name. Previous names stay in history.',
     0,
     'YSL-AUD-1234',
-    'use-league-name',
+    'use-discord-name',
   );
 
-  assert.match(view.description, /Current Rosters.*DilliD/i);
+  assert.match(view.description, /Discord currently shows “DilliD \(Soka\)”/i);
+  assert.match(view.description, /keep “DilliD” in name history/i);
   assert.match(view.description, /No changes have been made/i);
   assert.deepEqual(view.actions, [
-    { id: 'league-audit:confirm:YSL-AUD-1234:0:use-league-name', label: 'Confirm repair', disabled: false },
+    { id: 'league-audit:confirm:YSL-AUD-1234:0:use-discord-name', label: 'Update to Discord name', disabled: false },
     { id: 'league-audit:resolve:YSL-AUD-1234:0', label: 'Back', disabled: false },
   ]);
 });

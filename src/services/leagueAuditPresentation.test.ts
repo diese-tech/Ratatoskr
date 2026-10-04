@@ -47,6 +47,7 @@ test('every league-audit diagnostic has a human-readable staff explanation witho
     `Current Rosters member ${playerId} references an inactive or unknown team role.`,
     `Current Rosters member ${playerId} does not match configured team A VD.`,
     `Current Rosters member ${playerId} has no Current League Name.`,
+    `Managed player names for ${playerId} do not match the current Discord display name.`,
     `Current Rosters player name for ${playerId} does not match its Current League Name.`,
     `Current name record for ${playerId} does not match its Current Rosters assignment.`,
     `Current player ${playerId} must have exactly one Current Rosters assignment.`,
@@ -75,11 +76,25 @@ test('every league-audit diagnostic has a human-readable staff explanation witho
     assert.doesNotMatch(message, /Discord member snapshot/i);
     assert.doesNotMatch(message, /could not explain safely/i);
   }
-  assert.ok(messages.every((message) => /\b(make|keep|add|select|restore|remove|correct|clear|confirm|mark|give|use)\b/i.test(message)));
+  assert.ok(messages.every((message) => /\b(make|keep|add|select|restore|remove|correct|clear|confirm|mark|give|use|update)\b/i.test(message)));
 });
 
 test('unknown diagnostics fail closed into a plain-language instruction without echoing technical details', () => {
   const [message] = humanizeLeagueAuditIssues(snapshot(), [`Unexpected invariant for ${playerId}`]);
   assert.doesNotMatch(message!, new RegExp(playerId));
   assert.match(message!, /ask a bot operator/i);
+});
+
+test('player-name findings identify Discord as the source and label each sheet value', () => {
+  const [message] = humanizeLeagueAuditIssues(snapshot(), [
+    `Managed player names for ${playerId} do not match the current Discord display name.`,
+  ]);
+
+  assert.equal(message, [
+    'A VD',
+    'Discord name now: “Current Name”',
+    'Current Rosters sheet: “Old Name”',
+    'Player Name History sheet: “Current Name”',
+    'Required: update the managed roster sheets to the Discord name. Previous names stay in history.',
+  ].join('\n'));
 });

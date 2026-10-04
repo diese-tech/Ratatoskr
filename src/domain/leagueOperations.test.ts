@@ -36,9 +36,9 @@ function snapshot(): LeagueSnapshot {
       { sheetRow: 8, discordId: 'free', currentLeagueName: 'Free', knownName: 'FreeLive', nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: '', leagueStatus: 'Free Agent' },
     ],
     discordMembers: [
-      { discordId: 'one', displayName: 'OneLive', roleIds: ['team-a', 'division-v'] },
-      { discordId: 'two', displayName: 'TwoLive', roleIds: ['team-b', 'division-v'] },
-      { discordId: 'free', displayName: 'FreeLive', roleIds: ['free-agent', 'division-v'] },
+      { discordId: 'one', displayName: 'One', roleIds: ['team-a', 'division-v'] },
+      { discordId: 'two', displayName: 'Two', roleIds: ['team-b', 'division-v'] },
+      { discordId: 'free', displayName: 'Free', roleIds: ['free-agent', 'division-v'] },
     ],
     publicRosters: {
       Vanaheim: {
@@ -52,6 +52,18 @@ function snapshot(): LeagueSnapshot {
 
 test('daily audit accepts matching Discord, admin roster, canonical names, and public roster', () => {
   assert.deepEqual(auditLeagueRoster(snapshot()), []);
+});
+
+test('daily audit reports one name issue when managed sheets do not use the current Discord name', () => {
+  const current = snapshot();
+  current.discordMembers[0]!.displayName = 'OneLive';
+
+  const issues = auditLeagueRoster(current);
+
+  assert.deepEqual(
+    issues.filter((issue) => issue.includes('one') && /name/i.test(issue)),
+    ['Managed player names for one do not match the current Discord display name.'],
+  );
 });
 
 test('daily audit reports Discord and public-sheet drift instead of normalizing it', () => {
@@ -176,11 +188,11 @@ test('daily audit rejects a rostered member without a current-name row', () => {
   assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('exactly one current name record')));
 });
 
-test('daily audit rejects a roster display name that differs from the canonical league name', () => {
+test('daily audit rejects a roster name that differs from the current Discord name', () => {
   const current = snapshot();
   current.rosters[0]!.player = 'Stale Name';
   const issues = auditLeagueRoster(current);
-  assert.ok(issues.some((issue) => issue.includes('one') && issue.includes('Current League Name')));
+  assert.ok(issues.some((issue) => issue === 'Managed player names for one do not match the current Discord display name.'));
 });
 
 test('daily audit rejects duplicate canonical names within managed team and free-agent areas', () => {

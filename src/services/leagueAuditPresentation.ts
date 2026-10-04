@@ -50,6 +50,21 @@ function discordDivisionRoles(snapshot: LeagueSnapshot, discordId: string): stri
 function humanize(snapshot: LeagueSnapshot, issue: string): string {
   let match: RegExpMatchArray | null;
 
+  match = issue.match(/^Managed player names for (\S+) do not match the current Discord display name\.$/);
+  if (match) {
+    const discordId = match[1]!;
+    const member = snapshot.discordMembers.find((entry) => entry.discordId === discordId);
+    const roster = rosterFor(snapshot, discordId);
+    const current = snapshot.names.find((entry) => entry.discordId === discordId && entry.nameStatus === 'Current Discord Name');
+    return [
+      roster?.team ?? current?.franchise ?? 'Unassigned player',
+      `Discord name now: ${quoted(member?.displayName ?? 'missing')}`,
+      `Current Rosters sheet: ${quoted(roster?.player ?? 'not rostered')}`,
+      `Player Name History sheet: ${quoted(current?.currentLeagueName ?? 'missing')}`,
+      'Required: update the managed roster sheets to the Discord name. Previous names stay in history.',
+    ].join('\n');
+  }
+
   match = issue.match(/^Current Rosters player name for (\S+) does not match its Current League Name\.$/);
   if (match) {
     const row = rosterFor(snapshot, match[1]!);

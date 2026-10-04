@@ -319,6 +319,26 @@ test('migration 27 adds durable rolling league-audit card state', () => {
   }
 });
 
+test('migration 29 preserves audit repairs while allowing Discord-name repairs', () => {
+  const db = new Database(':memory:');
+  try {
+    for (const migration of migrations.slice(0, 28)) db.exec(migration.sql);
+    db.prepare(`INSERT INTO league_audit_repairs
+      (reference, guild_id, audit_reference, actor_user_id, finding, action, status)
+      VALUES ('existing', 'guild', 'audit', 'admin', 'finding', 'repair-roles', 'completed')`).run();
+
+    db.exec(migrations[28]!.sql);
+
+    assert.deepEqual(db.prepare(`SELECT action, status FROM league_audit_repairs
+      WHERE reference = 'existing'`).get(), { action: 'repair-roles', status: 'completed' });
+    assert.doesNotThrow(() => db.prepare(`INSERT INTO league_audit_repairs
+      (reference, guild_id, audit_reference, actor_user_id, finding, action, status)
+      VALUES ('discord-name', 'guild', 'audit', 'admin', 'finding', 'use-discord-name', 'applying')`).run());
+  } finally {
+    db.close();
+  }
+});
+
 test('managed resources can be inserted and read back by Discord ID and logical key', () => {
   const db = openDatabase(join(tempDir, 'managed-resources.db'));
   try {

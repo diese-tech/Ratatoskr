@@ -160,6 +160,7 @@ export function auditLeagueRoster(
   const rosterById = new Map<string, LeagueRosterRow>();
   const rosterCountById = new Map<string, number>();
   const currentNameRows = new Map<string, LeagueNameRow[]>();
+  const memberById = new Map(snapshot.discordMembers.map((member) => [member.discordId, member]));
   for (const row of snapshot.names) {
     if (row.nameStatus !== 'Current Discord Name') continue;
     const rows = currentNameRows.get(row.discordId) ?? [];
@@ -180,9 +181,6 @@ export function auditLeagueRoster(
     }
     const canonicalName = names.get(row.discordId);
     if (!canonicalName) issues.push(`Current Rosters member ${row.discordId} has no Current League Name.`);
-    else if (row.player !== canonicalName) {
-      issues.push(`Current Rosters player name for ${row.discordId} does not match its Current League Name.`);
-    }
     const memberCurrentNames = currentNameRows.get(row.discordId) ?? [];
     if (memberCurrentNames.length === 0) {
       issues.push(`Discord member ${row.discordId} must have exactly one current name record.`);
@@ -202,7 +200,16 @@ export function auditLeagueRoster(
     }
   }
 
-  const memberById = new Map(snapshot.discordMembers.map((member) => [member.discordId, member]));
+  for (const [discordId, rows] of currentNameRows) {
+    if (rows.length !== 1 || !['Captain', 'Player', 'Free Agent'].includes(rows[0]!.leagueStatus)) continue;
+    const member = memberById.get(discordId);
+    if (!member) continue;
+    const roster = rosterById.get(discordId);
+    if (rows[0]!.currentLeagueName !== member.displayName || (roster && roster.player !== member.displayName)) {
+      issues.push(`Managed player names for ${discordId} do not match the current Discord display name.`);
+    }
+  }
+
   for (const member of snapshot.discordMembers) {
     const assignedTeamRoles = member.roleIds.filter((roleId) => teamsByRole.has(roleId));
     const roster = rosterById.get(member.discordId);
