@@ -145,7 +145,10 @@ export async function reportOperationalError(
   const failure = error instanceof Error ? error : new Error(String(error));
   const code = (failure as Error & { code?: unknown }).code;
   const details = operationalDetails(failure);
-  const key = `${context.guildId}:${context.action}:${context.setupId ?? ''}:${failure.name}:${details?.code ?? String(code ?? '')}:${options?.reference ?? ''}`;
+  const failureIdentity = details
+    ? createHash('sha256').update(JSON.stringify(details)).digest('hex')
+    : String(code ?? '');
+  const key = `${context.guildId}:${context.action}:${context.setupId ?? ''}:${failure.name}:${failureIdentity}:${options?.reference ?? ''}`;
   let records = recent.get(db);
   if (!records) { records = new Map(); recent.set(db, records); }
   const previous = records.get(key);

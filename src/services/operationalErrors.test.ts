@@ -77,6 +77,25 @@ test('a safe league-sheet input error gives staff and the administrator an actio
   } finally { f.db.close(); }
 });
 
+test('safe errors with the same code but different row details are reported separately', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  const errorFor = (row: number) => new LeagueSheetInputError({
+    code: 'LEAGUE_SHEET_MISSING_DISCORD_ID',
+    summary: `Player Name History row ${row} has player information, but its Discord ID cell in column A is blank.`,
+    next: `Open Player Name History row ${row}, repair column A, then retry.`,
+  });
+  try {
+    const context = { guildId: 'guild', action: 'League roster audit repair' };
+    await reportOperationalError(f.client, f.db, context, errorFor(234));
+    await reportOperationalError(f.client, f.db, context, errorFor(235));
+
+    assert.equal(f.sent.length, 2);
+    assert.match(f.sent[0].content, /row 234/);
+    assert.match(f.sent[1].content, /row 235/);
+  } finally { f.db.close(); }
+});
+
 test('startup transaction recovery includes partial-state manual-repair guidance', () => {
   const context = leagueTransactionReconciliationContext('guild', 'Sheet verification failed.');
   assert.equal(context.action, 'League transaction reconciliation');
