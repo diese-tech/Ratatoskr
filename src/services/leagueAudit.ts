@@ -13,6 +13,7 @@ import {
 import { recordLeagueAudit, resolveOpenLeagueReconciliationTickets } from '../db/repositories/leagueOperations.js';
 import type { LoadedLeagueSnapshot } from './leagueSheets.js';
 import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
+import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 
 export type LeagueAuditCard = {
   title: string;
@@ -87,17 +88,36 @@ function auditDate(now: Date): string {
 }
 
 function cardFor(result: 'dirty' | 'error', issues: string[], now: Date, trigger: Input['trigger']): LeagueAuditCard {
-  const visible = issues.slice(0, 12).map((issue) => `- ${issue}`).join('\n');
-  const remaining = issues.length > 12 ? `\n- ${issues.length - 12} more issue(s); inspect the audit log.` : '';
+  const intro = result === 'error'
+    ? 'Ratatoskr could not read Discord or one of the roster sheets. No changes were made. A Ratatoskr maintainer should check which connection failed; the next audit will retry automatically.'
+    : `Ratatoskr found ${issues.length} item${issues.length === 1 ? '' : 's'} that need a league admin to review. Nothing was changed automatically. For each item, correct the wrong value so the named sources match.`;
+  const available = 4096 - intro.length - 3;
+  const visible: string[] = [];
+  let used = 0;
+  for (const issue of result === 'error' ? [] : issues) {
+    const line = `• ${issue}`;
+    if (used + line.length + (visible.length ? 1 : 0) > available) break;
+    visible.push(line);
+    used += line.length + (visible.length > 1 ? 1 : 0);
+  }
+  let hidden = result === 'error' ? 0 : issues.length - visible.length;
+  if (hidden > 0) {
+    let notice = `• ${hidden} additional item${hidden === 1 ? '' : 's'} could not fit on this Discord card. Ask a Ratatoskr maintainer to export this audit before changing anything.`;
+    while (visible.length && used + notice.length + 1 > available) {
+      const removed = visible.pop()!;
+      used -= removed.length + (visible.length ? 1 : 0);
+      hidden += 1;
+      notice = `• ${hidden} additional item${hidden === 1 ? '' : 's'} could not fit on this Discord card. Ask a Ratatoskr maintainer to export this audit before changing anything.`;
+    }
+    visible.push(notice);
+  }
   const time = new Intl.DateTimeFormat('en-US', {
     timeZone: LEAGUE_TIMEZONE, month: 'short', day: 'numeric', year: 'numeric',
     hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
   }).format(now);
   return {
     title: result === 'error' ? 'League Roster Audit — Could Not Complete' : 'League Roster Audit — Action Required',
-    description: result === 'error'
-      ? 'Ratatoskr could not read every required Discord and roster-sheet source. No changes were made. Check Railway logs, then let the next audit retry.'
-      : `Ratatoskr found ${issues.length} mismatch${issues.length === 1 ? '' : 'es'} between Discord and the managed roster sheets. No changes were made.\n\n${visible}${remaining}`,
+    description: `${intro}${visible.length ? `\n\n${visible.join('\n')}` : ''}`,
     footer: `${trigger === 'startup' ? 'Startup' : 'Daily'} audit • ${time}`,
     allowedMentions: false,
   };
@@ -139,7 +159,7 @@ async function runLeagueAuditNow(input: Input): Promise<{ status: 'clean' | 'dir
   try {
     const members = await input.members.getMembers();
     const loaded = await input.sheets.load(members, input.freeAgentRoleId);
-    issues = auditLeagueRoster(loaded.snapshot);
+    issues = humanizeLeagueAuditIssues(loaded.snapshot, auditLeagueRoster(loaded.snapshot));
     result = issues.length ? 'dirty' : 'clean';
   } catch (error) {
     console.error('League roster audit could not read every source:', error);

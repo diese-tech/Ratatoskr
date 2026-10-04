@@ -78,6 +78,70 @@ test('a dirty startup audit posts one unpinged staff card and records it durably
   }
 });
 
+test('audit cards identify people, teams, conflicting values, and the admin action without exposing Discord IDs', async () => {
+  const db = openDatabase(':memory:');
+  const cards = new Cards();
+  const current = snapshot();
+  current.rosters[0]!.discordId = '143011986349883392';
+  current.rosters[0]!.player = 'Old League Name';
+  current.names[0]!.discordId = '143011986349883392';
+  current.names[0]!.currentLeagueName = 'Current League Name';
+  current.discordMembers[0]!.discordId = '143011986349883392';
+  try {
+    await runLeagueAudit({
+      db,
+      operationScope: db,
+      guildId: 'guild',
+      trigger: 'startup',
+      now: new Date('2026-10-04T10:00:00.000Z'),
+      freeAgentRoleId: 'free-agent',
+      members: { getMembers: async () => current.discordMembers },
+      sheets: { load: async () => ({ snapshot: current, sources: {} as never }) },
+      cards,
+    });
+
+    const description = cards.sent[0]!.card.description;
+    assert.match(description, /A VD/);
+    assert.match(description, /Old League Name/);
+    assert.match(description, /Current League Name/);
+    assert.match(description, /make.*match/i);
+    assert.doesNotMatch(description, /143011986349883392/);
+    assert.doesNotMatch(description, /inspect the audit log/i);
+  } finally {
+    db.close();
+  }
+});
+
+test('large audits stay within Discord limits and explain exactly how many named items remain', async () => {
+  const db = openDatabase(':memory:');
+  const cards = new Cards();
+  const current = snapshot();
+  current.publicRosters.Vanaheim!.teams.B = ['Two'];
+  for (let index = 0; index < 60; index += 1) {
+    const discordId = `14301198634988${String(index).padStart(4, '0')}`;
+    current.rosters.push({ sheetRow: 8 + index, division: 'Vanaheim', franchise: 'A', teamRoleId: 'team-a', team: 'A VD', discordId, player: `Old League Name ${index}`, rosterStatus: 'Player' });
+    current.names.push({ sheetRow: 8 + index, discordId, currentLeagueName: `Current League Name ${index}`, knownName: `Current League Name ${index}`, nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: 'A', leagueStatus: 'Player' });
+    current.discordMembers.push({ discordId, displayName: `Current League Name ${index}`, roleIds: ['team-a', 'division'] });
+    current.publicRosters.Vanaheim!.teams.A.push(`Current League Name ${index}`);
+  }
+  try {
+    await runLeagueAudit({
+      db, operationScope: db, guildId: 'guild', trigger: 'startup', now: new Date('2026-10-04T10:00:00.000Z'),
+      freeAgentRoleId: 'free-agent', members: { getMembers: async () => current.discordMembers },
+      sheets: { load: async () => ({ snapshot: current, sources: {} as never }) }, cards,
+    });
+
+    const description = cards.sent[0]!.card.description;
+    const hidden = Number(description.match(/• (\d+) additional items? could not fit/)?.[1] ?? 0);
+    const visibleFindings = description.split('\n').filter((line) => line.startsWith('• ')).length - (hidden ? 1 : 0);
+    assert.ok(description.length <= 4096);
+    assert.equal(visibleFindings + hidden, 60);
+    assert.doesNotMatch(description, /\b\d{17,20}\b/);
+  } finally {
+    db.close();
+  }
+});
+
 test('restart recovery finds an ambiguously delivered card before deleting the prior card', async () => {
   const db = openDatabase(':memory:');
   const cards = new Cards();

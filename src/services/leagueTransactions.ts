@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { auditLeagueRoster, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
   createLeagueTransaction,
   createOrGetLeagueReconciliationTicket,
@@ -316,9 +317,12 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       throw openReconciliationTicket(input, auditDate, error);
     }
     const plan = input.buildPlan(loaded.snapshot);
-    const issues = auditLeagueRoster(loaded.snapshot, plan.kind === 'departure'
-      ? { allowAbsentRosterMemberId: plan.playerIds[0] }
-      : {});
+    const issues = humanizeLeagueAuditIssues(
+      loaded.snapshot,
+      auditLeagueRoster(loaded.snapshot, plan.kind === 'departure'
+        ? { allowAbsentRosterMemberId: plan.playerIds[0] }
+        : {}),
+    );
     recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: issues.length ? 'failed' : 'passed', issues });
     if (issues.length) {
       throw openReconciliationTicket(
