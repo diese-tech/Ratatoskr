@@ -276,6 +276,7 @@ type RepairSheets = {
 };
 
 type RepairDiscord = {
+  validateDisplayName(discordId: string, expectedDisplayName: string): Promise<void>;
   reconcileManagedRoles(
     change: DiscordRoleChange,
     expected: LeagueRoleState,
@@ -397,15 +398,7 @@ export async function executeLeagueAuditRepair(input: {
       reference,
       apply: async () => {
         if (input.action === 'use-discord-name') {
-          let currentMembers: DiscordLeagueMember[];
-          try { currentMembers = await input.members.getMembers(); }
-          catch {
-            throw new LeagueAuditRepairNoWriteError(
-              'Ratatoskr could not recheck the player\'s current Discord name. No changes were made; try again.',
-            );
-          }
-          const currentName = currentMembers.find((member) => member.discordId === plan.playerIds[0])?.displayName.trim();
-          if (!currentName || currentName !== plan.players[0]) throw new LeagueAuditRepairStaleError();
+          await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
         }
         await input.sheets.apply(loaded, plan, {
           reference,

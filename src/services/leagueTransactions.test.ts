@@ -65,6 +65,7 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
   const discord = {
     validateMemberAbsent: async (discordId: string) => { events.push(`discord-absence:${discordId}`); },
     validateRoleState: async (discordId: string) => { events.push(`discord-preflight:${discordId}`); },
+    validateDisplayName: async (discordId: string, expected: string) => { events.push(`discord-name-preflight:${discordId}:${expected}`); },
     applyRoleChange: async (change: { discordId: string }) => { events.push(`discord:${change.discordId}`); },
     rollbackRoleChange: async (change: { discordId: string }) => { events.push(`rollback:${change.discordId}`); },
     findAnnouncement: async () => undefined,
@@ -107,6 +108,24 @@ test('rename can repair only its targeted Discord-name drift without bypassing t
 
   assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   assert.ok(f.events.includes('sheet-apply'));
+  f.db.close();
+});
+
+test('rename stops before writing if the Discord display name changes after the initial snapshot', async () => {
+  const f = fixture();
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  f.discord.validateDisplayName = async () => {
+    throw new LeagueMutationValidationError('That player’s Discord display name changed after the transaction was loaded. Review the newest value; no changes were made.');
+  };
+
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  }), /display name changed.*no changes were made/i);
+
+  assert.equal(f.events.includes('sheet-apply'), false);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
 });
 

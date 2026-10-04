@@ -118,6 +118,21 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     assertMemberRoleState(await fetchFreshMember(this.guild, discordId), expected);
   }
 
+  async validateDisplayName(discordId: string, expectedDisplayName: string): Promise<void> {
+    let member: GuildMember;
+    try { member = await fetchFreshMember(this.guild, discordId); }
+    catch {
+      throw new LeagueMutationValidationError(
+        'Ratatoskr could not recheck that player’s current Discord display name. No changes were made; try again.',
+      );
+    }
+    if (member.displayName.trim() !== expectedDisplayName.trim()) {
+      throw new LeagueMutationValidationError(
+        'That player’s Discord display name changed after the operation was loaded. Review the newest value; no changes were made.',
+      );
+    }
+  }
+
   async applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void> {
     const member = await fetchFreshMember(this.guild, change.discordId);
     try {

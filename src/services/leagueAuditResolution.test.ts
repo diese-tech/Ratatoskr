@@ -140,7 +140,10 @@ test('confirmed sheet repair rechecks the exact finding before applying and retu
           approvalNote = record.approvalNote;
         },
       },
-      discord: { reconcileManagedRoles: async () => { throw new Error('not expected'); } },
+      discord: {
+        validateDisplayName: async () => undefined,
+        reconcileManagedRoles: async () => { throw new Error('not expected'); },
+      },
     });
 
     assert.equal(appliedPlayer, 'Current Name');
@@ -153,10 +156,9 @@ test('confirmed sheet repair rechecks the exact finding before applying and retu
   } finally { db.close(); }
 });
 
-test('Discord-name repair stops before writing if the authoritative name changes during confirmation', async () => {
+test('Discord-name repair stops before writing if a forced name recheck finds a newer value', async () => {
   const current = snapshot();
   const finding = humanizeLeagueAuditIssues(current, auditLeagueRoster(current))[0]!;
-  let memberReads = 0;
   let sheetWrites = 0;
   const db = openDatabase(':memory:');
   try {
@@ -164,25 +166,22 @@ test('Discord-name repair stops before writing if the authoritative name changes
       db, operationScope: {}, guildId: 'guild', auditReference: 'YSL-AUD-1234',
       actorUserId: 'admin', actorName: 'Admin', now: new Date('2026-10-04T12:00:00Z'),
       expectedFinding: finding, action: 'use-discord-name', freeAgentRoleId: 'free-agent',
-      members: {
-        getMembers: async () => {
-          memberReads += 1;
-          return memberReads === 1
-            ? current.discordMembers
-            : current.discordMembers.map((member) => member.discordId === playerId
-              ? { ...member, displayName: 'Newer Discord Name' }
-              : member);
-        },
-      },
+      members: { getMembers: async () => current.discordMembers },
       sheets: {
         load: async () => ({ snapshot: current, sources: {} as never }),
         prepare: () => ({ publicUpdates: [] }),
         apply: async () => { sheetWrites += 1; },
       },
-      discord: { reconcileManagedRoles: async () => undefined },
-    }), /changed since this review page opened/i);
+      discord: {
+        validateDisplayName: async () => {
+          throw new LeagueMutationValidationError(
+            'That player’s Discord display name changed after the audit was loaded. Review the newest audit card; no changes were made.',
+          );
+        },
+        reconcileManagedRoles: async () => undefined,
+      },
+    }), /display name changed.*no changes were made/i);
 
-    assert.equal(memberReads, 2);
     assert.equal(sheetWrites, 0);
     const repair = db.prepare('SELECT status FROM league_audit_repairs').get() as { status: string };
     assert.equal(repair.status, 'failed');
@@ -203,7 +202,7 @@ test('confirmed repair refuses stale findings without writing either system', as
         load: async () => ({ snapshot: current, sources: {} as never }), prepare: () => ({ publicUpdates: [] }),
         apply: async () => { writes += 1; },
       },
-      discord: { reconcileManagedRoles: async () => { writes += 1; } },
+      discord: { validateDisplayName: async () => undefined, reconcileManagedRoles: async () => { writes += 1; } },
     }), /changed since this review page opened/i);
     assert.equal(writes, 0);
     const count = db.prepare('SELECT COUNT(*) AS count FROM league_audit_repairs').get() as { count: number };
@@ -228,7 +227,7 @@ test('a possibly partial repair is durably marked for staff reconciliation', asy
             load: async () => ({ snapshot: current, sources: {} as never }), prepare: () => ({ publicUpdates: [] }),
             apply: async () => { throw new Error('Public roster verification failed.'); },
           },
-          discord: { reconcileManagedRoles: async () => undefined },
+          discord: { validateDisplayName: async () => undefined, reconcileManagedRoles: async () => undefined },
         });
       } catch (error) {
         reference = (error as { reference?: string }).reference;
@@ -263,6 +262,7 @@ test('a late role preflight change records a safe failure without opening reconc
         apply: async () => { throw new Error('not expected'); },
       },
       discord: {
+        validateDisplayName: async () => undefined,
         reconcileManagedRoles: async () => {
           throw new LeagueMutationValidationError('Managed roles changed; no roles were changed.');
         },

@@ -63,6 +63,7 @@ export interface LeagueDiscordPort {
   getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
   validateMemberAbsent(discordId: string): Promise<void>;
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
+  validateDisplayName(discordId: string, expectedDisplayName: string): Promise<void>;
   applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
   rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState, applied: LeagueRoleState): Promise<void>;
   findAnnouncement(reference: string): Promise<string | undefined>;
@@ -372,6 +373,9 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       }
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
+    }
+    if (plan.kind === 'rename') {
+      await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
     }
 
     const reference = `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
