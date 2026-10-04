@@ -3,6 +3,89 @@ import test from 'node:test';
 import { ChannelType, Collection, RESTJSONErrorCodes, type Guild } from 'discord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
 
+function leagueMember(id: string, roleIds: string[]) {
+  return {
+    id,
+    displayName: `Player ${id}`,
+    user: { bot: false },
+    roles: { cache: new Collection(roleIds.map((roleId) => [roleId, {}])) },
+  };
+}
+
+test('repeated roster reads reuse the complete live Discord cache instead of requesting every member again', async () => {
+  const member = leagueMember('one', ['team-a']);
+  const cache = new Collection<string, any>([['one', member]]);
+  let fetches = 0;
+  const guild = {
+    id: 'guild',
+    members: { cache, fetch: async () => { fetches += 1; return cache; } },
+  } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+
+  assert.deepEqual((await gateway.getMembers())[0]?.roleIds, ['team-a']);
+  member.roles.cache.set('division-v', {});
+  assert.deepEqual((await gateway.getMembers())[0]?.roleIds.sort(), ['division-v', 'team-a']);
+  assert.equal(fetches, 1);
+});
+
+test('a Discord full-member rate limit falls back to a previously complete live cache', async () => {
+  const member = leagueMember('one', ['team-a']);
+  const cache = new Collection<string, any>([['one', member]]);
+  let now = 0;
+  let fetches = 0;
+  const guild = {
+    id: 'guild',
+    members: {
+      cache,
+      fetch: async () => {
+        fetches += 1;
+        if (fetches === 1) return cache;
+        throw Object.assign(new Error('Request with opcode 8 was rate limited.'), {
+          data: { opcode: 8, retry_after: 27.819 },
+        });
+      },
+    },
+  } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions', { now: () => now });
+
+  await gateway.getMembers();
+  now = 60_001;
+  member.roles.cache.set('division-v', {});
+  const fallback = await gateway.getMembers();
+
+  assert.deepEqual(fallback[0]?.roleIds.sort(), ['division-v', 'team-a']);
+  assert.equal(fetches, 2);
+});
+
+test('a first full-member rate limit waits for Discord and retries once', async () => {
+  const member = leagueMember('one', ['team-a']);
+  const cache = new Collection<string, any>([['one', member]]);
+  let fetches = 0;
+  const waits: number[] = [];
+  const guild = {
+    id: 'guild',
+    members: {
+      cache,
+      fetch: async () => {
+        fetches += 1;
+        if (fetches === 1) {
+          throw Object.assign(new Error('Request with opcode 8 was rate limited.'), {
+            data: { opcode: 8, retry_after: 0.01 },
+          });
+        }
+        return cache;
+      },
+    },
+  } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions', {
+    sleep: async (delayMs) => { waits.push(delayMs); },
+  });
+
+  assert.equal((await gateway.getMembers()).length, 1);
+  assert.equal(fetches, 2);
+  assert.deepEqual(waits, [260]);
+});
+
 test('departure absence validation accepts only Discord-confirmed unknown members', async () => {
   const guild = {
     id: 'guild',

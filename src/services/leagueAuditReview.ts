@@ -23,6 +23,7 @@ import {
 } from './leagueAuditResolution.js';
 import {
   buildLeagueAuditConfirmationView,
+  buildLeagueAuditRepairReply,
   buildLeagueAuditResolutionView,
   buildLeagueAuditReviewView,
   type LeagueAuditReviewView,
@@ -141,7 +142,7 @@ export async function handleLeagueAuditReviewButton(
       cards: createLeagueAuditCardPort(interaction.client, db, interaction.guild.id),
     });
     await interaction.editReply({
-      content: `Repair completed. Ratatoskr refreshed the audit card; ${result.issues.length} issue${result.issues.length === 1 ? '' : 's'} remain. Reference: ${repair.reference}`,
+      content: buildLeagueAuditRepairReply(result, repair.reference),
       embeds: [],
       components: [],
       allowedMentions: { parse: [] },

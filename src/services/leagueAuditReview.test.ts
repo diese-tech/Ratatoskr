@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildLeagueAuditConfirmationView, buildLeagueAuditResolutionView, buildLeagueAuditReviewView } from './leagueAuditReviewView.js';
+import { buildLeagueAuditConfirmationView, buildLeagueAuditRepairReply, buildLeagueAuditResolutionView, buildLeagueAuditReviewView } from './leagueAuditReviewView.js';
+
+test('a failed post-repair refresh does not claim that a source error is a remaining roster issue', () => {
+  const reply = buildLeagueAuditRepairReply(
+    { status: 'error', issues: ['The audit could not read every required source.'] },
+    'YSL-AUD-FIX-A78754D3',
+  );
+
+  assert.match(reply, /repair completed/i);
+  assert.match(reply, /could not refresh/i);
+  assert.match(reply, /will retry/i);
+  assert.match(reply, /YSL-AUD-FIX-A78754D3/);
+  assert.doesNotMatch(reply, /1 issue remain/i);
+});
 
 test('review issues opens one human-readable finding at a time with private pagination', () => {
   const findings = [
