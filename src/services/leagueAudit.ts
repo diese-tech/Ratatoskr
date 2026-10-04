@@ -20,6 +20,7 @@ export type LeagueAuditCard = {
   description: string;
   footer: string;
   allowedMentions: false;
+  actions?: Array<{ id: string; label: string }>;
 };
 
 export interface LeagueAuditCardPort {
@@ -90,36 +91,25 @@ function auditDate(now: Date): string {
 function cardFor(result: 'dirty' | 'error', issues: string[], now: Date, trigger: Input['trigger']): LeagueAuditCard {
   const intro = result === 'error'
     ? 'Ratatoskr could not read Discord or one of the roster sheets. No changes were made. A Ratatoskr maintainer should check which connection failed; the next audit will retry automatically.'
-    : `Ratatoskr found ${issues.length} item${issues.length === 1 ? '' : 's'} that need a league admin to review. Nothing was changed automatically. For each item, correct the wrong value so the named sources match.`;
-  const available = 4096 - intro.length - 3;
-  const visible: string[] = [];
-  let used = 0;
-  for (const issue of result === 'error' ? [] : issues) {
-    const line = `• ${issue}`;
-    if (used + line.length + (visible.length ? 1 : 0) > available) break;
-    visible.push(line);
-    used += line.length + (visible.length > 1 ? 1 : 0);
-  }
-  let hidden = result === 'error' ? 0 : issues.length - visible.length;
-  if (hidden > 0) {
-    let notice = `• ${hidden} additional item${hidden === 1 ? '' : 's'} could not fit on this Discord card. Ask a Ratatoskr maintainer to export this audit before changing anything.`;
-    while (visible.length && used + notice.length + 1 > available) {
-      const removed = visible.pop()!;
-      used -= removed.length + (visible.length ? 1 : 0);
-      hidden += 1;
-      notice = `• ${hidden} additional item${hidden === 1 ? '' : 's'} could not fit on this Discord card. Ask a Ratatoskr maintainer to export this audit before changing anything.`;
-    }
-    visible.push(notice);
-  }
+    : `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.`;
+  const categories = result === 'error' ? [] : [
+    ['Player names', issues.filter((issue) => issue.includes('Current Rosters:') && issue.includes('Player Name History:') && issue.includes('Make the names match.')).length],
+    ['Departures or inactive players', issues.filter((issue) => issue.includes('no longer in the Discord server')).length],
+    ['Discord roles', issues.filter((issue) => !issue.includes('no longer in the Discord server') && /Discord .*role|role in Discord|Discord division|Discord team/i.test(issue)).length],
+    ['Roster sheets and setup', 0],
+  ] as Array<[string, number]>;
+  if (categories.length) categories[3]![1] = issues.length - categories.slice(0, 3).reduce((sum, entry) => sum + entry[1], 0);
+  const summary = categories.filter(([, count]) => count > 0).map(([label, count]) => `• ${label}: ${count}`).join('\n');
   const time = new Intl.DateTimeFormat('en-US', {
     timeZone: LEAGUE_TIMEZONE, month: 'short', day: 'numeric', year: 'numeric',
     hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
   }).format(now);
   return {
     title: result === 'error' ? 'League Roster Audit — Could Not Complete' : 'League Roster Audit — Action Required',
-    description: `${intro}${visible.length ? `\n\n${visible.join('\n')}` : ''}`,
+    description: `${intro}${summary ? `\n\n${summary}\n\nSelect **Review issues** for a private, step-by-step queue.` : ''}`,
     footer: `${trigger === 'startup' ? 'Startup' : 'Daily'} audit • ${time}`,
     allowedMentions: false,
+    ...(result === 'dirty' ? { actions: [{ id: 'league-audit:review', label: 'Review issues' }] } : {}),
   };
 }
 

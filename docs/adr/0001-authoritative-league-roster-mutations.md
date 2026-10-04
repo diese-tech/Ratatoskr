@@ -26,6 +26,8 @@ Manual sheet changes are never silently normalized. Ratatoskr updates only the r
 
 Ratatoskr also runs that full comparison after startup and every day at 6:00 AM in `America/New_York`. Scheduled audits are read-only and do not create a second synchronization authority. Drift is shown as one unpinged rolling staff-ops card: Ratatoskr posts and durably records the fresh card before deleting the previous card. Failed delivery retains the prior card; failed cleanup is retried without posting another duplicate. A clean audit removes the outstanding card and resolves its durable state. Scheduling is timezone-based so the run remains at 6:00 AM through daylight-saving changes.
 
+The rolling card is a compact dashboard. Its **Review issues** control opens a private, one-item-at-a-time queue for league administrators. A supported repair requires an issue-specific choice and a second explicit confirmation. Confirmation reloads Discord and both workbooks, requires the exact reviewed finding to still exist, and changes only the affected managed roles, roster row, name row, or public roster block. The repair attempt and administrator are recorded durably before any write. A changed finding is rejected without writing; any possibly partial repair opens the existing staff reconciliation path. Ratatoskr then reruns the full audit and replaces or clears the rolling card. This admin-confirmed repair surface does not make the scheduled audit itself an automatic synchronization authority.
+
 The mutation lifecycle is durable:
 
 1. Validate authorization, the saved preview, and current Discord/sheet state.

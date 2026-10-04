@@ -66,6 +66,8 @@ export async function handleInteraction(
   }
 
   if (interaction.isButton()) {
+    const { handleLeagueAuditReviewButton } = await import('../services/leagueAuditReview.js');
+    if (await handleLeagueAuditReviewButton(interaction, db, storage.operationScope)) return;
     const { handleScoutCoordinationButton } = await import('../services/scoutCoordination.js');
     if (await handleScoutCoordinationButton(interaction, db)) return;
     const { handleScoutAvailabilityButton } = await import('../services/scoutAvailability.js');

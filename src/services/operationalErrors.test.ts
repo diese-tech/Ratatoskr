@@ -33,6 +33,16 @@ test('nested Scout failures identify their setup and operation without confusing
   assert.equal(context('scout:publishedswap:invalid:3').setupId, undefined);
 });
 
+test('league audit controls produce human-readable staff support context', () => {
+  const context = (customId: string) => interactionOperationContext({
+    customId, guildId: 'guild', isChatInputCommand: () => false,
+  } as any, 'fallback');
+  assert.equal(context('league-audit:review:YSL-AUD-1234').action, 'League roster audit review');
+  assert.match(context('league-audit:review:YSL-AUD-1234').next ?? '', /newest League Roster Audit card/);
+  assert.equal(context('league-audit:confirm:YSL-AUD-1234:0:repair-roles').action, 'League roster audit repair');
+  assert.match(context('league-audit:confirm:YSL-AUD-1234:0:repair-roles').next ?? '', /review the issue again/i);
+});
+
 test('startup transaction recovery includes partial-state manual-repair guidance', () => {
   const context = leagueTransactionReconciliationContext('guild', 'Sheet verification failed.');
   assert.equal(context.action, 'League transaction reconciliation');

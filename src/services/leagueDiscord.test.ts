@@ -151,6 +151,64 @@ test('a forced member fetch rejects an additional configured division role', asy
   assert.equal(mutations, 0);
 });
 
+test('audit repair can reconcile a known-invalid managed role set to the approved sheet assignment', async () => {
+  const cache = new Collection<string, unknown>([
+    ['team-b', {}],
+    ['division-a', {}],
+    ['free-agent', {}],
+  ]);
+  const member = {
+    id: 'one',
+    roles: {
+      cache,
+      remove: async (roleIds: string[]) => { for (const roleId of roleIds) cache.delete(roleId); },
+      add: async (roleIds: string[]) => { for (const roleId of roleIds) cache.set(roleId, {}); },
+    },
+  };
+  const guild = { id: 'guild', members: { fetch: async () => member } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  const expected = {
+    configuredTeamRoleIds: ['team-a', 'team-b'], expectedTeamRoleId: 'team-a',
+    configuredDivisionRoleIds: ['division-v', 'division-a'], divisionRoleId: 'division-v',
+    freeAgentRoleId: 'free-agent', expectsFreeAgent: false,
+  };
+
+  await gateway.reconcileManagedRoles(
+    { discordId: 'one', remove: ['team-b', 'division-a', 'free-agent'], add: ['team-a', 'division-v'] },
+    expected,
+    ['team-b', 'division-a', 'free-agent'],
+  );
+
+  assert.deepEqual([...cache.keys()].sort(), ['division-v', 'team-a']);
+});
+
+test('audit repair refuses a managed-role change made after the audit snapshot', async () => {
+  let mutations = 0;
+  const cache = new Collection<string, unknown>([['team-c', {}], ['division-v', {}]]);
+  const member = {
+    id: 'one',
+    roles: {
+      cache,
+      remove: async () => { mutations += 1; },
+      add: async () => { mutations += 1; },
+    },
+  };
+  const guild = { id: 'guild', members: { fetch: async () => member } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  const expected = {
+    configuredTeamRoleIds: ['team-a', 'team-b', 'team-c'], expectedTeamRoleId: 'team-a',
+    configuredDivisionRoleIds: ['division-v'], divisionRoleId: 'division-v',
+    freeAgentRoleId: 'free-agent', expectsFreeAgent: false,
+  };
+
+  await assert.rejects(() => gateway.reconcileManagedRoles(
+    { discordId: 'one', remove: ['team-b'], add: ['team-a'] },
+    expected,
+    ['team-b', 'division-v'],
+  ), /changed after the audit was loaded.*no roles were changed/i);
+  assert.equal(mutations, 0);
+});
+
 test('post-change verification requires the complete destination role state', async () => {
   let mutations = 0;
   const cache = new Collection<string, unknown>([

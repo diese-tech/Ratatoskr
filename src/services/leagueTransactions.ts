@@ -5,6 +5,7 @@ import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
   createLeagueTransaction,
   createOrGetLeagueReconciliationTicket,
+  getLeagueReconciliationTicket,
   listInterruptedLeagueTransactions,
   listPendingLeagueAnnouncements,
   listUndeliveredLeagueReconciliationTickets,
@@ -23,6 +24,10 @@ import {
   type PreparedLeagueSheetMutation,
 } from './leagueSheets.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
+import {
+  listIncompleteLeagueAuditRepairs,
+  markLeagueAuditRepairReconciliationRequired,
+} from '../db/repositories/leagueAuditRepairs.js';
 
 export type LeagueAnnouncement = {
   content: string;
@@ -452,6 +457,23 @@ export async function reconcilePendingLeagueTransactions(input: {
   discord: LeagueDiscordPort;
   reportError?(reference: string, error: unknown): Promise<{ staffDelivered: boolean }>;
 }): Promise<void> {
+  for (const repair of listIncompleteLeagueAuditRepairs(input.db)) {
+    const message = repair.errorMessage
+      ?? 'League audit repair was interrupted. Discord roles or managed roster sheets may be partially applied; manual reconciliation is required.';
+    if (repair.status === 'applying') {
+      markLeagueAuditRepairReconciliationRequired(input.db, repair.reference, message);
+    }
+    if (!getLeagueReconciliationTicket(input.db, repair.reference)) {
+      createOrGetLeagueReconciliationTicket(input.db, {
+        reference: repair.reference,
+        guildId: repair.guildId,
+        actorUserId: repair.actorUserId,
+        fingerprint: `audit-repair:${repair.reference}`,
+        summary: `${repair.finding} ${message}`,
+      });
+    }
+  }
+
   for (const ticket of listUndeliveredLeagueReconciliationTickets(input.db)) {
     const error = new LeagueReconciliationTicketError(
       `Ratatoskr made no changes. Reconcile Discord, Current Rosters, Player Name History, and the public roster, then retry. ${ticket.summary}`,

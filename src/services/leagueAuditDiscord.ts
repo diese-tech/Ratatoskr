@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   EmbedBuilder,
   PermissionFlagsBits,
   RESTJSONErrorCodes,
@@ -46,6 +49,12 @@ export function createLeagueAuditCardPort(
           .setDescription(card.description.slice(0, 4096))
           .setFooter({ text: card.footer.slice(0, 2048) })
           .setColor(0xC43C35)],
+        components: card.actions?.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
+          card.actions.map((action) => new ButtonBuilder()
+            .setCustomId(`${action.id}:${reference}`)
+            .setLabel(action.label)
+            .setStyle(ButtonStyle.Primary)),
+        )] : [],
         allowedMentions: { parse: [] },
         nonce: nonceFor(reference),
         enforceNonce: true,
