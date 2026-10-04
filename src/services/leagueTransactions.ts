@@ -18,6 +18,7 @@ import {
 } from '../db/repositories/leagueOperations.js';
 import {
   LeagueSheetDriftError,
+  LeagueSheetInputError,
   LeagueSheetReconciliationRequiredError,
   type LeagueTransactionRecord,
   type LoadedLeagueSnapshot,
@@ -108,10 +109,20 @@ function errorWithReference(error: unknown, reference: string): Error & { refere
 
 export class LeagueReconciliationTicketError extends Error {
   readonly leagueReconciliationTicket = true;
+  readonly operationalCode?: string;
+  readonly operationalSummary?: string;
+  readonly operationalNext?: string;
+  readonly operationalNoChanges?: true;
 
-  constructor(message: string, readonly reference: string) {
+  constructor(message: string, readonly reference: string, cause?: unknown) {
     super(message);
     this.name = 'LeagueReconciliationTicketError';
+    if (cause instanceof LeagueSheetInputError) {
+      this.operationalCode = cause.operationalCode;
+      this.operationalSummary = cause.operationalSummary;
+      this.operationalNext = cause.operationalNext;
+      this.operationalNoChanges = true;
+    }
   }
 }
 
@@ -132,6 +143,7 @@ function openReconciliationTicket(
   return new LeagueReconciliationTicketError(
     `Ratatoskr made no changes. Reconcile Discord, Current Rosters, Player Name History, and the public roster, then retry. ${summary}`,
     ticket.reference,
+    error,
   );
 }
 

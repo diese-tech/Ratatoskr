@@ -214,6 +214,20 @@ export type PreparedLeagueSheetMutation = {
 
 export class LeagueSheetDriftError extends Error {}
 export class LeagueSheetReconciliationRequiredError extends Error {}
+export class LeagueSheetInputError extends Error {
+  readonly operationalCode: string;
+  readonly operationalSummary: string;
+  readonly operationalNext: string;
+  readonly operationalNoChanges = true;
+
+  constructor(input: { code: string; summary: string; next: string }) {
+    super(input.summary);
+    this.name = 'LeagueSheetInputError';
+    this.operationalCode = input.code;
+    this.operationalSummary = input.summary;
+    this.operationalNext = input.next;
+  }
+}
 
 function parseTeams(rows: CellRows): LeagueTeam[] {
   const populated = rows.slice(1).map((row, index) => ({ row, index }))
@@ -265,7 +279,12 @@ function parseNames(rows: CellRows): LeagueNameRow[] {
     .filter(({ row }) => row.some((cell) => String(cell ?? '').trim() !== ''));
   for (const { row, index } of populated) {
     if (String(row[0] ?? '').trim() === '') {
-      throw new Error(`Player Name History row ${index + 6} is populated but has no Discord ID.`);
+      const sheetRow = index + 6;
+      throw new LeagueSheetInputError({
+        code: 'LEAGUE_SHEET_MISSING_DISCORD_ID',
+        summary: `Player Name History row ${sheetRow} has player information, but its Discord ID cell in column A is blank.`,
+        next: `Open Player Name History row ${sheetRow}. If the row was shifted, move the existing row values one column left so the Discord ID is in column A, then retry the action.`,
+      });
     }
     if (String(row[1] ?? '').trim() === '') {
       throw new Error(`Player Name History row ${index + 6} has no Current League Name.`);

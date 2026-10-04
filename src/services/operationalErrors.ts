@@ -6,7 +6,13 @@ import { getActiveManagedResourceByLogicalKey } from '../db/index.js';
 import { serverChannelLogicalKey, serverRoleLogicalKey } from './serverBootstrap.js';
 
 export type OperationContext = { guildId: string; action: string; setupId?: number; division?: string; next?: string };
-type Report = { reference: string; staffDelivered: boolean };
+type OperationalDetails = {
+  code: string;
+  summary: string;
+  next: string;
+  noChanges: boolean;
+};
+type Report = { reference: string; staffDelivered: boolean; details?: OperationalDetails };
 const recent = new WeakMap<Database.Database, Map<string, Report & { at: number }>>();
 
 // Optional escape hatch for when the guild's staff-ops channel exists but
@@ -43,6 +49,25 @@ export function redactOperationalText(value: string): string {
 
 function safeLog(value: unknown) {
   try { console.error(JSON.stringify(value)); } catch { /* The reporter must never replace the original failure. */ }
+}
+
+function operationalDetails(error: Error): OperationalDetails | undefined {
+  const candidate = error as Error & {
+    operationalCode?: unknown;
+    operationalSummary?: unknown;
+    operationalNext?: unknown;
+    operationalNoChanges?: unknown;
+  };
+  if (typeof candidate.operationalCode !== 'string'
+    || typeof candidate.operationalSummary !== 'string'
+    || typeof candidate.operationalNext !== 'string') return undefined;
+  if (!/^[A-Z0-9][A-Z0-9_.-]{0,79}$/.test(candidate.operationalCode)) return undefined;
+  return {
+    code: candidate.operationalCode,
+    summary: redactOperationalText(candidate.operationalSummary).replace(/[\r\n]/g, ' ').slice(0, 300),
+    next: redactOperationalText(candidate.operationalNext).replace(/[\r\n]/g, ' ').slice(0, 300),
+    noChanges: candidate.operationalNoChanges === true,
+  };
 }
 
 export async function getValidatedStaffChannel(client: Client, db: Database.Database, guildId: string): Promise<GuildTextBasedChannel> {
@@ -119,19 +144,25 @@ export async function reportOperationalError(
 ): Promise<Report> {
   const failure = error instanceof Error ? error : new Error(String(error));
   const code = (failure as Error & { code?: unknown }).code;
-  const key = `${context.guildId}:${context.action}:${context.setupId ?? ''}:${failure.name}:${String(code ?? '')}:${options?.reference ?? ''}`;
+  const details = operationalDetails(failure);
+  const failureIdentity = details
+    ? createHash('sha256').update(JSON.stringify(details)).digest('hex')
+    : String(code ?? '');
+  const key = `${context.guildId}:${context.action}:${context.setupId ?? ''}:${failure.name}:${failureIdentity}:${options?.reference ?? ''}`;
   let records = recent.get(db);
   if (!records) { records = new Map(); recent.set(db, records); }
   const previous = records.get(key);
   const repeated = previous && Date.now() - previous.at < 60_000;
-  const report = repeated ? previous : { reference: options?.reference ?? randomUUID(), staffDelivered: false, at: Date.now() };
+  const report = repeated ? previous : {
+    reference: options?.reference ?? randomUUID(), staffDelivered: false, at: Date.now(), ...(details ? { details } : {}),
+  };
   safeLog({ event: 'operation_failed', reference: report.reference, timestamp: new Date().toISOString(),
     context: { ...context, action: redactOperationalText(context.action), division: context.division ? redactOperationalText(context.division) : undefined,
       next: context.next ? redactOperationalText(context.next) : undefined },
     error: { name: redactOperationalText(failure.name), message: redactOperationalText(failure.message),
       stack: redactOperationalText(failure.stack ?? ''), code: redactOperationalText(String(code ?? '')) } });
   if (repeated && (report.staffDelivered || !options?.retryUndelivered)) {
-    return { reference: report.reference, staffDelivered: report.staffDelivered };
+    return { reference: report.reference, staffDelivered: report.staffDelivered, ...(report.details ? { details: report.details } : {}) };
   }
   if (records.size >= 200) records.delete(records.keys().next().value!);
   records.set(key, report); // Suppress ordinary duplicate alerts before the send.
@@ -144,18 +175,24 @@ export async function reportOperationalError(
       }
       if (await staffReportExists(channel, client.user?.id, options.reference)) {
         report.staffDelivered = true;
-        return { reference: report.reference, staffDelivered: true };
+        return { reference: report.reference, staffDelivered: true, ...(report.details ? { details: report.details } : {}) };
       }
     }
     const safe = (text: string) => escapeMarkdown(redactOperationalText(text).replace(/[\r\n]/g, ' ')).slice(0, 300);
+    const failureLine = details
+      ? `**What happened:** ${safe(details.summary)}`
+      : [50001, 50013].includes(Number(code)) ? 'Discord denied access or permissions.'
+        : [10003, 10008].includes(Number(code)) ? 'A required Discord channel or message is missing.'
+          : 'The operation failed or could not confirm Discord delivery.';
     await channel.send({ content: [
       `Ratatoskr could not finish **${safe(context.action)}**.`,
-      [50001, 50013].includes(Number(code)) ? 'Discord denied access or permissions.'
-        : [10003, 10008].includes(Number(code)) ? 'A required Discord channel or message is missing.'
-          : 'The operation failed or could not confirm Discord delivery.',
+      failureLine,
+      details?.noChanges ? '**Changes:** No changes were made.' : '',
       context.setupId ? `Setup #${context.setupId}${context.division ? ` (${safe(context.division)})` : ''}` : '',
       `Time: ${new Date().toISOString()}`,
-      safe(context.next ?? 'Review the matching Railway log and current setup state before retrying.'),
+      details ? `**What to do:** ${safe(details.next)}`
+        : safe(context.next ?? 'Review the matching Railway log and current setup state before retrying.'),
+      details ? `Error code: ${details.code}` : '',
       `Reference: ${report.reference}`,
     ].filter(Boolean).join('\n'), allowedMentions: { parse: [] },
       ...(options ? { nonce: createHash('sha256').update(options.reference).digest('hex').slice(0, 24), enforceNonce: true } : {}),
@@ -165,11 +202,19 @@ export async function reportOperationalError(
     safeLog({ event: 'staff_report_unavailable', reference: report.reference,
       reason: redactOperationalText(deliveryError instanceof Error ? deliveryError.message : String(deliveryError)) });
   }
-  return { reference: report.reference, staffDelivered: report.staffDelivered };
+  return { reference: report.reference, staffDelivered: report.staffDelivered, ...(report.details ? { details: report.details } : {}) };
 }
 
 export function operationalErrorGuidance(report: Report): string {
-  return report.staffDelivered
+  const delivery = report.staffDelivered
     ? `Staff were notified in staff-ops. Reference: ${report.reference}.`
     : `The staff report could not be confirmed. Ask a bot operator to check Railway logs with reference ${report.reference}.`;
+  if (!report.details) return delivery;
+  return [
+    `What happened: ${report.details.summary}`,
+    report.details.noChanges ? 'Changes: No changes were made.' : '',
+    `What to do: ${report.details.next}`,
+    `Error code: ${report.details.code}`,
+    delivery,
+  ].filter(Boolean).join('\n');
 }
