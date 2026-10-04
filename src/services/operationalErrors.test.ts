@@ -17,6 +17,7 @@ import {
   leagueTransactionReconciliationContext,
 } from './interactionErrors.js';
 import { LeagueReconciliationTicketError } from './leagueTransactions.js';
+import { LeagueSheetInputError } from './leagueSheets.js';
 
 test('nested Scout failures identify their setup and operation without confusing division or page IDs', () => {
   const context = (customId: string, values: string[] = []) => interactionOperationContext({
@@ -41,6 +42,39 @@ test('league audit controls produce human-readable staff support context', () =>
   assert.match(context('league-audit:review:YSL-AUD-1234').next ?? '', /newest League Roster Audit card/);
   assert.equal(context('league-audit:confirm:YSL-AUD-1234:0:repair-roles').action, 'League roster audit repair');
   assert.match(context('league-audit:confirm:YSL-AUD-1234:0:repair-roles').next ?? '', /review the issue again/i);
+});
+
+test('a safe league-sheet input error gives staff and the administrator an actionable report', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  const replies: any[] = [];
+  const interaction: any = {
+    client: f.client,
+    guildId: 'guild',
+    customId: 'league-audit:confirm:YSL-AUD-1234:0:use-discord-name',
+    isChatInputCommand: () => false,
+    isRepliable: () => true,
+    replied: false,
+    deferred: false,
+    deferReply: async () => { interaction.deferred = true; },
+    editReply: async (payload: any) => { replies.push(payload); },
+  };
+  try {
+    await handleInteractionError(interaction, f.db, new LeagueSheetInputError({
+      code: 'LEAGUE_SHEET_MISSING_DISCORD_ID',
+      summary: 'Player Name History row 234 has player information, but its Discord ID cell in column A is blank.',
+      next: 'Move the existing row values one column left so the Discord ID is in column A, then retry from the newest audit card.',
+    }), 'guild');
+    for (const content of [f.sent[0].content, replies[0].content]) {
+      assert.match(content, /Player Name History row 234/);
+      assert.match(content, /column A/);
+      assert.match(content, /No changes were made/);
+      assert.match(content, /move the existing row values one column left/i);
+      assert.match(content, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
+      assert.doesNotMatch(content, /failed or could not confirm Discord delivery/i);
+    }
+    assert.match(f.sent[0].content, /Reference:/);
+  } finally { f.db.close(); }
 });
 
 test('startup transaction recovery includes partial-state manual-repair guidance', () => {

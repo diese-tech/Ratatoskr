@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan } from '../domain/leagueOperations.js';
-import { LeagueSheetDriftError, LeagueSheetsService, type LeagueSheetsGateway, type SheetValueUpdate } from './leagueSheets.js';
+import {
+  LeagueSheetDriftError,
+  LeagueSheetInputError,
+  LeagueSheetsService,
+  type LeagueSheetsGateway,
+  type SheetValueUpdate,
+} from './leagueSheets.js';
 
 type Rows = (string | number | boolean | null)[][];
 
@@ -121,6 +127,23 @@ test('league sheet reader maps only the configured managed tabs and cells', asyn
   assert.equal(loaded.snapshot.rosters[0]?.discordId, 'one');
   assert.deepEqual(loaded.snapshot.publicRosters.Vanaheim?.teams['Dream Walkers'], ['One']);
   assert.deepEqual(loaded.snapshot.publicRosters.Vanaheim?.freeAgents, ['Free']);
+});
+
+test('a shifted Player Name History row reports the exact safe repair instead of a generic failure', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.get(gateway.key('admin', "'Player Name History'!A5:K"))!.push([
+    '', '396502746364117012', 'oJaeger- (Meisner)', 'oJaeger-', 'Previous / Alternate',
+    'Alfheim', 'Little Monsters', 'Player', '2026-10-04', '2026-10-04', 'Ratatoskr approved roster audit repair',
+  ]);
+  await assert.rejects(
+    () => service.load(members, 'free-agent'),
+    (error: unknown) => error instanceof LeagueSheetInputError
+      && error.operationalCode === 'LEAGUE_SHEET_MISSING_DISCORD_ID'
+      && /Player Name History row 9/i.test(error.operationalSummary)
+      && /column A/i.test(error.operationalSummary)
+      && /move the existing row values one column left/i.test(error.operationalNext)
+      && error.operationalNoChanges,
+  );
 });
 
 test('sheet preflight aborts before all writes when any audited value drifted', async () => {
