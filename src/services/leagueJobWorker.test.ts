@@ -252,3 +252,36 @@ test('persistent claim prevents two worker instances from executing guild mutati
     db.close();
   }
 });
+
+test('exhausted background errors stay inspectable and leave the actionable panel after successful fresh retry', async () => {
+  const { listActionableLeagueJobs } = await import('../db/repositories/leagueJobs.js');
+  const db = openDatabase(':memory:');
+  let fail = true;
+  const worker = new LeagueJobWorker(
+    db,
+    'g',
+    handlers(async () => {
+      if (fail) throw Error('source unavailable');
+    }),
+    async () => {},
+    () => now,
+  );
+  worker.stop();
+  try {
+    const first = worker.enqueue('targeted', { discordId: 'one' }, 'member:one');
+    db.prepare('UPDATE league_jobs SET attempt_count=4 WHERE reference=?').run(first.reference);
+    worker.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(getLeagueJob(db, first.reference)?.status, 'FAILED');
+    assert.ok(listActionableLeagueJobs(db, 'g').some((job) => job.reference === first.reference));
+    fail = false;
+    const retry = worker.enqueue('targeted', { discordId: 'one' }, 'member:one');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(getLeagueJob(db, retry.reference)?.status, 'COMPLETED');
+    assert.equal(getLeagueJob(db, first.reference)?.status, 'FAILED');
+    assert.ok(!listActionableLeagueJobs(db, 'g').some((job) => job.reference === first.reference));
+  } finally {
+    worker.stop();
+    db.close();
+  }
+});

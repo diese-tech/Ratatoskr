@@ -14,6 +14,7 @@ import {
 import {
   listOpenLeagueReconciliationTickets,
   listLeagueMutationProblems,
+  hasPendingLeagueDeliveries,
 } from '../db/repositories/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
@@ -102,6 +103,7 @@ export function scheduleDirtyLeagueCheck(db: Database.Database, worker: LeagueJo
     !listLeagueFindings(db, worker.guildId).length &&
     !listOpenLeagueReconciliationTickets(db, worker.guildId).length &&
     !listLeagueMutationProblems(db, worker.guildId).length &&
+    !hasPendingLeagueDeliveries(db, worker.guildId) &&
     !listActionableLeagueJobs(db, worker.guildId).some((job) => job.status === 'RECONCILIATION_REQUIRED')
   ) {
     stopCleanLeagueRetries(db, worker.guildId);

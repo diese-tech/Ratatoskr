@@ -17,6 +17,8 @@ Only Allfather and Aesir role IDs may run these commands. Pickups accept only on
 
 Drop, self-drop, and departure accept an optional **replacement** selected from current Discord members. The replacement must be a same-division Free Agent. When supplied, both moves are one previewed transaction and one public notice; do not run a second pickup command.
 
+`/transaction rename` retains its existing workflow: change the member's Discord name first, then preview and confirm syncing that name to league records. Issue #146 does not change this behavior. A separate follow-up will support an administrator-declared league name across Ratatoskr-managed surfaces, including the Discord server nickname, while preserving preview/confirm, rollback/reconciliation, and name-history safety.
+
 ## Automatic safety checks
 
 - Every confirmed mutation runs a complete Discord/private-sheet/public-sheet audit.

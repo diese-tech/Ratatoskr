@@ -27,6 +27,8 @@ async function fixture() {
   let loads = 0;
   let authorized = true;
   let failWrite = false;
+  let failNotice = false;
+  let noticeAttempts = 0;
   const sheets = {
     load: async () => {
       loads++;
@@ -65,7 +67,14 @@ async function fixture() {
     },
     rollbackRoleChange: async () => {},
     findAnnouncement: async () => undefined,
-    announce: async () => 'notice',
+    announce: async () => {
+      noticeAttempts++;
+      if (failNotice) {
+        failNotice = false;
+        throw Error('notice unavailable');
+      }
+      return 'notice';
+    },
     reconcileManagedRoles: async () => {},
   } as unknown as DiscordLeagueGateway;
   const guild = {
@@ -118,6 +127,12 @@ async function fixture() {
     },
     fail() {
       failWrite = true;
+    },
+    failNoticeOnce() {
+      failNotice = true;
+    },
+    get noticeAttempts() {
+      return noticeAttempts;
     },
   };
 }
@@ -279,6 +294,31 @@ test('dirty worker rechecks known players without a full audit and cancels the n
       ).count,
       0,
     );
+  } finally {
+    f.runtime.stop();
+    f.db.close();
+  }
+});
+
+test('public notice failure keeps durable recovery and retries delivery without repeating the canonical mutation', async () => {
+  const f = await fixture();
+  try {
+    f.failNoticeOnce();
+    const job = f.runtime.worker.enqueue('transaction', f.intent(), 'notice-approval');
+    f.runtime.worker.start();
+    const pending = await settled(f, job.reference);
+    assert.equal(pending.status, 'RECONCILIATION_REQUIRED');
+    assert.equal(getLeagueTransaction(f.db, job.reference)?.status, 'announcement_pending');
+    assert.equal(f.writes, 1);
+    assert.equal(f.noticeAttempts, 1);
+    f.db
+      .prepare("UPDATE league_jobs SET available_at='2000-01-01T00:00:00Z' WHERE type='dirty' AND status='QUEUED'")
+      .run();
+    await f.runtime.worker.drain();
+    assert.equal(getLeagueJob(f.db, job.reference)?.status, 'COMPLETED');
+    assert.equal(getLeagueTransaction(f.db, job.reference)?.status, 'completed');
+    assert.equal(f.writes, 1);
+    assert.equal(f.noticeAttempts, 2);
   } finally {
     f.runtime.stop();
     f.db.close();

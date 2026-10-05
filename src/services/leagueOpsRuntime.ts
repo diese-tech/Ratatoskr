@@ -5,6 +5,7 @@ import {
   getLeagueTransaction,
   listOpenLeagueReconciliationTickets,
   listLeagueMutationProblems,
+  hasPendingLeagueDeliveries,
 } from '../db/repositories/leagueOperations.js';
 import { getLeagueAuditRepair } from '../db/repositories/leagueAuditRepairs.js';
 import { listActionableLeagueJobs, transitionLeagueJob } from '../db/repositories/leagueJobs.js';
@@ -138,6 +139,7 @@ export function createLeagueOpsRuntime(input: {
             throw new LeagueJobBlockedError(
               'RECONCILIATION_REQUIRED',
               'The roster change is complete; its public notice/history remains pending recovery.',
+              { canonicalComplete: true, pendingDelivery: true },
             );
           if (
             transaction?.status === 'reconciliation_required' ||
@@ -209,6 +211,7 @@ export function createLeagueOpsRuntime(input: {
           !findings.length &&
           !listOpenLeagueReconciliationTickets(db, guildId).length &&
           !listLeagueMutationProblems(db, guildId).length &&
+          !hasPendingLeagueDeliveries(db, guildId) &&
           !required.length
         )
           return;

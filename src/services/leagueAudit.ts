@@ -130,7 +130,9 @@ function cardFor(
       ? issues.length > 1
         ? `Ratatoskr stopped the audit because a roster sheet needs attention. No changes were made.\n\n${issues.join('\n')}\n\nAfter the sheet is corrected, the next audit will check it again automatically.`
         : 'Ratatoskr could not read Discord or one of the roster sheets. No changes were made. A Ratatoskr maintainer should check which connection failed; the next audit will retry automatically.'
-      : issues.length ? `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.` : 'An operation needs administrator review before it can proceed safely.';
+      : issues.length
+        ? `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.`
+        : 'An operation needs administrator review before it can proceed safely.';
   const categories =
     result === 'error'
       ? []
@@ -228,7 +230,9 @@ export async function refreshLeagueOpsPanel(
   const result = errorState ? 'error' : issues.length || jobs.length || mutationProblems.length ? 'dirty' : 'clean';
   const reference = `YSL-AUD-${randomUUID().slice(0, 8).toUpperCase()}`;
   const card = cardFor(result, issues, input.now, 'scheduled');
-  if (result === 'clean' && !prior?.lastFullAt) card.description = 'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
+  if (result === 'clean' && !prior?.lastFullAt)
+    card.description =
+      'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
   if (!issues.length) card.actions = undefined;
   if (jobs.length)
     card.description +=
@@ -237,10 +241,10 @@ export async function refreshLeagueOpsPanel(
         .slice(-8)
         .map(
           (job) =>
-            `${job.reference}: ${job.status === 'BLOCKED_REVIEW' ? 'Review a fresh transaction preview' : job.status === 'RECONCILIATION_REQUIRED' ? 'Check a possibly partial operation before retrying' : 'Check permissions or configuration, then retry'}`,
+            `${job.reference}: ${job.status === 'BLOCKED_REVIEW' ? 'Review a fresh transaction preview' : job.status === 'RECONCILIATION_REQUIRED' ? (job.result && typeof job.result === 'object' && 'pendingDelivery' in job.result ? 'Roster change complete; public notice/history is being recovered' : 'Check a possibly partial operation before retrying') : 'Check permissions or configuration, then retry'}`,
         )
         .join('\n');
-  const additionalProblems = mutationProblems.filter(reference => !jobs.some(job => job.reference === reference));
+  const additionalProblems = mutationProblems.filter((reference) => !jobs.some((job) => job.reference === reference));
   if (additionalProblems.length)
     card.description += `\n\nPossibly partial operations: ${additionalProblems.length}\nReview Discord and managed sheets for: ${additionalProblems.slice(-5).join(', ')}`;
   const times = getLeagueAuditState(input.db, input.guildId);

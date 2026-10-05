@@ -247,3 +247,60 @@ test('hourly heartbeat restores its deadline from persistent delivery time and d
     f.db.close();
   }
 });
+
+test('SQLite reopen restores one authoritative panel and outstanding dirty retry intent', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const directory = mkdtempSync(join(tmpdir(), 'league-panel-'));
+  const path = join(directory, 'state.db');
+  let db = openDatabase(path);
+  const snapshot = cleanLeagueSnapshot();
+  const cards = new Panel();
+  let worker = new LeagueJobWorker(
+    db,
+    'g',
+    handlers,
+    async () => {},
+    () => now,
+  );
+  worker.stop();
+  const auditInput = () => ({
+    db,
+    operationScope: db,
+    guildId: 'g',
+    freeAgentRoleId: 'fa',
+    now,
+    trigger: 'startup' as const,
+    members: { getMembers: async () => snapshot.discordMembers },
+    sheets: { load: async () => ({ snapshot, sources: {} as never }) },
+    cards,
+  });
+  try {
+    await runLeagueAudit(auditInput());
+    replaceLeagueFindings(db, 'g', 'member:one', ['A verified drift'], now);
+    scheduleDirtyLeagueCheck(db, worker);
+    const retry = getLeagueJobByDedupe(db, 'g', 'dirty')!;
+    db.close();
+    db = openDatabase(path);
+    worker = new LeagueJobWorker(
+      db,
+      'g',
+      handlers,
+      async () => {},
+      () => now,
+    );
+    worker.stop();
+    scheduleDirtyLeagueCheck(db, worker);
+    assert.equal(getLeagueJobByDedupe(db, 'g', 'dirty')?.reference, retry.reference);
+    assert.equal(getLeagueAuditState(db, 'g')?.currentMessageId, 'm1');
+    await runLeagueAudit(auditInput());
+    assert.equal(cards.sent.length, 1);
+    assert.equal(getLeagueAuditState(db, 'g')?.currentMessageId, 'm1');
+    assert.match(cards.sent[0]!.card.description, /Status: Healthy/);
+  } finally {
+    worker.stop();
+    db.close();
+    rmSync(directory, { recursive: true });
+  }
+});
