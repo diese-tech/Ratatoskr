@@ -33,12 +33,15 @@ import { refreshLeagueOpsPanel, runLeagueAudit, type LeagueAuditCardPort } from 
 import { createLeagueAuditCardPort } from './leagueAuditDiscord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
 import type { LeagueSheetsService } from './leagueSheets.js';
+import { registerLeagueRepairRecovery, reconcileLeagueRepairRecord } from './leagueRepairRecovery.js';
 export type LeagueRepairIntent = {
   actorUserId: string;
   actorName: string;
   auditReference: string;
   expectedFinding: string;
   action: LeagueAuditResolutionAction;
+  reconcileReference?: string;
+  expectedRecoveryFingerprint?: string;
 };
 type LeagueOpsSheets = Pick<
   LeagueSheetsService,
@@ -59,6 +62,7 @@ export function createLeagueOpsRuntime(input: {
   const guildId = guild.id;
   const discord = input.discord ?? new DiscordLeagueGateway(guild, input.transactionsChannelId);
   const cards = input.cards ?? createLeagueAuditCardPort(input.client, db, guildId);
+  registerLeagueRepairRecovery({ db, operationScope, guildId, sheets, members: discord, freeAgentRoleId });
   let worker: LeagueJobWorker;
   const refresh = () => {
     worker.enqueue('panel', {}, 'panel', 500);
@@ -169,6 +173,12 @@ export function createLeagueOpsRuntime(input: {
         try {
           await authorize(intent.actorUserId);
           phase('VALIDATING');
+          if (intent.reconcileReference) {
+            await reconcileLeagueRepairRecord({ db, operationScope, guildId, sheets, members: discord, freeAgentRoleId,
+              reference: intent.reconcileReference, expectedFingerprint: intent.expectedRecoveryFingerprint ?? '', actorUserId: intent.actorUserId });
+            await audit('scheduled');
+            return { reference: intent.reconcileReference, manuallyReconciled: true };
+          }
           const result = await executeLeagueAuditRepair({
             ...intent,
             db,
@@ -252,7 +262,7 @@ export function createLeagueOpsRuntime(input: {
         scheduleDirtyLeagueCheck(db, worker);
       },
       audit: async (job) => audit((job.payload as { trigger: 'startup' | 'scheduled' }).trigger),
-      heartbeat: async () => refreshLeagueOpsPanel({ db, guildId, cards, now: new Date(), repost: true }),
+      heartbeat: async (job) => refreshLeagueOpsPanel({ db, guildId, cards, now: new Date(), repost: true, repostQueuedAt: job.createdAt }),
     },
     async (job) => {
       const transaction = getLeagueTransaction(db, job.reference);

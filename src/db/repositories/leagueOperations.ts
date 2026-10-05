@@ -285,3 +285,7 @@ export function listLeagueMutationProblems(db: Database.Database, guildId: strin
 export function hasPendingLeagueDeliveries(db: Database.Database, guildId: string): boolean {
   return Boolean(db.prepare("SELECT 1 FROM league_transactions WHERE guild_id=? AND status='announcement_pending' LIMIT 1").get(guildId));
 }
+
+export function wasLeagueAlertCleaned(db: Database.Database, guildId: string, reference: string): boolean {
+  return Boolean(db.prepare('SELECT 1 FROM league_alert_cleanup WHERE guild_id=? AND reference=?').get(guildId, reference));
+}

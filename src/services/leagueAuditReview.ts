@@ -2,6 +2,7 @@ import type { LeagueAuditResolutionAction } from './leagueAuditResolution.js';
 import { getLeagueJobByDedupe } from '../db/repositories/leagueJobs.js';
 import { leagueJobWorkerFor } from './leagueJobWorker.js';
 import type { LeagueRepairIntent } from './leagueOpsRuntime.js';
+import { handleLeagueRepairRecoveryButton } from './leagueRepairRecoveryReview.js';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -88,6 +89,7 @@ export async function handleLeagueAuditReviewButton(
   db: Database.Database,
   operationScope: object,
 ): Promise<boolean> {
+  if (await handleLeagueRepairRecoveryButton(interaction, db, operationScope)) return true;
   const parsed = parseReviewId(interaction.customId);
   if (!parsed) return false;
   if (!interaction.guild) {

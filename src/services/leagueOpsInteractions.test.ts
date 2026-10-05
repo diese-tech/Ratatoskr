@@ -148,3 +148,37 @@ test('read failure keeps the current verified finding reviewable without executi
     db.close();
   }
 });
+
+test('recovery confirmation rejects a stale approval and deduplicates repeated current approvals', async () => {
+  const { handleLeagueRepairRecoveryButton } = await import('./leagueRepairRecoveryReview.js');
+  const { saveLeagueTransactionPreview } = await import('../db/repositories/leagueOperations.js');
+  const db = openDatabase(':memory:');
+  const events: string[] = [];
+  const replies: string[] = [];
+  let executions = 0;
+  const handler: LeagueJobHandler = async () => { executions++; };
+  const worker = new LeagueJobWorker(db, 'g', { transaction: handler, repair: handler, targeted: handler, panel: handler,
+    dirty: handler, audit: handler, heartbeat: handler }, async () => {});
+  registerLeagueJobWorker(db, worker);
+  const fingerprint = 'a'.repeat(64);
+  const approval = Buffer.from(fingerprint, 'hex').toString('base64url');
+  function interaction(token: string, admin = true): ButtonInteraction {
+    return { customId: `league-recovery:confirm:YSL-AUD-FIX-12345678:${token}`,
+      guild: { id: 'g', members: { fetch: async () => { events.push('authorize'); return { displayName: 'Admin', roles: { cache: new Map(admin ? [['admin-role', {}]] : []) } }; } } },
+      user: { id: 'admin' }, deferReply: async () => { events.push('ack'); }, editReply: async (value: string) => { replies.push(value); } } as unknown as ButtonInteraction;
+  }
+  try {
+    saveLeagueTransactionPreview(db, { guildId: 'g', actorUserId: 'admin', intentKey: 'repair-recovery:YSL-AUD-FIX-12345678', planFingerprint: fingerprint });
+    await handleLeagueRepairRecoveryButton(interaction('stale'), db, db);
+    assert.equal(events[0], 'ack');
+    assert.match(replies.at(-1)!, /out of date/);
+    assert.equal(executions, 0);
+    await handleLeagueRepairRecoveryButton(interaction(approval, false), db, db);
+    assert.match(replies.at(-1)!, /Only league administrators/);
+    await handleLeagueRepairRecoveryButton(interaction(approval), db, db);
+    await handleLeagueRepairRecoveryButton(interaction(approval), db, db);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(executions, 1);
+    assert.equal((db.prepare("SELECT count(*) n FROM league_jobs WHERE type='repair'").get() as { n: number }).n, 1);
+  } finally { worker.stop(); db.close(); }
+});

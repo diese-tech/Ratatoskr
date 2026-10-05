@@ -22,6 +22,7 @@ import {
   listLeagueMutationProblems,
   listResolvedLeagueAlertReferences,
   markLeagueAlertCleaned,
+  wasLeagueAlertCleaned,
 } from '../db/repositories/leagueOperations.js';
 import { LeagueSheetInputError, type LoadedLeagueSnapshot } from './leagueSheets.js';
 import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
@@ -31,6 +32,7 @@ export type LeagueAuditCard = PersistedLeagueOpsCard;
 
 export interface LeagueAuditCardPort {
   deleteResolvedAlerts?(references: string[]): Promise<void>;
+  deleteLegacyResolvedAlerts?(verifiedBefore: string): Promise<void>;
   findByReference(reference: string): Promise<string | undefined>;
   send(card: LeagueAuditCard, reference: string): Promise<string>;
   delete(messageId: string): Promise<void>;
@@ -213,7 +215,7 @@ export async function recoverPendingLeagueAudit(input: Pick<Input, 'db' | 'guild
 }
 
 export async function refreshLeagueOpsPanel(
-  input: Pick<Input, 'db' | 'guildId' | 'cards'> & { now: Date; repost?: boolean },
+  input: Pick<Input, 'db' | 'guildId' | 'cards'> & { now: Date; repost?: boolean; repostQueuedAt?: string },
 ): Promise<string | undefined> {
   const recovered = await recoverPendingLeagueAudit(input);
   // Recovery already completed the pending replacement. Refresh its content,
@@ -227,8 +229,18 @@ export async function refreshLeagueOpsPanel(
       await input.cards.deleteResolvedAlerts(resolvedAlerts);
       for (const reference of resolvedAlerts) markLeagueAlertCleaned(input.db, input.guildId, reference);
     }
+    const verifiedAt = getLeagueAuditState(input.db, input.guildId)?.lastFullAt;
+    if (result === 'clean' && verifiedAt && input.cards.deleteLegacyResolvedAlerts) {
+      const checkpoint = `legacy-alerts-before:${verifiedAt}`;
+      if (!wasLeagueAlertCleaned(input.db, input.guildId, checkpoint)) {
+        await input.cards.deleteLegacyResolvedAlerts(verifiedAt);
+        markLeagueAlertCleaned(input.db, input.guildId, checkpoint);
+      }
+    }
   };
   const prior = getLeagueAuditState(input.db, input.guildId);
+  const alreadyReposted = input.repostQueuedAt && prior?.lastRepostAt
+    && Date.parse(prior.lastRepostAt) >= Date.parse(input.repostQueuedAt);
   const resources = listLeagueFindings(input.db, input.guildId);
   const readErrors = resources.filter((entry) => entry.resourceKey === 'connection').flatMap((entry) => entry.findings);
   const issues = [
@@ -250,6 +262,8 @@ export async function refreshLeagueOpsPanel(
     card.description =
       'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
   if (!issues.length) card.actions = undefined;
+  if (mutationProblems.length) card.actions = [...(card.actions ?? []), { id: 'league-recovery:list', label: 'Review operations' }];
+  card.actions = [...(card.actions ?? []), { id: 'league-recovery:recheck', label: 'Recheck roster' }];
   if (jobs.length)
     card.description +=
       `\n\nOperations to review: ${jobs.length}\n` +
@@ -262,10 +276,10 @@ export async function refreshLeagueOpsPanel(
         .join('\n');
   const additionalProblems = mutationProblems.filter((reference) => !jobs.some((job) => job.reference === reference));
   if (additionalProblems.length)
-    card.description += `\n\nPossibly partial operations: ${additionalProblems.length}\nReview Discord and managed sheets for: ${additionalProblems.slice(-5).join(', ')}`;
+    card.description += `\n\nPossibly partial operations: ${additionalProblems.length}\nSelect Review operations to inspect and reconcile: ${additionalProblems.slice(-5).join(', ')}`;
   const times = getLeagueAuditState(input.db, input.guildId);
   card.description += `\n\nLast targeted check: ${times?.lastTargetedAt ?? 'Pending'}\nLast full audit: ${times?.lastFullAt ?? 'Pending'}`;
-  if (prior?.currentMessageId && (!input.repost || recovered) && input.cards.edit) {
+  if (prior?.currentMessageId && (!input.repost || recovered || alreadyReposted) && input.cards.edit) {
     await input.cards.edit(prior.currentMessageId, card, reference);
     recordLeaguePanelEdit(input.db, {
       guildId: input.guildId,
