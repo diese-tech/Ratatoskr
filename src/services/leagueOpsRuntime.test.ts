@@ -346,3 +346,20 @@ test('hard-interrupted applying repairs become reviewable and explicitly close w
     assert.equal(f.writes, 0);
   } finally { f.runtime.stop(); f.db.close(); }
 });
+
+test('startup requeues applying repair intent only when no durable mutation record exists', async () => {
+  const f = await fixture();
+  try {
+    const repair = enqueueLeagueJob(f.db, { guildId: 'g', type: 'repair', payload: { actorUserId: 'admin', auditReference: 'stale-audit', expectedFinding: 'stale finding', action: 'use-discord-name' }, dedupeKey: 'pre-record-repair' });
+    transitionLeagueJob(f.db, repair.reference, 'APPLYING');
+    const transaction = enqueueLeagueJob(f.db, { guildId: 'g', type: 'transaction', payload: f.intent(), dedupeKey: 'unrecorded-transaction' });
+    transitionLeagueJob(f.db, transaction.reference, 'APPLYING');
+    await f.runtime.worker.recover();
+    assert.equal(getLeagueJob(f.db, repair.reference)?.status, 'QUEUED');
+    assert.equal(getLeagueJob(f.db, transaction.reference)?.status, 'RECONCILIATION_REQUIRED');
+    assert.equal(f.writes, 0);
+    f.runtime.worker.start();
+    assert.equal((await settled(f, repair.reference)).status, 'COMPLETED');
+    assert.equal(f.writes, 0);
+  } finally { f.runtime.stop(); f.db.close(); }
+});

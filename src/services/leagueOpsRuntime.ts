@@ -281,7 +281,10 @@ export function createLeagueOpsRuntime(input: {
       } catch (error) {
         console.error('Fresh league recovery check unavailable:', error);
       }
-      if (!transaction && !repair && ['LOADING', 'VALIDATING'].includes(job.status))
+      // Audit repairs persist their record before the first external write.
+      // An APPLYING repair without that record is still pre-write intent.
+      if (!transaction && !repair && (['LOADING', 'VALIDATING'].includes(job.status)
+        || (job.type === 'repair' && job.status === 'APPLYING')))
         transitionLeagueJob(db, job.reference, 'QUEUED');
       else
         transitionLeagueJob(db, job.reference, 'RECONCILIATION_REQUIRED', {
