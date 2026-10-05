@@ -65,7 +65,7 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
     appendTransactionHistory: async () => { events.push('history'); },
   };
   const discord = {
-    validateMemberAbsent: async (discordId: string) => { events.push(`discord-absence:${discordId}`); },
+    validateMemberAbsent: async (discordId: string, _presentRemedy?: 'drop' | 'self-drop') => { events.push(`discord-absence:${discordId}`); },
     validateRoleState: async (discordId: string) => { events.push(`discord-preflight:${discordId}`); },
     validateDisplayName: async (discordId: string, expected: string) => { events.push(`discord-name-preflight:${discordId}:${expected}`); },
     applyRoleChange: async (change: { discordId: string }) => { events.push(`discord:${change.discordId}`); },
@@ -275,7 +275,7 @@ test('departure resolves only its selected absent roster member and skips Discor
     expectedPlanFingerprint: leagueTransactionPlanFingerprint(buildDeparturePlan(f.current, 'one')),
   });
   assert.deepEqual(f.events, [
-    'sheet-preflight', 'discord-absence:one', 'sheet-targets', 'sheet-apply', 'announce', 'history',
+    'sheet-preflight', 'sheet-targets', 'discord-absence:one', 'sheet-apply', 'announce', 'history',
   ]);
   assert.equal(getLeagueTransaction(f.db, result.reference)?.kind, 'departure');
   assert.equal(f.events.some((event) => event.startsWith('discord-preflight:')), false);
@@ -292,7 +292,7 @@ test('departure with replacement validates and mutates only the present replacem
     buildPlan: (current) => buildDeparturePlan(current, 'one', 'free'),
   });
   assert.deepEqual(f.events, [
-    'sheet-preflight', 'discord-absence:one', 'sheet-targets', 'discord-preflight:free',
+    'sheet-preflight', 'sheet-targets', 'discord-preflight:free', 'discord-absence:one',
     'discord:free', 'sheet-apply', 'announce', 'history',
   ]);
   f.db.close();
@@ -322,7 +322,8 @@ test('self-drop processes a rostered player who already left Discord without rol
     buildPlan: (current) => buildSelfDropPlan(current, 'one'),
   });
   assert.equal(getLeagueTransaction(f.db, result.reference)?.kind, 'self-drop');
-  assert.deepEqual(f.events, ['sheet-preflight', 'discord-absence:one', 'sheet-targets', 'sheet-apply', 'announce', 'history']);
+  assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), true);
+  assert.deepEqual(f.events, ['sheet-preflight', 'sheet-targets', 'discord-absence:one', 'sheet-apply', 'announce', 'history']);
   f.db.close();
 });
 
@@ -335,7 +336,7 @@ test('absent self-drop with replacement validates absence and mutates only the r
     buildPlan: (current) => buildSelfDropPlan(current, 'one', 'free'),
   });
   assert.deepEqual(f.events, [
-    'sheet-preflight', 'discord-absence:one', 'sheet-targets', 'discord-preflight:free',
+    'sheet-preflight', 'sheet-targets', 'discord-preflight:free', 'discord-absence:one',
     'discord:free', 'sheet-apply', 'announce', 'history',
   ]);
   f.db.close();
@@ -344,17 +345,25 @@ test('absent self-drop with replacement validates absence and mutates only the r
 test('absent self-drop fails closed if the player returned after the roster snapshot loaded', async () => {
   const f = fixture();
   f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
-  f.discord.validateMemberAbsent = async () => {
+  const ticket = createOrGetLeagueReconciliationTicket(f.db, {
+    reference: 'YSL-REC-SELF-DROP', guildId: 'guild', actorUserId: 'admin', fingerprint: 'self-drop-absence', summary: 'Absent roster player',
+  });
+  let presentRemedy: 'drop' | 'self-drop' | undefined;
+  f.discord.validateMemberAbsent = async (_discordId, remedy) => {
+    presentRemedy = remedy;
     f.events.push('discord-absence:one');
-    throw new LeagueMutationValidationError('That player is back in the YSL server.');
+    throw new LeagueMutationValidationError('That player is back in the YSL server. Run `/transaction self-drop` again.');
   };
   await assert.rejects(() => executeLeagueTransaction({
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildSelfDropPlan(current, 'one'),
-  }), /back in the YSL server/i);
-  assert.deepEqual(f.events, ['sheet-preflight', 'discord-absence:one']);
+  }), /back in the YSL server.*transaction self-drop/i);
+  assert.equal(presentRemedy, 'self-drop');
+  assert.deepEqual(f.events, ['sheet-preflight', 'sheet-targets', 'discord-absence:one']);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
+  assert.equal(getLeagueReconciliationTicket(f.db, ticket.reference)?.status, 'open');
+  assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), false);
   f.db.close();
 });
 
@@ -370,7 +379,7 @@ test('departure fails closed when fresh Discord absence cannot be confirmed', as
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildDeparturePlan(current, 'one'),
   }), /back in the YSL server/i);
-  assert.deepEqual(f.events, ['sheet-preflight', 'discord-absence:one']);
+  assert.deepEqual(f.events, ['sheet-preflight', 'sheet-targets', 'discord-absence:one']);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
 });

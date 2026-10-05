@@ -103,7 +103,7 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     return this.currentMembers();
   }
 
-  async validateMemberAbsent(discordId: string): Promise<void> {
+  async validateMemberAbsent(discordId: string, presentRemedy: 'drop' | 'self-drop' = 'drop'): Promise<void> {
     try {
       await fetchFreshMember(this.guild, discordId);
     } catch (error) {
@@ -111,7 +111,10 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
       if (code === RESTJSONErrorCodes.UnknownMember) return;
       throw new Error(`Ratatoskr could not confirm that ${discordId} has left the YSL server.`);
     }
-    throw new LeagueMutationValidationError('That player is back in the YSL server. Use `/transaction drop` to move them into free agency.');
+    const nextStep = presentRemedy === 'self-drop'
+      ? 'Run `/transaction self-drop` again so Ratatoskr can remove their live team role and record the suspension.'
+      : 'Use `/transaction drop` to move them into free agency.';
+    throw new LeagueMutationValidationError(`That player is back in the YSL server. ${nextStep}`);
   }
 
   async validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void> {
