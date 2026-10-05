@@ -46,6 +46,14 @@ class FakeGateway implements LeagueSheetsGateway {
         while (rows.length <= rowIndex) rows.push(Array(10).fill(''));
         rows[rowIndex] = update.values[0]!.map(evaluate);
       } else {
+        const historyMatch = /^'Player Name History'!A(\d+):K\1$/.exec(update.range);
+        if (historyMatch) {
+          const key = this.key(spreadsheetId, "'Player Name History'!A5:K");
+          const rows = this.data.get(key)!;
+          const rowIndex = Number(historyMatch[1]) - 5;
+          while (rows.length <= rowIndex) rows.push(Array(11).fill(''));
+          rows[rowIndex] = update.values[0]!.map(evaluate);
+        }
         const publicMatch = /^'([^']+) Roster'!([A-O])(\d+)$/.exec(update.range);
         if (publicMatch) {
           const key = this.key(spreadsheetId, `'${publicMatch[1]} Roster'!A1:O99`);
@@ -278,6 +286,22 @@ test('numeric-looking league names remain exact text in every managed admin upda
   assert.equal(reloaded.snapshot.rosters.find((row) => row.discordId === 'one')?.player, '007');
   assert.equal(reloaded.snapshot.names.find((row) => row.discordId === 'one')?.currentLeagueName, '007');
   assert.deepEqual(untouchedRoster.slice(7, 10), ['Manual check', 'League staff note', '2026-09-29']);
+});
+
+test('rename history targets an explicit A-to-K row so Google cannot shift the Discord ID into column B', async () => {
+  const { gateway, service } = serviceFixture();
+  const loaded = await service.load(members, 'free-agent');
+  const plan = buildRenamePlan(loaded.snapshot, 'one', 'One Prime');
+
+  await service.apply(loaded, plan, {
+    reference: 'YSL-TRX-RENAME', effectiveDate: '2026-10-04', processedById: 'admin', processedBy: 'Admin',
+  }, service.prepare(loaded, plan));
+
+  const historyWrite = gateway.writes.flatMap((write) => write.updates)
+    .find((update) => update.range === "'Player Name History'!A9:K9");
+  assert.equal(historyWrite?.values[0]?.[0], 'one');
+  assert.equal(historyWrite?.values[0]?.length, 11);
+  assert.equal(gateway.appends.some((append) => append.range.includes('Player Name History')), false);
 });
 
 test('free-agent rename history records the affected division', async () => {

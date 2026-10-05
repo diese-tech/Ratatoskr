@@ -443,6 +443,20 @@ export class LeagueSheetsService {
     const nextBySheetRow = new Map(plan.rosters.map((row) => [row.sheetRow, row]));
     const originalBySheetRow = new Map(originalRosters.map((row) => [row.sheetRow, row]));
     const adminUpdates: SheetValueUpdate[] = [];
+    const nameHistoryAppendRow = plan.nameHistoryAppend ? loaded.sources.names.length + 5 : undefined;
+    const nameHistoryAppendValues: Cell[] | undefined = plan.nameHistoryAppend ? [
+      plan.nameHistoryAppend.discordId,
+      plan.nameHistoryAppend.currentLeagueName,
+      plan.nameHistoryAppend.knownName,
+      plan.nameHistoryAppend.nameStatus,
+      plan.nameHistoryAppend.division,
+      plan.nameHistoryAppend.franchise,
+      plan.nameHistoryAppend.leagueStatus,
+      record.effectiveDate,
+      record.effectiveDate,
+      approvalNote,
+      'Preserved so historical stats continue matching this player.',
+    ] : undefined;
     for (const previous of originalRosters) {
       const next = nextBySheetRow.get(previous.sheetRow);
       if (!next) {
@@ -467,21 +481,18 @@ export class LeagueSheetsService {
         adminUpdates.push({ range: `'Player Name History'!E${next.sheetRow}:G${next.sheetRow}`, values: [[next.division, next.franchise, next.leagueStatus]] });
       }
     }
+    if (nameHistoryAppendRow && nameHistoryAppendValues) {
+      adminUpdates.push({
+        range: `'Player Name History'!A${nameHistoryAppendRow}:K${nameHistoryAppendRow}`,
+        values: [nameHistoryAppendValues],
+      });
+    }
 
     try {
       await this.gateway.batchUpdate(this.config.adminSpreadsheetId, adminUpdates, 'RAW');
       await this.gateway.batchUpdate(this.config.publicSpreadsheetId, prepared.publicUpdates, 'RAW');
       if (prepared.selfDropPresentation) {
         await this.gateway.ensureSelfDropPresentation(this.config.adminSpreadsheetId, prepared.selfDropPresentation);
-      }
-
-      if (plan.nameHistoryAppend) {
-        const row = plan.nameHistoryAppend;
-        await this.gateway.append(this.config.adminSpreadsheetId, "'Player Name History'!A:K", [[
-          row.discordId, row.currentLeagueName, row.knownName, row.nameStatus, row.division, row.franchise,
-          row.leagueStatus, record.effectiveDate, record.effectiveDate, approvalNote,
-          'Preserved so historical stats continue matching this player.',
-        ]], 'RAW');
       }
 
       const verification = await this.load(loaded.snapshot.discordMembers, loaded.snapshot.freeAgentRoleId);
@@ -512,6 +523,9 @@ export class LeagueSheetsService {
           && actual.franchise === expected.franchise
           && actual.leagueStatus === expected.leagueStatus;
       });
+      const historyMatches = !nameHistoryAppendRow || !nameHistoryAppendValues
+        || JSON.stringify((verification.sources.names[nameHistoryAppendRow - 5] ?? []).slice(0, 11))
+          === JSON.stringify(nameHistoryAppendValues);
       const presentationMatches = plan.kind !== 'self-drop'
         || (verification.sources.selfDropPresentation.ruleExists
           && verification.sources.selfDropPresentation.legend[0]?.[0] === 'Red row'
@@ -519,6 +533,7 @@ export class LeagueSheetsService {
             === 'Self-Drop: suspended for the current season and banned for the next YSL season.');
       if (JSON.stringify(rosterProjection(plan.rosters)) !== JSON.stringify(rosterProjection(verification.snapshot.rosters))
         || !namesMatch
+        || !historyMatches
         || !presentationMatches
         || !samePublicRosters(expectedPublic, verification.snapshot.publicRosters)) {
         throw new Error('Post-write values do not match the approved league change.');

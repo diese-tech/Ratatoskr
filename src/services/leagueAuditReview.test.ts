@@ -1,6 +1,43 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { executeRepairAndRefresh } from './leagueAuditReviewFlow.js';
+import { LeagueAuditRepairStaleError } from './leagueAuditResolution.js';
 import { buildLeagueAuditConfirmationView, buildLeagueAuditRepairReply, buildLeagueAuditResolutionView, buildLeagueAuditReviewView } from './leagueAuditReviewView.js';
+
+test('a stale repair confirmation refreshes the rolling audit card', async () => {
+  let refreshes = 0;
+  const result = await executeRepairAndRefresh(
+    async () => undefined,
+    async () => { throw new LeagueAuditRepairStaleError(); },
+    async () => {
+      refreshes += 1;
+      return { status: 'dirty' as const, issues: ['One current issue remains.'], cardId: 'new-card' };
+    },
+  );
+
+  assert.equal(refreshes, 1);
+  assert.deepEqual(result, {
+    kind: 'stale-refreshed',
+    audit: { status: 'dirty', issues: ['One current issue remains.'], cardId: 'new-card' },
+  });
+});
+
+test('a repair confirmation disables its controls before starting external work', async () => {
+  const events: string[] = [];
+  await executeRepairAndRefresh(
+    async () => { events.push('processing'); },
+    async () => {
+      events.push('repair');
+      return { reference: 'YSL-AUD-FIX-1234' };
+    },
+    async () => {
+      events.push('refresh');
+      return { status: 'clean', issues: [] };
+    },
+  );
+
+  assert.deepEqual(events, ['processing', 'repair', 'refresh']);
+});
 
 test('a failed post-repair refresh does not claim that a source error is a remaining roster issue', () => {
   const reply = buildLeagueAuditRepairReply(

@@ -39,6 +39,7 @@ type Input = {
   members: { getMembers(): Promise<LeagueSnapshot['discordMembers']> };
   sheets: { load(members: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot> };
   cards: LeagueAuditCardPort;
+  freshAfterRecovery?: boolean;
 };
 
 const LEAGUE_TIMEZONE = 'America/New_York';
@@ -143,7 +144,7 @@ export async function recoverPendingLeagueAudit(input: Pick<Input, 'db' | 'guild
 
 async function runLeagueAuditNow(input: Input): Promise<{ status: 'clean' | 'dirty' | 'error'; issues: string[]; cardId?: string }> {
   const recovered = await recoverPendingLeagueAudit(input);
-  if (recovered) {
+  if (recovered && !input.freshAfterRecovery) {
     const state = getLeagueAuditState(input.db, input.guildId)!;
     return { status: state.result, issues: state.findings,
       ...(state.currentMessageId ? { cardId: state.currentMessageId } : {}) };
