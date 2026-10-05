@@ -240,7 +240,10 @@ for (const failure of ['ambiguous send', 'failed cleanup']) {
       assert.equal(getLeagueAuditState(f.db, 'g')!.currentMessageId, 'm2');
       assert.equal(getLeagueAuditState(f.db, 'g')!.phase, 'settled');
       assert.equal(getLeagueAuditState(f.db, 'g')!.lastRepostAt, recoveredAt.toISOString());
-      assert.deepEqual(cards.events.filter((event) => event.startsWith('delete:')), ['delete:m1']);
+      assert.deepEqual(
+        cards.events.filter((event) => event.startsWith('delete:')),
+        ['delete:m1'],
+      );
       assert.equal(cards.events.at(-1), 'edit:m2');
       assert.match(cards.sent[1]!.card.description, /Player names: 1/);
     } finally {
@@ -335,4 +338,89 @@ test('SQLite reopen restores one authoritative panel and outstanding dirty retry
     db.close();
     rmSync(directory, { recursive: true });
   }
+});
+
+for (const status of [429, 503]) {
+  test(`a Sheets ${status} preserves verified findings and review controls until fresh recovery`, async () => {
+    const f = setup();
+    const cards = new Panel();
+    let unavailable = false;
+    const audit = {
+      ...f.input,
+      trigger: 'scheduled' as const,
+      members: { getMembers: async () => f.snapshot.discordMembers },
+      sheets: {
+        load: async () => {
+          if (unavailable) throw { status };
+          return { snapshot: f.snapshot, sources: {} as never };
+        },
+      },
+      cards,
+    };
+    try {
+      f.snapshot.discordMembers[0]!.displayName = 'New name';
+      await runLeagueAudit(audit);
+      const verifiedAt = getLeagueAuditState(f.db, 'g')!.lastFullAt;
+      unavailable = true;
+      await runLeagueAudit({ ...audit, now: new Date(now.getTime() + 120_000) });
+      const state = getLeagueAuditState(f.db, 'g')!;
+      assert.equal(state.result, 'error');
+      assert.equal(state.lastFullAt, verifiedAt);
+      assert.equal(state.findings.length, 1);
+      assert.match(state.findings[0]!, /Discord name now/);
+      assert.match(cards.sent[0]!.card.description, new RegExp(String(status)));
+      assert.match(cards.sent[0]!.card.description, /last verified reads/);
+      assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review issues');
+      assert.equal(cards.sent.length, 1);
+      unavailable = false;
+      await runLeagueAudit(audit);
+      assert.equal(getLeagueAuditState(f.db, 'g')!.result, 'dirty');
+      assert.doesNotMatch(cards.sent[0]!.card.description, /429|503/);
+    } finally {
+      f.worker.stop();
+      f.db.close();
+    }
+  });
+}
+
+test('resolved alert deletion retries durably and leaves ambiguous repair records open', async () => {
+  const { createOrGetLeagueReconciliationTicket, markLeagueReconciliationTicketAlerted, resolveOpenLeagueReconciliationTickets, listResolvedLeagueAlertReferences, getLeagueReconciliationTicket } = await import('../db/repositories/leagueOperations.js');
+  const { createLeagueAuditRepair, markLeagueAuditRepairReconciliationRequired } = await import('../db/repositories/leagueAuditRepairs.js');
+  const f = setup();
+  const cards = new Panel();
+  const deleted: string[][] = [];
+  let fail = true;
+  const port: LeagueAuditCardPort = Object.assign(cards, { deleteResolvedAlerts: async (references: string[]) => {
+    if (fail) throw Error('Discord cleanup unavailable');
+    deleted.push(references);
+  } });
+  try {
+    for (const reference of ['resolved-alert', 'ambiguous-repair']) {
+      createOrGetLeagueReconciliationTicket(f.db, { reference, guildId: 'g', actorUserId: 'admin', fingerprint: reference, summary: 'Old issue' });
+      markLeagueReconciliationTicketAlerted(f.db, reference);
+    }
+    createLeagueAuditRepair(f.db, { reference: 'ambiguous-repair', guildId: 'g', auditReference: 'old', actorUserId: 'admin', finding: 'Old issue', action: 'repair-roles' });
+    markLeagueAuditRepairReconciliationRequired(f.db, 'ambiguous-repair', 'Outcome unknown');
+    assert.equal(resolveOpenLeagueReconciliationTickets(f.db, 'g'), 1);
+    assert.equal(getLeagueReconciliationTicket(f.db, 'ambiguous-repair')!.status, 'open');
+    await assert.rejects(refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now }), /cleanup unavailable/);
+    assert.deepEqual(listResolvedLeagueAlertReferences(f.db, 'g'), ['resolved-alert']);
+    fail = false;
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
+    assert.deepEqual(deleted, [['resolved-alert']]);
+    assert.deepEqual(listResolvedLeagueAlertReferences(f.db, 'g'), []);
+    assert.equal(getLeagueReconciliationTicket(f.db, 'ambiguous-repair')!.status, 'open');
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('historical cleanup selects only bot-owned standalone alerts with an exact resolved reference', async () => {
+  const { isResolvedLeagueAlertMessage } = await import('./leagueAuditDiscord.js');
+  const references = new Set(['YSL-REC-resolved']);
+  const message = { author: { id: 'rat' }, content: 'Ratatoskr could not finish **League sheet reconciliation**.\nReference: YSL-REC-resolved' };
+  assert.equal(isResolvedLeagueAlertMessage(message, 'rat', references), true);
+  assert.equal(isResolvedLeagueAlertMessage({ ...message, author: { id: 'human' } }, 'rat', references), false);
+  assert.equal(isResolvedLeagueAlertMessage({ ...message, content: message.content + '-open' }, 'rat', references), false);
+  assert.equal(isResolvedLeagueAlertMessage({ ...message, content: 'League Ops Status\nReference: YSL-REC-resolved' }, 'rat', references), false);
+  assert.equal(isResolvedLeagueAlertMessage(message, undefined, references), false);
 });

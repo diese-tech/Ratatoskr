@@ -20,6 +20,7 @@ export type SelfDropPresentation = { sheetId: number; legend: CellRows; ruleExis
 
 export interface LeagueSheetsGateway {
   getValues(spreadsheetId: string, range: string): Promise<CellRows>;
+  getValuesBatch?(spreadsheetId: string, ranges: string[]): Promise<CellRows[]>;
   batchUpdate(spreadsheetId: string, updates: SheetValueUpdate[], valueInputOption?: 'RAW' | 'USER_ENTERED'): Promise<void>;
   append(spreadsheetId: string, range: string, values: CellRows, valueInputOption?: 'RAW' | 'USER_ENTERED'): Promise<void>;
   getSelfDropPresentation(spreadsheetId: string): Promise<SelfDropPresentation>;
@@ -43,6 +44,34 @@ const LeagueSheetsEnvironmentSchema = z.object({
   YSL_PUBLIC_SPREADSHEET_ID: z.string().min(1),
 });
 
+// Pace league reads below the service-account limit and respect quota cooldowns.
+// A failed read is returned to durable recovery rather than replayed here.
+export function createLeagueSheetsReadSchedule(
+  clock = {
+    now: () => Date.now(),
+    wait: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  },
+) {
+  let tail: Promise<unknown> = Promise.resolve();
+  let nextReadAt = 0;
+  return <T>(read: () => Promise<T>): Promise<T> => {
+    const pending = tail.then(async () => {
+      const delay = nextReadAt - clock.now();
+      if (delay > 0) await clock.wait(delay);
+      nextReadAt = clock.now() + 2000;
+      try {
+        return await read();
+      } catch (error) {
+        if (error && typeof error === 'object' && 'status' in error && error.status === 429)
+          nextReadAt = clock.now() + 60_000;
+        throw error;
+      }
+    });
+    tail = pending.catch(() => {});
+    return pending;
+  };
+}
+
 export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv = process.env): {
   gateway: LeagueSheetsGateway;
   config: LeagueSheetsConfig;
@@ -54,12 +83,27 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
   const serviceAccount = ServiceAccountSchema.parse(credentials);
   const auth = new GoogleAuth({ credentials: serviceAccount, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
 
+  const scheduleRead = createLeagueSheetsReadSchedule();
+
   const request = async <T>(options: { url: string; method?: 'GET' | 'POST'; data?: unknown }): Promise<T> => {
     const client = await auth.getClient();
-    const response = await client.request<T>(options);
+    const response = await (options.method === 'POST'
+      ? client.request<T>({ ...options, retry: false })
+      : scheduleRead(() => client.request<T>({ ...options, retry: false })));
     return response.data;
   };
   const gateway: LeagueSheetsGateway = {
+    async getValuesBatch(spreadsheetId, ranges) {
+      if (!ranges.length) return [];
+      const query = new URLSearchParams({ valueRenderOption: 'FORMATTED_VALUE' });
+      for (const range of ranges) query.append('ranges', range);
+      const data = await request<{ valueRanges?: Array<{ values?: CellRows }> }>({
+        url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${query}`,
+      });
+      if (data.valueRanges?.length !== ranges.length)
+        throw new Error('Sheets batch read returned an incomplete range set.');
+      return data.valueRanges.map((range) => range.values ?? []);
+    },
     async getValues(spreadsheetId, range) {
       const encoded = encodeURIComponent(range);
       const data = await request<{ values?: CellRows }>({
@@ -341,7 +385,15 @@ function samePublicRosters(
 }
 
 export class LeagueSheetsService {
-  constructor(private readonly gateway: LeagueSheetsGateway, private readonly config: LeagueSheetsConfig) {}
+  constructor(
+    private readonly gateway: LeagueSheetsGateway, private readonly config: LeagueSheetsConfig,
+  ) {}
+
+  private readRanges(spreadsheetId: string, ranges: string[]): Promise<CellRows[]> {
+    return this.gateway.getValuesBatch
+      ? this.gateway.getValuesBatch(spreadsheetId, ranges)
+      : Promise.all(ranges.map((range) => this.gateway.getValues(spreadsheetId, range)));
+  }
 
   async listRosterPlayers(): Promise<LeagueRosterRow[]> {
     const rows = await this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE);
@@ -349,21 +401,27 @@ export class LeagueSheetsService {
   }
 
   async load(discordMembers: DiscordLeagueMember[], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot> {
-    const [teams, rosters, names, publicRows, selfDropPresentation] = await Promise.all([
-      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_TEAMS_RANGE),
-      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE),
-      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_NAMES_RANGE),
-      Promise.all(divisions.map((division) => this.gateway.getValues(this.config.publicSpreadsheetId, `'${division} Roster'!${PUBLIC_RANGE}`))),
+    const [adminRows, publicRows, selfDropPresentation] = await Promise.all([
+      this.readRanges(this.config.adminSpreadsheetId, [ADMIN_TEAMS_RANGE, ADMIN_ROSTERS_RANGE, ADMIN_NAMES_RANGE]),
+      this.readRanges(
+        this.config.publicSpreadsheetId,
+        divisions.map((division) => `'${division} Roster'!${PUBLIC_RANGE}`),
+      ),
       this.gateway.getSelfDropPresentation(this.config.adminSpreadsheetId),
     ]);
-    const publicByDivision = Object.fromEntries(divisions.map((division, index) => [division, publicRows[index] ?? []])) as Record<LeagueDivision, CellRows>;
+    const [teams = [], rosters = [], names = []] = adminRows;
+    const publicByDivision = Object.fromEntries(
+      divisions.map((division, index) => [division, publicRows[index] ?? []]),
+    ) as Record<LeagueDivision, CellRows>;
     return {
       snapshot: {
         teams: parseTeams(teams),
         rosters: parseRosters(rosters),
         names: parseNames(names),
         discordMembers,
-        publicRosters: Object.fromEntries(divisions.map((division) => [division, parsePublic(publicByDivision[division])])),
+        publicRosters: Object.fromEntries(
+          divisions.map((division) => [division, parsePublic(publicByDivision[division])]),
+        ),
         freeAgentRoleId,
       },
       sources: { teams, rosters, names, publicByDivision, selfDropPresentation },
@@ -373,23 +431,34 @@ export class LeagueSheetsService {
   // Sheets has no server-side Discord-ID predicate. Read the three managed
   // index tables, then only public divisions containing the affected identity.
   // This read-only path never supplies a mutation's before-values.
-  async loadMember(discordId: string, member: DiscordLeagueMember | null, freeAgentRoleId: string): Promise<LeagueSnapshot> {
-    const [teamRows, rosterRows, nameRows] = await Promise.all([
-      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_TEAMS_RANGE),
-      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE),
-      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_NAMES_RANGE),
+  async loadMember(
+    discordId: string, member: DiscordLeagueMember | null, freeAgentRoleId: string,
+  ): Promise<LeagueSnapshot> {
+    const [teamRows = [], rosterRows = [], nameRows = []] = await this.readRanges(this.config.adminSpreadsheetId, [
+      ADMIN_TEAMS_RANGE,
+      ADMIN_ROSTERS_RANGE,
+      ADMIN_NAMES_RANGE,
     ]);
     const teams = parseTeams(teamRows);
     const rosters = parseRosters(rosterRows);
     const names = parseNames(nameRows);
-    const affectedDivisions = [...new Set([
-      ...rosters.filter(row => row.discordId === discordId).map(row => row.division),
-      ...names.filter(row => row.discordId === discordId).map(row => row.division),
-      ...teams.filter(team => member?.roleIds.includes(team.teamRoleId) || member?.roleIds.includes(team.divisionRoleId)).map(team => team.division),
-    ])];
-    const publicRosters = Object.fromEntries(await Promise.all(affectedDivisions.map(async division => [division,
-      parsePublic(await this.gateway.getValues(this.config.publicSpreadsheetId, `'${division} Roster'!${PUBLIC_RANGE}`)),
-    ])));
+    const affectedDivisions = [
+      ...new Set([
+      ...rosters.filter((row) => row.discordId === discordId).map((row) => row.division),
+      ...names.filter((row) => row.discordId === discordId).map((row) => row.division),
+      ...teams
+          .filter((team) => member?.roleIds.includes(team.teamRoleId) || member?.roleIds.includes(team.divisionRoleId))
+          .map((team) => team.division),
+    ]),
+    ];
+    const publicRows = await this.readRanges(
+      this.config.publicSpreadsheetId,
+      affectedDivisions.map((division) => `'${division} Roster'!${PUBLIC_RANGE}`),
+    );
+    const publicRosters = Object.fromEntries(
+      affectedDivisions.map((division, index) => [division,
+      parsePublic(publicRows[index] ?? [])]),
+    );
     return { teams, rosters, names, discordMembers: member ? [member] : [], publicRosters, freeAgentRoleId };
   }
 

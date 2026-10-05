@@ -20,6 +20,8 @@ import {
   resolveOpenLeagueReconciliationTickets,
   listOpenLeagueReconciliationTickets,
   listLeagueMutationProblems,
+  listResolvedLeagueAlertReferences,
+  markLeagueAlertCleaned,
 } from '../db/repositories/leagueOperations.js';
 import { LeagueSheetInputError, type LoadedLeagueSnapshot } from './leagueSheets.js';
 import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
@@ -28,6 +30,7 @@ import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 export type LeagueAuditCard = PersistedLeagueOpsCard;
 
 export interface LeagueAuditCardPort {
+  deleteResolvedAlerts?(references: string[]): Promise<void>;
   findByReference(reference: string): Promise<string | undefined>;
   send(card: LeagueAuditCard, reference: string): Promise<string>;
   delete(messageId: string): Promise<void>;
@@ -127,42 +130,39 @@ function cardFor(
 ): LeagueAuditCard {
   const intro =
     result === 'error'
-      ? issues.length > 1
-        ? `Ratatoskr stopped the audit because a roster sheet needs attention. No changes were made.\n\n${issues.join('\n')}\n\nAfter the sheet is corrected, the next audit will check it again automatically.`
-        : 'Ratatoskr could not read Discord or one of the roster sheets. No changes were made. A Ratatoskr maintainer should check which connection failed; the next audit will retry automatically.'
+      ? issues.length
+        ? 'The latest check could not finish. The findings below are from the last verified reads and may have changed. Review remains available; every confirmed repair must read fresh state before writing.'
+        : 'The latest check could not finish. No verified player findings are available to review. No changes were made by this check.'
       : issues.length
         ? `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.`
         : 'An operation needs administrator review before it can proceed safely.';
-  const categories =
-    result === 'error'
-      ? []
-      : ([
-          [
-            'Player names',
-            issues.filter(
-              (issue) =>
-                (issue.includes('Discord name now:') &&
-                  issue.includes('Current Rosters sheet:') &&
-                  issue.includes('Player Name History sheet:')) ||
-                (issue.includes('Current Rosters:') &&
-                  issue.includes('Player Name History:') &&
-                  issue.includes('Make the names match.')),
-            ).length,
-          ],
-          [
-            'Departures or inactive players',
-            issues.filter((issue) => issue.includes('no longer in the Discord server')).length,
-          ],
-          [
-            'Discord roles',
-            issues.filter(
-              (issue) =>
-                !issue.includes('no longer in the Discord server') &&
-                /Discord .*role|role in Discord|Discord division|Discord team/i.test(issue),
-            ).length,
-          ],
-          ['Roster sheets and setup', 0],
-        ] as Array<[string, number]>);
+  const categories = [
+    [
+      'Player names',
+      issues.filter(
+        (issue) =>
+          (issue.includes('Discord name now:') &&
+            issue.includes('Current Rosters sheet:') &&
+            issue.includes('Player Name History sheet:')) ||
+          (issue.includes('Current Rosters:') &&
+            issue.includes('Player Name History:') &&
+            issue.includes('Make the names match.')),
+      ).length,
+    ],
+    [
+      'Departures or inactive players',
+      issues.filter((issue) => issue.includes('no longer in the Discord server')).length,
+    ],
+    [
+      'Discord roles',
+      issues.filter(
+        (issue) =>
+          !issue.includes('no longer in the Discord server') &&
+          /Discord .*role|role in Discord|Discord division|Discord team/i.test(issue),
+      ).length,
+    ],
+    ['Roster sheets and setup', 0],
+  ] as Array<[string, number]>;
   if (categories.length)
     categories[3]![1] = issues.length - categories.slice(0, 3).reduce((sum, entry) => sum + entry[1], 0);
   const summary = categories
@@ -186,7 +186,7 @@ function cardFor(
         : `Status: Attention required\nOpen reconciliation items: ${issues.length}\n\n${intro}${summary ? `\n\n${summary}\n\nSelect **Review issues** for a private, step-by-step queue.` : ''}`,
     footer: `${trigger === 'startup' ? 'Startup' : 'Daily'} audit • ${time}`,
     allowedMentions: false,
-    ...(result === 'dirty' ? { actions: [{ id: 'league-audit:review', label: 'Review issues' }] } : {}),
+    ...(issues.length ? { actions: [{ id: 'league-audit:review', label: 'Review issues' }] } : {}),
   };
 }
 
@@ -221,8 +221,19 @@ export async function refreshLeagueOpsPanel(
   if (recovered && input.repost) noteLeaguePanelRepost(input.db, input.guildId, input.now);
   if (recovered && !input.cards.edit)
     return getLeagueAuditState(input.db, input.guildId)?.currentMessageId ?? undefined;
+  const cleanupResolvedAlerts = async () => {
+    const resolvedAlerts = listResolvedLeagueAlertReferences(input.db, input.guildId);
+    if (resolvedAlerts.length && input.cards.deleteResolvedAlerts) {
+      await input.cards.deleteResolvedAlerts(resolvedAlerts);
+      for (const reference of resolvedAlerts) markLeagueAlertCleaned(input.db, input.guildId, reference);
+    }
+  };
   const prior = getLeagueAuditState(input.db, input.guildId);
-  const issues = [...new Set(listLeagueFindings(input.db, input.guildId).flatMap((entry) => entry.findings))];
+  const resources = listLeagueFindings(input.db, input.guildId);
+  const readErrors = resources.filter((entry) => entry.resourceKey === 'connection').flatMap((entry) => entry.findings);
+  const issues = [
+    ...new Set(resources.filter((entry) => entry.resourceKey !== 'connection').flatMap((entry) => entry.findings)),
+  ];
   const tickets = listOpenLeagueReconciliationTickets(input.db, input.guildId);
   for (const ticket of tickets) if (!issues.includes(ticket.summary)) issues.push(ticket.summary);
   const mutationProblems = listLeagueMutationProblems(input.db, input.guildId);
@@ -233,6 +244,8 @@ export async function refreshLeagueOpsPanel(
   const result = errorState ? 'error' : issues.length || jobs.length || mutationProblems.length ? 'dirty' : 'clean';
   const reference = `YSL-AUD-${randomUUID().slice(0, 8).toUpperCase()}`;
   const card = cardFor(result, issues, input.now, 'scheduled');
+  if (readErrors.length)
+    card.description += `\n\nLatest check: ${readErrors.join('\n')}\nRatatoskr will retry automatically in the dirty-state cycle (2 minutes).`;
   if (result === 'clean' && !prior?.lastFullAt)
     card.description =
       'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
@@ -263,6 +276,7 @@ export async function refreshLeagueOpsPanel(
       at: input.now,
       card,
     });
+    await cleanupResolvedAlerts();
     return prior.currentMessageId;
   }
   beginDirtyLeagueAudit(input.db, {
@@ -276,6 +290,7 @@ export async function refreshLeagueOpsPanel(
   });
   await recoverPendingLeagueAudit(input);
   noteLeaguePanelRepost(input.db, input.guildId, input.now);
+  await cleanupResolvedAlerts();
   return getLeagueAuditState(input.db, input.guildId)?.currentMessageId ?? undefined;
 }
 
@@ -292,6 +307,7 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
     dismissResolvedRepairReviews(input.db, input.guildId, issues);
   } catch (error) {
     console.error('League roster audit could not read every source:', error);
+    const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
     issues =
       error instanceof LeagueSheetInputError
         ? [
@@ -299,7 +315,15 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
             `**What to do:** ${error.operationalNext}`,
             `**Error code:** ${error.operationalCode}`,
           ]
-        : ['The audit could not read every required Discord and roster-sheet source.'];
+        : status === 429
+          ? [
+              'Google Sheets read quota reached (429). Reads are paused before retrying; no roster changes were made by this check.',
+            ]
+          : status === 503
+            ? ['Google Sheets is temporarily unavailable (503). No roster changes were made by this check.']
+            : [
+                'The audit could not read every required Discord and roster-sheet source. No roster changes were made by this check.',
+              ];
     result = 'error';
     const { replaceLeagueFindings } = await import('../db/repositories/leagueVerifiedState.js');
     replaceLeagueFindings(input.db, input.guildId, 'connection', issues, input.now);
@@ -312,7 +336,10 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
   });
   if (result === 'clean') resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
   // Create durable panel state even before the first Discord delivery.
-  if (!getLeagueAuditState(input.db, input.guildId))
+  if (!getLeagueAuditState(input.db, input.guildId)) {
+    const initialCard = cardFor(result, result === 'error' ? [] : issues, input.now, input.trigger);
+    if (result === 'error')
+      initialCard.description += `\n\n${issues.join('\n')}\nNo changes were made by this check. The next dirty-state check will retry automatically.`;
     beginDirtyLeagueAudit(input.db, {
       guildId: input.guildId,
       result,
@@ -320,8 +347,10 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
       runReference: `YSL-AUD-${randomUUID().slice(0, 8)}`,
       runAt: input.now.toISOString(),
       trigger: input.trigger,
+      card: initialCard,
     });
-  noteLeagueCheck(input.db, input.guildId, 'full', input.now);
+  }
+  if (result !== 'error') noteLeagueCheck(input.db, input.guildId, 'full', input.now);
   return { status: result, issues };
 }
 

@@ -432,3 +432,49 @@ test('targeted member reads only managed index tables and affected public divisi
   assert.deepEqual(f.gateway.appends, []);
   assert.deepEqual(f.gateway.presentationWrites, []);
 });
+
+test('league reads are paced and quota exhaustion delays the next read without replaying the failed request', async () => {
+  const { createLeagueSheetsReadSchedule } = await import('./leagueSheets.js');
+  let time = 0;
+  const waits: number[] = [];
+  const schedule = createLeagueSheetsReadSchedule({
+    now: () => time,
+    wait: async (ms) => {
+      waits.push(ms);
+      time += ms;
+    },
+  });
+  let attempts = 0;
+  const failed = schedule(async () => {
+    attempts++;
+    throw { status: 429 };
+  });
+  const next = schedule(async () => 'fresh');
+  await assert.rejects(failed);
+  assert.equal(await next, 'fresh');
+  assert.equal(attempts, 1);
+  assert.deepEqual(waits, [60_000]);
+  await Promise.all([schedule(async () => 'one'), schedule(async () => 'two')]);
+  assert.deepEqual(waits, [60_000, 2000, 2000]);
+});
+
+test('full and targeted loads batch fresh ranges per workbook and restrict targeted public reads', async () => {
+  const { gateway, service } = serviceFixture();
+  const batches: Array<{ spreadsheetId: string; ranges: string[] }> = [];
+  (gateway as LeagueSheetsGateway).getValuesBatch = async (spreadsheetId, ranges) => {
+    batches.push({ spreadsheetId, ranges });
+    return Promise.all(ranges.map((range) => gateway.getValues(spreadsheetId, range)));
+  };
+  const full = await service.load(members, 'free-agent');
+  assert.equal(batches.length, 2);
+  assert.equal(batches[0]!.ranges.length, 3);
+  assert.equal(batches[1]!.ranges.length, 3);
+  batches.length = 0;
+  const targeted = await service.loadMember('one', members[0]!, 'free-agent');
+  assert.equal(batches.length, 2);
+  assert.deepEqual(batches[1]!.ranges, ["'Vanaheim Roster'!A1:O99"]);
+  assert.deepEqual(targeted.rosters, full.snapshot.rosters);
+  gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J"))![1]![5] = 'Fresh name';
+  const fresh = await service.loadMember('one', members[0]!, 'free-agent');
+  assert.equal(fresh.rosters[0]!.player, 'Fresh name');
+});

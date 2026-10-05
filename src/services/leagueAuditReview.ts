@@ -117,7 +117,7 @@ export async function handleLeagueAuditReviewButton(
     }
   }
   const state = getLeagueAuditState(db, interaction.guild.id);
-  if (!state || state.result !== 'dirty' || state.runReference !== parsed.reference) {
+  if (!state || state.result === 'clean' || state.runReference !== parsed.reference) {
     await interaction.editReply({
       content: 'This audit card is out of date. Use the current League Ops Status panel.',
     });

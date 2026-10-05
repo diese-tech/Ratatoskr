@@ -17,12 +17,44 @@ function nonceFor(reference: string): string {
   return createHash('sha256').update(reference).digest('hex').slice(0, 24);
 }
 
+export function isResolvedLeagueAlertMessage(
+  message: { author: { id: string }; content: string },
+  botUserId: string | undefined,
+  references: ReadonlySet<string>,
+): boolean {
+  if (!botUserId || message.author.id !== botUserId || !message.content.startsWith('Ratatoskr could not finish **')) return false;
+  const reference = message.content.match(/^Reference: (\S+)\s*$/m)?.[1];
+  return Boolean(reference && references.has(reference));
+}
+
 export function createLeagueAuditCardPort(
   client: Client,
   db: Database.Database,
   guildId: string,
 ): LeagueAuditCardPort {
   return {
+    async deleteResolvedAlerts(references) {
+      const channel = await getValidatedStaffChannel(client, db, guildId);
+      const bot = channel.guild.members.me ?? await channel.guild.members.fetchMe();
+      if (!channel.permissionsFor(bot)?.has(PermissionFlagsBits.ReadMessageHistory))
+        throw new Error('bot cannot read staff-ops history for resolved league alert cleanup');
+      const resolved = new Set(references);
+      let before: string | undefined;
+      while (true) {
+        const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+        for (const message of messages.values()) {
+          if (!isResolvedLeagueAlertMessage(message, client.user?.id, resolved)) continue;
+          try { await message.delete(); }
+          catch (error) {
+            if (!(error && typeof error === 'object' && 'code' in error && error.code === RESTJSONErrorCodes.UnknownMessage)) throw error;
+          }
+        }
+        if (messages.size < 100) return;
+        const oldest = messages.last();
+        if (!oldest || oldest.id === before) throw new Error('Resolved league alert cleanup could not advance history pagination');
+        before = oldest.id;
+      }
+    },
     async findByReference(reference) {
       const channel = await getValidatedStaffChannel(client, db, guildId);
       const bot = channel.guild.members.me ?? await channel.guild.members.fetchMe();
