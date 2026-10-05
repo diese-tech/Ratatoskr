@@ -28,6 +28,7 @@ import {
 import { LeagueSheetInputError, type LoadedLeagueSnapshot } from './leagueSheets.js';
 import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
+import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 
 export type LeagueAuditCard = PersistedLeagueOpsCard;
 
@@ -251,6 +252,9 @@ export async function refreshLeagueOpsPanel(
   const tickets = listOpenLeagueReconciliationTickets(input.db, input.guildId);
   for (const ticket of tickets) if (!issues.includes(ticket.summary)) issues.push(ticket.summary);
   const mutationProblems = listLeagueMutationProblems(input.db, input.guildId);
+  const recoverableRepairs = listIncompleteLeagueAuditRepairs(input.db)
+    .filter((repair) => repair.guildId === input.guildId && repair.status === 'reconciliation_required');
+  const repairReferences = new Set(recoverableRepairs.map((repair) => repair.reference));
   const jobs = listActionableLeagueJobs(input.db, input.guildId).filter(
     (job) => !['panel', 'heartbeat'].includes(job.type),
   );
@@ -264,7 +268,7 @@ export async function refreshLeagueOpsPanel(
     card.description =
       'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
   if (!issues.length) card.actions = undefined;
-  if (mutationProblems.length) card.actions = [...(card.actions ?? []), { id: 'league-recovery:list', label: 'Review operations' }];
+  if (recoverableRepairs.length) card.actions = [...(card.actions ?? []), { id: 'league-recovery:list', label: 'Review operations' }];
   card.actions = [...(card.actions ?? []), { id: 'league-recovery:recheck', label: 'Recheck roster' }];
   if (jobs.length)
     card.description +=
@@ -277,8 +281,13 @@ export async function refreshLeagueOpsPanel(
         )
         .join('\n');
   const additionalProblems = mutationProblems.filter((reference) => !jobs.some((job) => job.reference === reference));
-  if (additionalProblems.length)
-    card.description += `\n\nPossibly partial operations: ${additionalProblems.length}\nSelect Review operations to inspect and reconcile: ${additionalProblems.slice(-5).join(', ')}`;
+  if (additionalProblems.length) {
+    card.description += `\n\nPossibly partial operations: ${additionalProblems.length}`;
+    const repairs = additionalProblems.filter((reference) => repairReferences.has(reference));
+    const transactions = additionalProblems.filter((reference) => !repairReferences.has(reference));
+    if (repairs.length) card.description += `\nSelect Review operations to inspect and reconcile repairs: ${repairs.slice(-5).join(', ')}`;
+    if (transactions.length) card.description += `\nInspect Discord, managed sheets and transaction notice/history for: ${transactions.slice(-5).join(', ')}. Do not replay the transaction.`;
+  }
   const times = getLeagueAuditState(input.db, input.guildId);
   card.description += `\n\nLast targeted check: ${times?.lastTargetedAt ?? 'Pending'}\nLast full audit: ${times?.lastFullAt ?? 'Pending'}`;
   if (prior?.currentMessageId && (!input.repost || recovered || alreadyReposted) && input.cards.edit) {

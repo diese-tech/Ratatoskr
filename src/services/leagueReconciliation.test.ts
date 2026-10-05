@@ -520,3 +520,18 @@ test('targeted convergence after a dirty full audit cannot authorize legacy clea
     assert.deepEqual(cleaned, [cleanAt.toISOString()]);
   } finally { f.worker.stop(); f.db.close(); }
 });
+
+test('transaction-only interruptions do not advertise an audit-repair recovery button', async () => {
+  const { createLeagueTransaction, markLeagueTransactionReconciliationRequired } = await import('../db/repositories/leagueOperations.js');
+  const f = setup();
+  const cards = new Panel();
+  try {
+    createLeagueTransaction(f.db, { reference: 'old-transaction', guildId: 'g', kind: 'trade', actorUserId: 'admin', payload: {} });
+    markLeagueTransactionReconciliationRequired(f.db, 'old-transaction', 'Interrupted transaction');
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
+    assert.ok(!cards.sent[0]!.card.actions?.some((action) => action.label === 'Review operations'));
+    assert.doesNotMatch(cards.sent[0]!.card.description, /Select Review operations/);
+    assert.match(cards.sent[0]!.card.description, /transaction notice\/history for: old-transaction/);
+    assert.match(cards.sent[0]!.card.description, /Do not replay the transaction/);
+  } finally { f.worker.stop(); f.db.close(); }
+});

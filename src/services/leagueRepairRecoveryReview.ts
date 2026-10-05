@@ -7,6 +7,7 @@ import {
 } from '../db/repositories/leagueOperations.js';
 import { hasAccess } from './authorization.js';
 import { leagueJobWorkerFor } from './leagueJobWorker.js';
+import { LeagueJobBlockedError } from './leagueJobWorker.js';
 import { previewRegisteredLeagueRepairRecovery } from './leagueRepairRecovery.js';
 import type { LeagueRepairIntent } from './leagueOpsRuntime.js';
 
@@ -92,7 +93,14 @@ export async function handleLeagueRepairRecoveryButton(
     );
     return true;
   }
-  const preview = await previewRegisteredLeagueRepairRecovery(scope, interaction.guild.id, target);
+  let preview;
+  try {
+    preview = await previewRegisteredLeagueRepairRecovery(scope, interaction.guild.id, target);
+  } catch (error) {
+    if (!(error instanceof LeagueJobBlockedError)) throw error;
+    await interaction.editReply(error.message);
+    return true;
+  }
   if (preview.findings.length) worker.enqueue('audit', { trigger: 'scheduled' }, 'full-audit');
   saveLeagueTransactionPreview(db, {
     guildId: interaction.guild.id,
