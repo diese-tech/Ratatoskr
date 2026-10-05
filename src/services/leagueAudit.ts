@@ -23,6 +23,7 @@ import {
   listLeagueMutationProblems,
   listResolvedLeagueAlertReferences,
   markLeagueAlertCleaned,
+  getLegacyLeagueAlertCleanupCutoff,
   wasLeagueAlertCleaned,
 } from '../db/repositories/leagueOperations.js';
 import { LeagueSheetInputError, type LoadedLeagueSnapshot } from './leagueSheets.js';
@@ -34,7 +35,7 @@ export type LeagueAuditCard = PersistedLeagueOpsCard;
 
 export interface LeagueAuditCardPort {
   deleteResolvedAlerts?(references: string[]): Promise<void>;
-  deleteLegacyResolvedAlerts?(verifiedBefore: string): Promise<void>;
+  deleteLegacyResolvedAlerts?(verifiedBefore: string, previouslyScannedBefore?: string): Promise<void>;
   findByReference(reference: string): Promise<string | undefined>;
   send(card: LeagueAuditCard, reference: string): Promise<string>;
   delete(messageId: string): Promise<void>;
@@ -236,7 +237,7 @@ export async function refreshLeagueOpsPanel(
     if (result === 'clean' && verifiedAt && input.cards.deleteLegacyResolvedAlerts) {
       const checkpoint = `legacy-alerts-before:${verifiedAt}`;
       if (!wasLeagueAlertCleaned(input.db, input.guildId, checkpoint)) {
-        await input.cards.deleteLegacyResolvedAlerts(verifiedAt);
+        await input.cards.deleteLegacyResolvedAlerts(verifiedAt, getLegacyLeagueAlertCleanupCutoff(input.db, input.guildId));
         markLeagueAlertCleaned(input.db, input.guildId, checkpoint);
       }
     }
