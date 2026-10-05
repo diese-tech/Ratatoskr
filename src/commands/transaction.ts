@@ -8,9 +8,9 @@ import {
 import type Database from 'better-sqlite3';
 import {
   buildDeparturePlan,
+  buildDiscordRenamePlan,
   buildDropPlan,
   buildPickupPlan,
-  buildRenamePlan,
   buildSelfDropPlan,
   buildTradePlan,
   LeagueMutationValidationError,
@@ -73,9 +73,9 @@ export const transactionCommand = new SlashCommandBuilder()
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('rename')
-    .setDescription("Change a player's official league name while preserving name history.")
-    .addUserOption((option) => option.setName('player').setDescription('Player whose official league name is changing.').setRequired(true))
-    .addStringOption((option) => option.setName('league_name').setDescription('New official league name.').setRequired(true).setMaxLength(100))
+    .setDescription("Update a player's roster name after their Discord display name changes.")
+    .addUserOption((option) => option.setName('player').setDescription('Player whose Discord display name changed.').setRequired(true))
+    .addStringOption((option) => option.setName('league_name').setDescription('Exact current Discord display name.').setRequired(true).setMaxLength(100))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')));
 
 function planBuilder(interaction: ChatInputCommandInteraction): (snapshot: LeagueSnapshot) => LeagueMutationPlan {
@@ -105,7 +105,7 @@ function planBuilder(interaction: ChatInputCommandInteraction): (snapshot: Leagu
   }
   if (subcommand === 'rename') {
     const leagueName = interaction.options.getString('league_name', true);
-    return (snapshot) => buildRenamePlan(snapshot, player, leagueName);
+    return (snapshot) => buildDiscordRenamePlan(snapshot, player, leagueName);
   }
   throw new Error('Unknown transaction type.');
 }

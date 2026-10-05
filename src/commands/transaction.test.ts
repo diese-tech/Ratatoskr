@@ -27,6 +27,15 @@ test('exit commands expose an optional Discord replacement and self-drop is a di
   }
 });
 
+test('rename command tells administrators that the requested name must match Discord', () => {
+  const rename = transactionCommand.toJSON().options?.find((option) => option.name === 'rename');
+  const leagueName = rename && 'options' in rename
+    ? rename.options?.find((option) => option.name === 'league_name')
+    : undefined;
+  assert.match(rename?.description ?? '', /Discord display name/i);
+  assert.match(leagueName?.description ?? '', /Exact current Discord display name/i);
+});
+
 test('departure autocomplete is human-readable, division-ordered, and stores stable Discord IDs', () => {
   const row = (overrides: Partial<LeagueRosterRow>): LeagueRosterRow => ({
     sheetRow: 6,

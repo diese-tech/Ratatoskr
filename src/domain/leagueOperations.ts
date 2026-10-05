@@ -112,7 +112,7 @@ function canonicalNames(snapshot: LeagueSnapshot): Map<string, string> {
 
 export function auditLeagueRoster(
   snapshot: LeagueSnapshot,
-  options: { allowAbsentRosterMemberId?: string } = {},
+  options: { allowAbsentRosterMemberId?: string; allowDiscordNameRepairMemberId?: string } = {},
 ): string[] {
   const issues: string[] = [];
   const activeTeams = snapshot.teams.filter((team) => team.active);
@@ -205,7 +205,10 @@ export function auditLeagueRoster(
     const member = memberById.get(discordId);
     if (!member) continue;
     const roster = rosterById.get(discordId);
-    if (rows[0]!.currentLeagueName !== member.displayName || (roster && roster.player !== member.displayName)) {
+    const managedNamesAgree = !roster || roster.player === rows[0]!.currentLeagueName;
+    const expectedDiscordRename = discordId === options.allowDiscordNameRepairMemberId && managedNamesAgree;
+    if (!expectedDiscordRename
+      && (rows[0]!.currentLeagueName !== member.displayName || (roster && roster.player !== member.displayName))) {
       issues.push(`Managed player names for ${discordId} do not match the current Discord display name.`);
     }
   }
@@ -568,4 +571,21 @@ export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, req
     players: [nextName],
     playerIds: [discordId],
   };
+}
+
+export function buildDiscordRenamePlan(
+  snapshot: LeagueSnapshot,
+  discordId: string,
+  requestedName: string,
+): LeagueMutationPlan {
+  const member = snapshot.discordMembers.find((candidate) => candidate.discordId === discordId);
+  if (!member) throw new LeagueMutationValidationError('That player is not currently in the Discord server.');
+  const discordName = member.displayName.trim();
+  if (!discordName) throw new LeagueMutationValidationError('That player does not have a usable Discord display name.');
+  if (requestedName.trim() !== discordName) {
+    throw new LeagueMutationValidationError(
+      `The new league name must exactly match the player's current Discord display name: ${discordName}.`,
+    );
+  }
+  return buildRenamePlan(snapshot, discordId, discordName);
 }

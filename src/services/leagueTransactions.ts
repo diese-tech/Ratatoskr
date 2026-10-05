@@ -64,6 +64,7 @@ export interface LeagueDiscordPort {
   getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
   validateMemberAbsent(discordId: string): Promise<void>;
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
+  validateDisplayName(discordId: string, expectedDisplayName: string): Promise<void>;
   applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
   rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState, applied: LeagueRoleState): Promise<void>;
   findAnnouncement(reference: string): Promise<string | undefined>;
@@ -336,24 +337,31 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     const plan = input.buildPlan(loaded.snapshot);
     const issues = humanizeLeagueAuditIssues(
       loaded.snapshot,
-      auditLeagueRoster(loaded.snapshot, plan.kind === 'departure'
-        ? { allowAbsentRosterMemberId: plan.playerIds[0] }
-        : {}),
+      auditLeagueRoster(loaded.snapshot,
+        plan.kind === 'departure'
+          ? { allowAbsentRosterMemberId: plan.playerIds[0] }
+          : plan.kind === 'rename'
+            ? { allowDiscordNameRepairMemberId: plan.playerIds[0] }
+            : {}),
     );
-    recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: issues.length ? 'failed' : 'passed', issues });
     if (issues.length) {
+      recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'failed', issues });
       throw openReconciliationTicket(
         input,
         auditDate,
         new Error(`League audit failed. ${issues.slice(0, 5).join(' ')}`),
       );
     }
+    const auditPassDeferredUntilRename = plan.kind === 'rename';
+    if (!auditPassDeferredUntilRename) {
+      recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'passed', issues: [] });
+    }
     try {
       await input.sheets.assertUnchanged(loaded);
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
-    resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
+    if (!auditPassDeferredUntilRename) resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     if (input.expectedPlanFingerprint
       && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {
       throw new LeagueTransactionPreviewChangedError(plan);
@@ -381,6 +389,9 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       }
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
+    }
+    if (plan.kind === 'rename') {
+      await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
     }
 
     const reference = `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -428,6 +439,10 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         markLeagueTransactionReconciliationRequired(input.db, reference, message);
       }
       throw errorWithReference(error, reference);
+    }
+    if (auditPassDeferredUntilRename) {
+      recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'passed', issues: [] });
+      resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     }
 
     transitionLeagueTransaction(input.db, reference, 'applying_sheets', 'announcement_pending');

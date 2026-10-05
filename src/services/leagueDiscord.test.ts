@@ -28,6 +28,29 @@ test('repeated roster reads reuse the complete live Discord cache instead of req
   assert.equal(fetches, 1);
 });
 
+test('display-name validation force-fetches the member instead of trusting the complete-member cache', async () => {
+  const cached = leagueMember('one', ['team-a']);
+  const current = { ...leagueMember('one', ['team-a']), displayName: 'Newer Name' };
+  const cache = new Collection<string, any>([['one', cached]]);
+  const fetchArguments: unknown[] = [];
+  const guild = {
+    id: 'guild',
+    members: {
+      cache,
+      fetch: async (options?: unknown) => {
+        fetchArguments.push(options);
+        if (options && typeof options === 'object' && 'force' in options) return current;
+        return cache;
+      },
+    },
+  } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+
+  await gateway.getMembers();
+  await assert.rejects(() => gateway.validateDisplayName('one', 'Player one'), /display name changed/i);
+  assert.deepEqual(fetchArguments[1], { user: 'one', force: true });
+});
+
 test('a Discord full-member rate limit falls back to a previously complete live cache', async () => {
   const member = leagueMember('one', ['team-a']);
   const cache = new Collection<string, any>([['one', member]]);

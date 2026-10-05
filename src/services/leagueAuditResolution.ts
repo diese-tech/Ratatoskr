@@ -276,6 +276,7 @@ type RepairSheets = {
 };
 
 type RepairDiscord = {
+  validateDisplayName(discordId: string, expectedDisplayName: string): Promise<void>;
   reconcileManagedRoles(
     change: DiscordRoleChange,
     expected: LeagueRoleState,
@@ -328,7 +329,9 @@ async function applyDurableRepair(input: {
       throw new Error('The repair result could not be marked complete in Ratatoskr.');
     }
   } catch (error) {
-    if (error instanceof LeagueMutationValidationError || error instanceof LeagueSheetDriftError) {
+    if (error instanceof LeagueMutationValidationError
+      || error instanceof LeagueSheetDriftError
+      || error instanceof LeagueAuditRepairNoWriteError) {
       failLeagueAuditRepair(input.db, input.reference, error.message);
       throw new LeagueAuditRepairNoWriteError(error.message);
     }
@@ -393,13 +396,18 @@ export async function executeLeagueAuditRepair(input: {
     await applyDurableRepair({
       ...input,
       reference,
-      apply: () => input.sheets.apply(loaded, plan, {
-        reference,
-        effectiveDate: leagueDate(input.now),
-        processedById: input.actorUserId,
-        processedBy: input.actorName,
-        approvalNote: 'Ratatoskr approved roster audit repair',
-      }, prepared),
+      apply: async () => {
+        if (input.action === 'use-discord-name') {
+          await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+        }
+        await input.sheets.apply(loaded, plan, {
+          reference,
+          effectiveDate: leagueDate(input.now),
+          processedById: input.actorUserId,
+          processedBy: input.actorName,
+          approvalNote: 'Ratatoskr approved roster audit repair',
+        }, prepared);
+      },
     });
     return { reference };
   } finally {

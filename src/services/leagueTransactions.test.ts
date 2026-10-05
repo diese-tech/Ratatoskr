@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDeparturePlan, buildDropPlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
+  createOrGetLeagueReconciliationTicket,
   getLeagueReconciliationTicket,
   getLeagueTransaction,
   hasSuccessfulLeagueAudit,
@@ -66,6 +67,7 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
   const discord = {
     validateMemberAbsent: async (discordId: string) => { events.push(`discord-absence:${discordId}`); },
     validateRoleState: async (discordId: string) => { events.push(`discord-preflight:${discordId}`); },
+    validateDisplayName: async (discordId: string, expected: string) => { events.push(`discord-name-preflight:${discordId}:${expected}`); },
     applyRoleChange: async (change: { discordId: string }) => { events.push(`discord:${change.discordId}`); },
     rollbackRoleChange: async (change: { discordId: string }) => { events.push(`rollback:${change.discordId}`); },
     findAnnouncement: async () => undefined,
@@ -93,6 +95,93 @@ test('every confirmed mutation audits before Discord and completes the durable s
   ]);
   assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   assert.equal(getLeagueTransaction(f.db, result.reference)?.announcementId, 'message');
+  f.db.close();
+});
+
+test('rename can repair only its targeted Discord-name drift without bypassing the remaining audit', async () => {
+  const f = fixture();
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+
+  const result = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  });
+
+  assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
+  assert.ok(f.events.includes('sheet-apply'));
+  f.db.close();
+});
+
+test('rename stops before writing if the Discord display name changes after the initial snapshot', async () => {
+  const f = fixture();
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  const ticket = createOrGetLeagueReconciliationTicket(f.db, {
+    reference: 'YSL-REC-RENAME', guildId: 'guild', actorUserId: 'admin', fingerprint: 'rename-drift', summary: 'Name drift',
+  });
+  f.discord.validateDisplayName = async () => {
+    throw new LeagueMutationValidationError('That player’s Discord display name changed after the transaction was loaded. Review the newest value; no changes were made.');
+  };
+
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  }), /display name changed.*no changes were made/i);
+
+  assert.equal(f.events.includes('sheet-apply'), false);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
+  assert.equal(getLeagueReconciliationTicket(f.db, ticket.reference)?.status, 'open');
+  assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), false);
+  f.db.close();
+});
+
+test('rename keeps audit and reconciliation state open when the sheet write fails', async () => {
+  const f = fixture(new LeagueSheetDriftError('The roster changed before the rename could be written.'));
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  const ticket = createOrGetLeagueReconciliationTicket(f.db, {
+    reference: 'YSL-REC-RENAME-WRITE', guildId: 'guild', actorUserId: 'admin', fingerprint: 'rename-write-drift', summary: 'Name drift',
+  });
+
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  }), /roster changed/i);
+
+  assert.equal(getLeagueReconciliationTicket(f.db, ticket.reference)?.status, 'open');
+  assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), false);
+  f.db.close();
+});
+
+test('rename exemption does not bypass unrelated league drift', async () => {
+  const f = fixture();
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  f.current.discordMembers.find((member) => member.discordId === 'two')!.roleIds.push('team-a');
+
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  }), /multiple team roles/i);
+
+  assert.equal(f.events.includes('sheet-apply'), false);
+  f.db.close();
+});
+
+test('rename exemption does not overwrite a different manual Current Rosters name', async () => {
+  const f = fixture();
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  f.current.rosters.find((row) => row.discordId === 'one')!.player = 'Manual Third Name';
+
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  }), /Discord name now:[\s\S]*Current Rosters sheet: “Manual Third Name”[\s\S]*Player Name History sheet: “One”/i);
+
+  assert.equal(f.events.includes('sheet-apply'), false);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
 });
 
