@@ -775,4 +775,55 @@ export const migrations: Migration[] = [
         ON league_audit_repairs (guild_id, status, created_at);
     `,
   },
+  {
+    id: 30,
+    name: 'durable_league_ops',
+    sql: `
+      CREATE TABLE league_jobs (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        reference TEXT NOT NULL UNIQUE,
+        guild_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        priority INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('QUEUED','LOADING','VALIDATING','APPLYING','VERIFYING','COMPLETED','BLOCKED_REVIEW','RETRYING','RECONCILIATION_REQUIRED','FAILED')),
+        dedupe_key TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        available_at TEXT NOT NULL,
+        last_error TEXT,
+        result_json TEXT,
+        dismissed_at TEXT,
+        UNIQUE(guild_id, dedupe_key)
+      );
+      CREATE TABLE league_job_approvals (
+        guild_id TEXT NOT NULL, dedupe_key TEXT NOT NULL, reference TEXT NOT NULL REFERENCES league_jobs(reference),
+        PRIMARY KEY(guild_id,dedupe_key)
+      );
+      CREATE INDEX league_jobs_ready ON league_jobs(guild_id, status, priority, sequence);
+      CREATE TABLE league_verified_members (
+        guild_id TEXT NOT NULL,
+        discord_id TEXT NOT NULL,
+        state_json TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        verified_at TEXT NOT NULL,
+        source TEXT NOT NULL,
+        PRIMARY KEY(guild_id, discord_id)
+      );
+      CREATE TABLE league_findings (
+        guild_id TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        findings_json TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        PRIMARY KEY(guild_id, resource_key)
+      );
+      ALTER TABLE league_transaction_previews ADD COLUMN approval_reference TEXT;
+      ALTER TABLE league_audit_cards ADD COLUMN pending_card_json TEXT;
+      ALTER TABLE league_audit_cards ADD COLUMN last_targeted_at TEXT;
+      ALTER TABLE league_audit_cards ADD COLUMN last_full_at TEXT;
+      ALTER TABLE league_audit_cards ADD COLUMN last_repost_at TEXT;
+    `,
+  },
 ];

@@ -200,7 +200,7 @@ test('confirmation rejects a plan that differs from the administrator preview', 
     (error: unknown) => error instanceof LeagueTransactionPreviewChangedError
       && error.plan.rosters.find((row) => row.discordId === 'one')?.rosterStatus === 'Player',
   );
-  assert.deepEqual(f.events, ['sheet-preflight']);
+  assert.deepEqual(f.events, []);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
 });

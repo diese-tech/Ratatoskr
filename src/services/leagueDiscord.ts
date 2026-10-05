@@ -88,6 +88,14 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     return channel;
   }
 
+  async getMember(discordId: string): Promise<DiscordLeagueMember | null> {
+    try { return roleSnapshot(await fetchFreshMember(this.guild, discordId)); }
+    catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === RESTJSONErrorCodes.UnknownMember) return null;
+      throw error;
+    }
+  }
+
   async getMembers(): Promise<DiscordLeagueMember[]> {
     const now = (this.memberReadOptions.now ?? Date.now)();
     if (this.completeMemberSnapshotAt !== undefined

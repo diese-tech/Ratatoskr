@@ -1,3 +1,4 @@
+import { forgetMissingLeaguePanel } from '../db/repositories/leagueAudits.js';
 import { createHash } from 'node:crypto';
 import {
   ActionRowBuilder,
@@ -33,7 +34,7 @@ export function createLeagueAuditCardPort(
       while (true) {
         const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
         const match = messages.find((message) => message.author.id === client.user?.id
-          && String(message.nonce ?? '') === expectedNonce);
+          && (String(message.nonce ?? '') === expectedNonce || message.embeds.some(embed => embed.footer?.text.endsWith(reference))));
         if (match) return match.id;
         if (messages.size < 100) return undefined;
         const oldest = messages.last();
@@ -47,7 +48,7 @@ export function createLeagueAuditCardPort(
         embeds: [new EmbedBuilder()
           .setTitle(card.title)
           .setDescription(card.description.slice(0, 4096))
-          .setFooter({ text: card.footer.slice(0, 2048) })
+          .setFooter({ text: `${card.footer} • ${reference}`.slice(0, 2048) })
           .setColor(0xC43C35)],
         components: card.actions?.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
           card.actions.map((action) => new ButtonBuilder()
@@ -60,6 +61,21 @@ export function createLeagueAuditCardPort(
         enforceNonce: true,
       });
       return message.id;
+    },
+    async edit(messageId, card, reference) {
+      const channel = await getValidatedStaffChannel(client, db, guildId);
+      try {
+        await channel.messages.edit(messageId, {
+          embeds: [new EmbedBuilder().setTitle(card.title).setDescription(card.description.slice(0,4096)).setFooter({text:`${card.footer} • ${reference}`.slice(0,2048)}).setColor(card.description.includes('Status: Healthy') ? 0x358653 : 0xC43C35)],
+          components: card.actions?.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(card.actions.map(action => new ButtonBuilder().setCustomId(`${action.id}:${reference}`).setLabel(action.label).setStyle(ButtonStyle.Primary)))] : [],
+          allowedMentions: {parse:[]},
+        });
+      } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === RESTJSONErrorCodes.UnknownMessage) {
+          forgetMissingLeaguePanel(db,guildId,messageId);
+        }
+        throw error;
+      }
     },
     async delete(messageId) {
       const channel = await getValidatedStaffChannel(client, db, guildId);

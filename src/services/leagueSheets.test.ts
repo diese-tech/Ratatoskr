@@ -418,3 +418,17 @@ test('partial team configuration fails closed instead of being ignored', async (
   await assert.rejects(() => service.load(members, 'free-agent'), /League Teams row 8 is partially populated/i);
   assert.equal(gateway.writes.length, 0);
 });
+
+test('targeted member reads only managed index tables and affected public divisions, without presentation or writes', async () => {
+  const f = serviceFixture();
+  const loaded = await f.service.load([], 'fa');
+  const discordId = loaded.snapshot.rosters[0]!.discordId;
+  f.gateway.reads.length = 0;
+  const targeted = await f.service.loadMember(discordId, null, 'fa');
+  assert.ok(targeted.rosters.some(row => row.discordId === discordId));
+  assert.equal(f.gateway.reads.filter(read => read.spreadsheetId === 'public').length, 1);
+  assert.ok(f.gateway.reads.every(read => !read.range.includes('Alfheim Roster') && !read.range.includes('Svartalfheim Roster')));
+  assert.deepEqual(f.gateway.writes, []);
+  assert.deepEqual(f.gateway.appends, []);
+  assert.deepEqual(f.gateway.presentationWrites, []);
+});

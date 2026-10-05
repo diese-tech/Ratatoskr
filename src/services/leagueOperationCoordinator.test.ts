@@ -4,7 +4,7 @@ import { acquireLeagueTransaction, runCoalescedLeagueAudit } from './leagueOpera
 
 test('an audit waits for the active transaction and overlapping audit triggers share the queued run', async () => {
   const scope = {};
-  const release = acquireLeagueTransaction(scope, 'guild');
+  const release = await acquireLeagueTransaction(scope, 'guild');
   let auditRuns = 0;
   const first = runCoalescedLeagueAudit(scope, 'guild', async () => { auditRuns += 1; return 'audited'; });
   const second = runCoalescedLeagueAudit(scope, 'guild', async () => { auditRuns += 1; return 'duplicate'; });
@@ -17,12 +17,16 @@ test('an audit waits for the active transaction and overlapping audit triggers s
   assert.equal(auditRuns, 1);
 });
 
-test('a transaction fails fast while an audit owns the league-operation gate', async () => {
+test('a transaction waits while an audit owns the league-operation gate', async () => {
   const scope = {};
   let finish!: () => void;
-  const waiting = new Promise<void>((resolve) => { finish = resolve; });
-  const audit = runCoalescedLeagueAudit(scope, 'guild', async () => { await waiting; });
-  assert.throws(() => acquireLeagueTransaction(scope, 'guild'), /transaction or audit is already running/i);
+  const waiting = new Promise<void>(resolve => { finish = resolve; });
+  const audit = runCoalescedLeagueAudit(scope,'guild',async () => { await waiting; });
+  let acquired = false;
+  const transaction = acquireLeagueTransaction(scope,'guild').then(release => { acquired = true; release(); });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(acquired,false);
   finish();
-  await audit;
+  await Promise.all([audit,transaction]);
+  assert.equal(acquired,true);
 });

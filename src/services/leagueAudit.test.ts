@@ -71,7 +71,7 @@ test('a dirty startup audit posts one unpinged staff card and records it durably
     assert.equal(result.status, 'dirty');
     assert.equal(cards.sent.length, 1);
     assert.equal(cards.sent[0]?.card.allowedMentions, false);
-    assert.match(cards.sent[0]!.card.title, /action required/i);
+    assert.equal(cards.sent[0]!.card.title, 'League Ops Status');
     assert.match(cards.sent[0]!.card.description, /roster sheets and setup/i);
     assert.equal(getLeagueAuditState(db, 'guild')?.currentMessageId, 'message-1');
   } finally {
@@ -285,7 +285,7 @@ test('a later dirty audit posts its fresh card before deleting the prior card', 
   }
 });
 
-test('a clean audit removes the outstanding card and resolves the durable state', async () => {
+test('a clean audit retains a healthy authoritative panel', async () => {
   const db = openDatabase(':memory:');
   const cards = new Cards();
   let current = snapshot();
@@ -305,14 +305,15 @@ test('a clean audit removes the outstanding card and resolves the durable state'
     assert.deepEqual(cards.deleted, ['message-1']);
     const state = getLeagueAuditState(db, 'guild');
     assert.equal(state?.result, 'clean');
-    assert.equal(state?.currentMessageId, null);
+    assert.equal(state?.currentMessageId, 'message-2');
+    assert.match(cards.sent[1]!.card.description,/Status: Healthy/);
     assert.equal(state?.phase, 'settled');
   } finally {
     db.close();
   }
 });
 
-test('failed clean-state deletion remains durable and retries without a clean card', async () => {
+test('failed old-panel deletion retains the new healthy panel and retries cleanup', async () => {
   const db = openDatabase(':memory:');
   const cards = new Cards();
   let current = snapshot();
@@ -331,12 +332,12 @@ test('failed clean-state deletion remains durable and retries without a clean ca
       /delete failed/,
     );
     assert.equal(getLeagueAuditState(db, 'guild')?.result, 'clean');
-    assert.equal(getLeagueAuditState(db, 'guild')?.currentMessageId, null);
+    assert.equal(getLeagueAuditState(db, 'guild')?.currentMessageId, 'message-2');
     assert.equal(getLeagueAuditState(db, 'guild')?.staleMessageId, 'message-1');
 
     await recoverPendingLeagueAudit({ db, guildId: 'guild', cards });
 
-    assert.equal(cards.sent.length, 1);
+    assert.equal(cards.sent.length, 2);
     assert.deepEqual(cards.deleted, ['message-1']);
     assert.equal(getLeagueAuditState(db, 'guild')?.phase, 'settled');
   } finally {
@@ -357,7 +358,7 @@ test('an unreadable source posts an audit-failed card instead of claiming the le
     });
 
     assert.equal(result.status, 'error');
-    assert.match(cards.sent[0]!.card.title, /could not complete/i);
+    assert.equal(cards.sent[0]!.card.title, 'League Ops Status');
     assert.doesNotMatch(cards.sent[0]!.card.description, /Discord unavailable/);
     assert.equal(getLeagueAuditState(db, 'guild')?.result, 'error');
   } finally {
