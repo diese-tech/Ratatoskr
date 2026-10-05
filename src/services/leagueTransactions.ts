@@ -62,7 +62,7 @@ export interface LeagueSheetsPort {
 
 export interface LeagueDiscordPort {
   getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
-  validateMemberAbsent(discordId: string): Promise<void>;
+  validateMemberAbsent(discordId: string, presentRemedy?: 'drop' | 'self-drop'): Promise<void>;
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
   validateDisplayName(discordId: string, expectedDisplayName: string): Promise<void>;
   applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
@@ -158,10 +158,10 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
     const currentNames = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
     if (currentNames.length !== 1) throw new Error(`Discord member ${discordId} must have exactly one current name record.`);
     if (!member) {
-      const isDepartedPlayer = plan.kind === 'departure'
+      const isAbsentExitPlayer = (plan.kind === 'departure' || plan.kind === 'self-drop')
         && discordId === plan.playerIds[0]
         && !plan.discordRoleChanges.some((change) => change.discordId === discordId);
-      if (isDepartedPlayer && rosterRows.length === 1) {
+      if (isAbsentExitPlayer && rosterRows.length === 1) {
         continue;
       }
       throw new Error(`Discord member ${discordId} could not be loaded.`);
@@ -276,6 +276,9 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
     };
   }
   if (plan.kind === 'self-drop') {
+    const outgoingPlayer = plan.discordRoleChanges.some((change) => change.discordId === plan.playerIds[0])
+      ? `<@${plan.playerIds[0]}>`
+      : `**${plan.players[0]}**`;
     const replacement = plan.playerIds[1]
       ? ` ${mention(team.teamRoleId)} picks up <@${plan.playerIds[1]}> in their place.`
       : '';
@@ -283,7 +286,7 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
       content: mention(team.teamRoleId),
       allowedRoleIds: [team.teamRoleId],
       title: 'Word Travels the Branches',
-      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n<@${plan.playerIds[0]}> self-drops from ${mention(team.teamRoleId)}.${replacement}`,
+      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${outgoingPlayer} self-drops from ${mention(team.teamRoleId)}.${replacement}`,
       footer: `Posted by ${actorName}`,
     };
   }
@@ -335,10 +338,12 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       throw openReconciliationTicket(input, auditDate, error);
     }
     const plan = input.buildPlan(loaded.snapshot);
+    const outgoingPlayerIsAbsent = (plan.kind === 'departure' || plan.kind === 'self-drop')
+      && !plan.discordRoleChanges.some((change) => change.discordId === plan.playerIds[0]);
     const issues = humanizeLeagueAuditIssues(
       loaded.snapshot,
       auditLeagueRoster(loaded.snapshot,
-        plan.kind === 'departure'
+        plan.kind === 'departure' || plan.kind === 'self-drop'
           ? { allowAbsentRosterMemberId: plan.playerIds[0] }
           : plan.kind === 'rename'
             ? { allowDiscordNameRepairMemberId: plan.playerIds[0] }
@@ -352,8 +357,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         new Error(`League audit failed. ${issues.slice(0, 5).join(' ')}`),
       );
     }
-    const auditPassDeferredUntilRename = plan.kind === 'rename';
-    if (!auditPassDeferredUntilRename) {
+    const auditPassDeferredUntilMutation = plan.kind === 'rename' || outgoingPlayerIsAbsent;
+    if (!auditPassDeferredUntilMutation) {
       recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'passed', issues: [] });
     }
     try {
@@ -361,20 +366,20 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
-    if (!auditPassDeferredUntilRename) resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
+    if (!auditPassDeferredUntilMutation) resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     if (input.expectedPlanFingerprint
       && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {
       throw new LeagueTransactionPreviewChangedError(plan);
     }
     assertDiscordPreconditions(loaded.snapshot, plan);
-    if (plan.kind === 'departure') await input.discord.validateMemberAbsent(plan.playerIds[0]!);
     let prepared: PreparedLeagueSheetMutation;
     try {
       prepared = input.sheets.prepare(loaded, plan);
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
-    const roleValidationPlayerIds = plan.kind === 'departure' ? plan.playerIds.slice(1) : plan.playerIds;
+    const roleValidationPlayerIds = plan.playerIds.filter((discordId) =>
+      !(outgoingPlayerIsAbsent && discordId === plan.playerIds[0]));
     const beforeByPlayer = new Map(roleValidationPlayerIds.map((discordId) => [
       discordId,
       expectedRoleState(loaded.snapshot, loaded.snapshot.rosters, loaded.snapshot.names, discordId),
@@ -392,6 +397,12 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     }
     if (plan.kind === 'rename') {
       await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+    }
+    if (outgoingPlayerIsAbsent) {
+      await input.discord.validateMemberAbsent(
+        plan.playerIds[0]!,
+        plan.kind === 'self-drop' ? 'self-drop' : 'drop',
+      );
     }
 
     const reference = `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -440,7 +451,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       }
       throw errorWithReference(error, reference);
     }
-    if (auditPassDeferredUntilRename) {
+    if (auditPassDeferredUntilMutation) {
       recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'passed', issues: [] });
       resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     }

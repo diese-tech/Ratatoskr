@@ -128,6 +128,17 @@ test('departure absence validation rejects a member who is currently present', a
   );
 });
 
+test('self-drop absence validation preserves the self-drop remedy if the player returned', async () => {
+  const guild = {
+    id: 'guild',
+    members: { fetch: async () => ({ id: 'returned' }) },
+  } as unknown as Guild;
+  await assert.rejects(
+    () => new DiscordLeagueGateway(guild, 'transactions').validateMemberAbsent('returned', 'self-drop'),
+    /back in the YSL server.*transaction self-drop/i,
+  );
+});
+
 test('departure absence validation does not mistake a transient Discord failure for departure', async () => {
   const guild = {
     id: 'guild',

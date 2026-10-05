@@ -6,13 +6,18 @@ import { buildTradePlan, type LeagueRosterRow, type LeagueSnapshot } from '../do
 process.env.ROLE_ALLFATHER_ID ??= 'allfather-test-role';
 process.env.ROLE_AESIR_ID ??= 'aesir-test-role';
 
-const { buildDepartureAutocompleteChoices, replyToTransactionValidation, transactionCommand } = await import('./transaction.js');
+const { buildRosterPlayerAutocompleteChoices, replyToTransactionValidation, transactionCommand } = await import('./transaction.js');
 
-test('departure uses roster-backed autocomplete instead of Discord user selection', () => {
-  const departure = transactionCommand.toJSON().options?.find((option) => option.name === 'departure');
-  const player = 'options' in departure! ? departure.options?.find((option) => option.name === 'player') : undefined;
-  assert.equal(player?.type, 3);
-  assert.equal('autocomplete' in player! ? player.autocomplete : false, true);
+test('departure and self-drop use roster-backed autocomplete instead of Discord user selection', () => {
+  const options = transactionCommand.toJSON().options ?? [];
+  for (const name of ['departure', 'self-drop']) {
+    const command = options.find((option) => option.name === name);
+    const player = command && 'options' in command
+      ? command.options?.find((option) => option.name === 'player')
+      : undefined;
+    assert.equal(player?.type, 3, `${name} player must use managed-roster text selection`);
+    assert.equal('autocomplete' in player! ? player.autocomplete : false, true, `${name} player must autocomplete`);
+  }
 });
 
 test('exit commands expose an optional Discord replacement and self-drop is a distinct transaction', () => {
@@ -48,13 +53,13 @@ test('departure autocomplete is human-readable, division-ordered, and stores sta
     rosterStatus: 'Player',
     ...overrides,
   });
-  const choices = buildDepartureAutocompleteChoices([
+  const choices = buildRosterPlayerAutocompleteChoices([
     row({ division: 'Svartalfheim', franchise: 'The Sewer', discordId: 'three', player: 'Three' }),
     row({ division: 'Alfheim', franchise: 'Wailing Banshees', discordId: 'two', player: 'Two' }),
     row({}),
   ], 'wailing');
   assert.deepEqual(choices, [{ name: 'Two — Wailing Banshees (Alfheim)', value: 'two' }]);
-  assert.deepEqual(buildDepartureAutocompleteChoices([
+  assert.deepEqual(buildRosterPlayerAutocompleteChoices([
     row({ division: 'Svartalfheim', discordId: 'three', player: 'Three' }),
     row({ division: 'Alfheim', discordId: 'two', player: 'Two' }),
     row({}),
