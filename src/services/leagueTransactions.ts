@@ -332,20 +332,24 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
             ? { allowDiscordNameRepairMemberId: plan.playerIds[0] }
             : {}),
     );
-    recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: issues.length ? 'failed' : 'passed', issues });
     if (issues.length) {
+      recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'failed', issues });
       throw openReconciliationTicket(
         input,
         auditDate,
         new Error(`League audit failed. ${issues.slice(0, 5).join(' ')}`),
       );
     }
+    const auditPassDeferredUntilRename = plan.kind === 'rename';
+    if (!auditPassDeferredUntilRename) {
+      recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'passed', issues: [] });
+    }
     try {
       await input.sheets.assertUnchanged(loaded);
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
-    resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
+    if (!auditPassDeferredUntilRename) resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     if (input.expectedPlanFingerprint
       && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {
       throw new LeagueTransactionPreviewChangedError(plan);
@@ -423,6 +427,10 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         markLeagueTransactionReconciliationRequired(input.db, reference, message);
       }
       throw errorWithReference(error, reference);
+    }
+    if (auditPassDeferredUntilRename) {
+      recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'passed', issues: [] });
+      resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     }
 
     transitionLeagueTransaction(input.db, reference, 'applying_sheets', 'announcement_pending');

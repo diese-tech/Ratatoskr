@@ -4,6 +4,7 @@ import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenameP
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
+  createOrGetLeagueReconciliationTicket,
   getLeagueReconciliationTicket,
   getLeagueTransaction,
   hasSuccessfulLeagueAudit,
@@ -114,6 +115,9 @@ test('rename can repair only its targeted Discord-name drift without bypassing t
 test('rename stops before writing if the Discord display name changes after the initial snapshot', async () => {
   const f = fixture();
   f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  const ticket = createOrGetLeagueReconciliationTicket(f.db, {
+    reference: 'YSL-REC-RENAME', guildId: 'guild', actorUserId: 'admin', fingerprint: 'rename-drift', summary: 'Name drift',
+  });
   f.discord.validateDisplayName = async () => {
     throw new LeagueMutationValidationError('That player’s Discord display name changed after the transaction was loaded. Review the newest value; no changes were made.');
   };
@@ -126,6 +130,26 @@ test('rename stops before writing if the Discord display name changes after the 
 
   assert.equal(f.events.includes('sheet-apply'), false);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
+  assert.equal(getLeagueReconciliationTicket(f.db, ticket.reference)?.status, 'open');
+  assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), false);
+  f.db.close();
+});
+
+test('rename keeps audit and reconciliation state open when the sheet write fails', async () => {
+  const f = fixture(new LeagueSheetDriftError('The roster changed before the rename could be written.'));
+  f.current.discordMembers.find((member) => member.discordId === 'one')!.displayName = 'One Prime';
+  const ticket = createOrGetLeagueReconciliationTicket(f.db, {
+    reference: 'YSL-REC-RENAME-WRITE', guildId: 'guild', actorUserId: 'admin', fingerprint: 'rename-write-drift', summary: 'Name drift',
+  });
+
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
+  }), /roster changed/i);
+
+  assert.equal(getLeagueReconciliationTicket(f.db, ticket.reference)?.status, 'open');
+  assert.equal(hasSuccessfulLeagueAudit(f.db, 'guild', '2026-09-30'), false);
   f.db.close();
 });
 
