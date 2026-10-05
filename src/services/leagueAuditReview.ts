@@ -21,6 +21,7 @@ import {
   LeagueAuditRepairNoWriteError,
   type LeagueAuditResolutionAction,
 } from './leagueAuditResolution.js';
+import { executeRepairAndRefresh, type LeagueAuditRunResult } from './leagueAuditReviewFlow.js';
 import {
   buildLeagueAuditConfirmationView,
   buildLeagueAuditRepairReply,
@@ -58,6 +59,16 @@ function parseReviewId(customId: string): {
     return { action: parts[1], reference: parts[2], page: Number(parts[3]), resolution: parts[4] as LeagueAuditResolutionAction };
   }
   return undefined;
+}
+
+function staleRefreshReply(result: LeagueAuditRunResult): string {
+  if (result.status === 'error') {
+    return 'This issue already changed, so Ratatoskr made no changes. The audit could not be refreshed because Discord or a roster sheet is temporarily unavailable; it will retry automatically.';
+  }
+  if (result.status === 'clean') {
+    return 'This issue was already resolved. Ratatoskr refreshed the audit and no issues remain.';
+  }
+  return `This issue was already resolved or changed. Ratatoskr refreshed the audit; ${result.issues.length} current issue${result.issues.length === 1 ? '' : 's'} remain. Use **Review issues** on the newest audit card.`;
 }
 
 export async function handleLeagueAuditReviewButton(
@@ -103,23 +114,37 @@ export async function handleLeagueAuditReviewButton(
     const sheets = new LeagueSheetsService(connection.gateway, connection.config);
     const discord = new DiscordLeagueGateway(interaction.guild, config.transactionsChannelId);
     const actorName = member.displayName || interaction.user.globalName || interaction.user.username;
-    let repair: { reference: string };
+    const refreshAudit = () => runLeagueAudit({
+      db,
+      operationScope,
+      guildId: interaction.guild!.id,
+      trigger: 'scheduled',
+      now: new Date(),
+      freeAgentRoleId: config.freeAgentRoleId,
+      members: discord,
+      sheets,
+      cards: createLeagueAuditCardPort(interaction.client, db, interaction.guild!.id),
+    });
+    let outcome: Awaited<ReturnType<typeof executeRepairAndRefresh>>;
     try {
-      repair = await executeLeagueAuditRepair({
-        db,
-        operationScope,
-        guildId: interaction.guild.id,
-        auditReference: parsed.reference,
-        actorUserId: interaction.user.id,
-        actorName,
-        now: new Date(),
-        expectedFinding: finding,
-        action: parsed.resolution!,
-        freeAgentRoleId: config.freeAgentRoleId,
-        members: discord,
-        sheets,
-        discord,
-      });
+      outcome = await executeRepairAndRefresh(
+        () => executeLeagueAuditRepair({
+          db,
+          operationScope,
+          guildId: interaction.guild!.id,
+          auditReference: parsed.reference,
+          actorUserId: interaction.user.id,
+          actorName,
+          now: new Date(),
+          expectedFinding: finding,
+          action: parsed.resolution!,
+          freeAgentRoleId: config.freeAgentRoleId,
+          members: discord,
+          sheets,
+          discord,
+        }),
+        refreshAudit,
+      );
     } catch (error) {
       if (!(error instanceof LeagueAuditRepairNoWriteError)) throw error;
       await interaction.editReply({
@@ -130,19 +155,10 @@ export async function handleLeagueAuditReviewButton(
       });
       return true;
     }
-    const result = await runLeagueAudit({
-      db,
-      operationScope,
-      guildId: interaction.guild.id,
-      trigger: 'scheduled',
-      now: new Date(),
-      freeAgentRoleId: config.freeAgentRoleId,
-      members: discord,
-      sheets,
-      cards: createLeagueAuditCardPort(interaction.client, db, interaction.guild.id),
-    });
     await interaction.editReply({
-      content: buildLeagueAuditRepairReply(result, repair.reference),
+      content: outcome.kind === 'stale-refreshed'
+        ? staleRefreshReply(outcome.audit)
+        : buildLeagueAuditRepairReply(outcome.audit, outcome.reference),
       embeds: [],
       components: [],
       allowedMentions: { parse: [] },
