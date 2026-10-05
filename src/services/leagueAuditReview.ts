@@ -108,7 +108,6 @@ export async function handleLeagueAuditReviewButton(
     return true;
   }
   if (parsed.action === 'confirm') {
-    await interaction.deferUpdate();
     const config = loadLeagueOperationsConfig();
     const connection = createGoogleLeagueSheetsGateway();
     const sheets = new LeagueSheetsService(connection.gateway, connection.config);
@@ -128,6 +127,14 @@ export async function handleLeagueAuditReviewButton(
     let outcome: Awaited<ReturnType<typeof executeRepairAndRefresh>>;
     try {
       outcome = await executeRepairAndRefresh(
+        async () => {
+          await interaction.update({
+            content: 'Ratatoskr is checking this issue against Discord and the roster sheets. The controls are paused while this finishes.',
+            embeds: [],
+            components: [],
+            allowedMentions: { parse: [] },
+          });
+        },
         () => executeLeagueAuditRepair({
           db,
           operationScope,

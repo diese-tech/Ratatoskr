@@ -7,12 +7,14 @@ export type LeagueAuditRunResult = {
 };
 
 export async function executeRepairAndRefresh(
+  showProcessing: () => Promise<void>,
   executeRepair: () => Promise<{ reference: string }>,
   refreshAudit: () => Promise<LeagueAuditRunResult>,
 ): Promise<
   | { kind: 'repaired'; reference: string; audit: LeagueAuditRunResult }
   | { kind: 'stale-refreshed'; audit: LeagueAuditRunResult }
 > {
+  await showProcessing();
   try {
     const repair = await executeRepair();
     return { kind: 'repaired', reference: repair.reference, audit: await refreshAudit() };
