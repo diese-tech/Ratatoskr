@@ -21,6 +21,7 @@ export type LeagueAuditState = {
   nextRunAt: string | null;
   lastTargetedAt: string | null;
   lastFullAt: string | null;
+  lastCleanFullAt: string | null;
   lastRepostAt: string | null;
   pendingCard: PersistedLeagueOpsCard | null;
 };
@@ -39,6 +40,7 @@ type Row = {
   next_run_at: string | null;
   last_targeted_at: string | null;
   last_full_at: string | null;
+  last_clean_full_at: string | null;
   last_repost_at: string | null;
   pending_card_json: string | null;
 };
@@ -58,6 +60,7 @@ function toState(row: Row): LeagueAuditState {
     nextRunAt: row.next_run_at,
     lastTargetedAt: row.last_targeted_at,
     lastFullAt: row.last_full_at,
+    lastCleanFullAt: row.last_clean_full_at,
     lastRepostAt: row.last_repost_at,
     pendingCard: row.pending_card_json ? (JSON.parse(row.pending_card_json) as PersistedLeagueOpsCard) : null,
   };
@@ -180,6 +183,9 @@ export function noteLeagueCheck(db: Database.Database, guildId: string, kind: 't
 }
 export function noteLeaguePanelRepost(db: Database.Database, guildId: string, at: Date): void {
   db.prepare('UPDATE league_audit_cards SET last_repost_at=? WHERE guild_id=?').run(at.toISOString(), guildId);
+}
+export function noteCleanFullLeagueAudit(db: Database.Database, guildId: string, at: Date): void {
+  db.prepare('UPDATE league_audit_cards SET last_clean_full_at=? WHERE guild_id=?').run(at.toISOString(), guildId);
 }
 export function recordLeaguePanelEdit(
   db: Database.Database,

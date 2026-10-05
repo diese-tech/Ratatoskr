@@ -12,6 +12,7 @@ import {
   settleLeagueAuditCard,
   type PersistedLeagueOpsCard,
   noteLeagueCheck,
+  noteCleanFullLeagueAudit,
   noteLeaguePanelRepost,
   recordLeaguePanelEdit,
 } from '../db/repositories/leagueAudits.js';
@@ -229,7 +230,8 @@ export async function refreshLeagueOpsPanel(
       await input.cards.deleteResolvedAlerts(resolvedAlerts);
       for (const reference of resolvedAlerts) markLeagueAlertCleaned(input.db, input.guildId, reference);
     }
-    const verifiedAt = getLeagueAuditState(input.db, input.guildId)?.lastFullAt;
+    const auditState = getLeagueAuditState(input.db, input.guildId);
+    const verifiedAt = auditState?.lastCleanFullAt === auditState?.lastFullAt ? auditState?.lastCleanFullAt : undefined;
     if (result === 'clean' && verifiedAt && input.cards.deleteLegacyResolvedAlerts) {
       const checkpoint = `legacy-alerts-before:${verifiedAt}`;
       if (!wasLeagueAlertCleaned(input.db, input.guildId, checkpoint)) {
@@ -366,6 +368,7 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
     });
   }
   if (result !== 'error') noteLeagueCheck(input.db, input.guildId, 'full', input.now);
+  if (result === 'clean') noteCleanFullLeagueAudit(input.db, input.guildId, input.now);
   return { status: result, issues };
 }
 

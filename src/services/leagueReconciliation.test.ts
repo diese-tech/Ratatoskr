@@ -495,3 +495,28 @@ test('heartbeat retry after legacy alert cleanup failure edits its replacement w
     assert.equal(cards.events.at(-1), 'edit:m2');
   } finally { f.worker.stop(); f.db.close(); }
 });
+
+test('targeted convergence after a dirty full audit cannot authorize legacy cleanup', async () => {
+  const f = setup();
+  const cards = new Panel();
+  const cleaned: string[] = [];
+  const port: LeagueAuditCardPort = Object.assign(cards, { deleteLegacyResolvedAlerts: async (at: string) => { cleaned.push(at); } });
+  const input = { ...f.input, members: { getMembers: async () => f.snapshot.discordMembers },
+    sheets: { load: async () => ({ snapshot: f.snapshot, sources: {} as never }) }, cards: port };
+  try {
+    const original = f.snapshot.discordMembers[0]!.displayName;
+    f.snapshot.discordMembers[0]!.displayName = 'Dirty full audit';
+    await runLeagueAudit({ ...input, trigger: 'scheduled' });
+    assert.equal(getLeagueAuditState(f.db, 'g')!.lastCleanFullAt, null);
+    f.snapshot.discordMembers[0]!.displayName = original;
+    await checkLeagueMember({ ...f.input, discordId: 'one', now: new Date(now.getTime() + 60_000) });
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now: new Date(now.getTime() + 60_000) });
+    assert.match(cards.sent[0]!.card.description, /Status: Healthy/);
+    assert.deepEqual(cleaned, []);
+    const cleanAt = new Date(now.getTime() + 120_000);
+    await runLeagueAudit({ ...input, trigger: 'scheduled', now: cleanAt });
+    assert.equal(getLeagueAuditState(f.db, 'g')!.lastCleanFullAt, cleanAt.toISOString());
+    assert.equal(getLeagueAuditState(f.db, 'g')!.lastFullAt, cleanAt.toISOString());
+    assert.deepEqual(cleaned, [cleanAt.toISOString()]);
+  } finally { f.worker.stop(); f.db.close(); }
+});

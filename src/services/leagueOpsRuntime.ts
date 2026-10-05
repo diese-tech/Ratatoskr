@@ -7,7 +7,7 @@ import {
   listLeagueMutationProblems,
   hasPendingLeagueDeliveries,
 } from '../db/repositories/leagueOperations.js';
-import { getLeagueAuditRepair } from '../db/repositories/leagueAuditRepairs.js';
+import { getLeagueAuditRepair, markLeagueAuditRepairReconciliationRequired } from '../db/repositories/leagueAuditRepairs.js';
 import { listActionableLeagueJobs, transitionLeagueJob } from '../db/repositories/leagueJobs.js';
 import {
   getVerifiedLeagueMember,
@@ -271,6 +271,9 @@ export function createLeagueOpsRuntime(input: {
         transitionLeagueJob(db, job.reference, 'COMPLETED');
         return;
       }
+      if (repair?.status === 'applying')
+        markLeagueAuditRepairReconciliationRequired(db, repair.reference,
+          'Repair was interrupted during an external write. Review and explicitly reconcile the recorded operation; do not replay it.');
       // Recovery inspects fresh sources, but convergence alone cannot prove an
       // interrupted external write's approved history/notice was committed.
       try {

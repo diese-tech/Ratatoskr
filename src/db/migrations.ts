@@ -850,4 +850,9 @@ export const migrations: Migration[] = [
       resolved_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );`,
   },
+  {
+    id: 33,
+    name: 'league_clean_full_audit_evidence',
+    sql: 'ALTER TABLE league_audit_cards ADD COLUMN last_clean_full_at TEXT;',
+  },
 ];
