@@ -380,7 +380,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       throw openReconciliationTicket(input, auditDate, error);
     }
     const roleValidationPlayerIds = plan.playerIds.filter((discordId) =>
-      plan.discordRoleChanges.some((change) => change.discordId === discordId));
+      !(outgoingPlayerIsAbsent && discordId === plan.playerIds[0]));
     const beforeByPlayer = new Map(roleValidationPlayerIds.map((discordId) => [
       discordId,
       expectedRoleState(loaded.snapshot, loaded.snapshot.rosters, loaded.snapshot.names, discordId),
