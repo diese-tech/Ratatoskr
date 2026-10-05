@@ -199,7 +199,27 @@ export function markLeagueReconciliationTicketAlerted(db: Database.Database, ref
 export function resolveOpenLeagueReconciliationTickets(db: Database.Database, guildId: string): number {
   return db.prepare(`UPDATE league_reconciliation_tickets SET
       status = 'resolved', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE guild_id = ? AND status = 'open'`).run(guildId).changes;
+    WHERE guild_id = ? AND status = 'open'
+      AND NOT EXISTS (SELECT 1 FROM league_audit_repairs r
+        WHERE r.reference = league_reconciliation_tickets.reference
+          AND r.status IN ('applying', 'reconciliation_required'))
+      AND NOT EXISTS (SELECT 1 FROM league_transactions t
+        WHERE t.reference = league_reconciliation_tickets.reference
+          AND t.status IN ('applying_discord', 'applying_sheets', 'announcement_pending', 'reconciliation_required'))`).run(guildId).changes;
+}
+
+export function listResolvedLeagueAlertReferences(db: Database.Database, guildId: string): string[] {
+  return (db.prepare(`SELECT reference FROM (
+    SELECT reference FROM league_reconciliation_tickets WHERE guild_id = ? AND status = 'resolved' AND alerted_at IS NOT NULL
+    UNION SELECT reference FROM league_transactions WHERE guild_id = ? AND status IN ('completed', 'failed') AND reconciliation_alerted_at IS NOT NULL
+  ) resolved WHERE NOT EXISTS (
+    SELECT 1 FROM league_alert_cleanup c WHERE c.guild_id = ? AND c.reference = resolved.reference
+  )`).all(guildId, guildId, guildId) as Array<{reference: string}>).map((row) => row.reference);
+}
+
+export function markLeagueAlertCleaned(db: Database.Database, guildId: string, reference: string): void {
+  db.prepare(`INSERT OR IGNORE INTO league_alert_cleanup (guild_id, reference, cleaned_at)
+    VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`).run(guildId, reference);
 }
 
 export function getLeagueReconciliationTicket(

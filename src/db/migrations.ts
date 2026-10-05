@@ -826,4 +826,16 @@ export const migrations: Migration[] = [
       ALTER TABLE league_audit_cards ADD COLUMN last_repost_at TEXT;
     `,
   },
+  {
+    id: 31,
+    name: 'league_resolved_alert_cleanup',
+    sql: `
+      CREATE TABLE league_alert_cleanup (
+        guild_id TEXT NOT NULL,
+        reference TEXT NOT NULL,
+        cleaned_at TEXT NOT NULL,
+        PRIMARY KEY (guild_id, reference)
+      );
+    `,
+  },
 ];

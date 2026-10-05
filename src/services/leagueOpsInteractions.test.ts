@@ -118,3 +118,33 @@ test('stale component with no matching durable job fails closed before mutation'
     db.close();
   }
 });
+
+test('read failure keeps the current verified finding reviewable without executing a mutation', async () => {
+  const db = openDatabase(':memory:');
+  let reply: unknown;
+  try {
+    beginDirtyLeagueAudit(db, {
+      guildId: 'g',
+      result: 'error',
+      findings: ['Team\nDiscord name now: “New”\nCurrent Rosters sheet: “Old”\nPlayer Name History sheet: “Old”'],
+      runReference: 'current',
+      runAt: new Date().toISOString(),
+      trigger: 'scheduled',
+    });
+    const interaction = {
+      customId: 'league-audit:review:current',
+      guild: { id: 'g', members: { fetch: async () => ({ roles: { cache: new Map([['admin-role', {}]]) } }) } },
+      user: { id: 'admin' },
+      deferReply: async () => {},
+      editReply: async (value: unknown) => {
+        reply = value;
+      },
+    } as unknown as ButtonInteraction;
+    await handleLeagueAuditReviewButton(interaction, db, db);
+    assert.match(JSON.stringify(reply), /Resolve this issue/);
+    assert.doesNotMatch(JSON.stringify(reply), /out of date/);
+    assert.equal((db.prepare('SELECT count(*) count FROM league_jobs').get() as { count: number }).count, 0);
+  } finally {
+    db.close();
+  }
+});
