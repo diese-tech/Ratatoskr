@@ -201,6 +201,41 @@ test('failed stale-card deletion retries cleanup without posting another card', 
   }
 });
 
+test('an interactive refresh audits fresh sources after finishing pending card cleanup', async () => {
+  const db = openDatabase(':memory:');
+  const cards = new Cards();
+  let current = snapshot();
+  const input = {
+    db, operationScope: db, guildId: 'guild', freeAgentRoleId: 'free-agent',
+    members: { getMembers: async () => current.discordMembers },
+    sheets: { load: async () => ({ snapshot: current, sources: {} as never }) },
+    cards,
+  };
+  try {
+    await runLeagueAudit({ ...input, trigger: 'startup', now: new Date('2026-10-04T10:00:00.000Z') });
+    cards.failNextDelete = true;
+    await assert.rejects(
+      runLeagueAudit({ ...input, trigger: 'scheduled', now: new Date('2026-10-04T11:00:00.000Z') }),
+      /delete failed/,
+    );
+
+    current = snapshot();
+    current.publicRosters.Vanaheim!.teams.B = ['Two'];
+    const result = await runLeagueAudit({
+      ...input,
+      trigger: 'scheduled',
+      now: new Date('2026-10-04T12:00:00.000Z'),
+      freshAfterRecovery: true,
+    });
+
+    assert.equal(result.status, 'clean');
+    assert.deepEqual(cards.deleted, ['message-1', 'message-2']);
+    assert.equal(getLeagueAuditState(db, 'guild')?.result, 'clean');
+  } finally {
+    db.close();
+  }
+});
+
 test('a failed replacement post retains the prior card and a durable retry marker', async () => {
   const db = openDatabase(':memory:');
   const cards = new Cards();

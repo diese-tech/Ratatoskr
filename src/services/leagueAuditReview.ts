@@ -120,6 +120,7 @@ export async function handleLeagueAuditReviewButton(
       trigger: 'scheduled',
       now: new Date(),
       freeAgentRoleId: config.freeAgentRoleId,
+      freshAfterRecovery: true,
       members: discord,
       sheets,
       cards: createLeagueAuditCardPort(interaction.client, db, interaction.guild!.id),
