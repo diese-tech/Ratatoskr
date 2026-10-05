@@ -83,6 +83,8 @@ type ExecuteLeagueTransactionInput = {
   discord: LeagueDiscordPort;
   buildPlan(snapshot: LeagueSnapshot): LeagueMutationPlan;
   expectedPlanFingerprint?: string;
+  jobReference?: string;
+  onPhase?(phase: 'VALIDATING' | 'APPLYING' | 'VERIFYING'): void;
 };
 
 export class LeagueTransactionPreviewChangedError extends Error {
@@ -327,7 +329,7 @@ async function rollbackDiscord(
 }
 
 export async function executeLeagueTransaction(input: ExecuteLeagueTransactionInput): Promise<{ reference: string; announcementId?: string }> {
-  const release = acquireLeagueTransaction(input.operationScope, input.guildId);
+  const release = await acquireLeagueTransaction(input.operationScope, input.guildId);
   try {
     const members = input.discord.getMembers ? await input.discord.getMembers() : [];
     const auditDate = dateInLeagueTimezone(input.now);
@@ -337,7 +339,11 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
+    input.onPhase?.('VALIDATING');
     const plan = input.buildPlan(loaded.snapshot);
+    if (input.expectedPlanFingerprint && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {
+      throw new LeagueTransactionPreviewChangedError(plan);
+    }
     const outgoingPlayerIsAbsent = (plan.kind === 'departure' || plan.kind === 'self-drop')
       && !plan.discordRoleChanges.some((change) => change.discordId === plan.playerIds[0]);
     const issues = humanizeLeagueAuditIssues(
@@ -405,7 +411,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       );
     }
 
-    const reference = `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const reference = input.jobReference ?? `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const record: LeagueTransactionRecord = {
       reference, effectiveDate: auditDate, processedById: input.actorUserId, processedBy: input.actorName,
     };
@@ -414,6 +420,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       payload: { plan, record },
     });
 
+    input.onPhase?.('APPLYING');
     const applied: DiscordRoleChange[] = [];
     try {
       for (const change of plan.discordRoleChanges) {
@@ -456,6 +463,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
     }
 
+    input.onPhase?.('VERIFYING');
     transitionLeagueTransaction(input.db, reference, 'applying_sheets', 'announcement_pending');
     const announcement = buildLeagueAnnouncement(plan, input.actorName);
     let announcementId: string | undefined;

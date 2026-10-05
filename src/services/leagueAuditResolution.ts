@@ -359,18 +359,20 @@ export async function executeLeagueAuditRepair(input: {
   expectedFinding: string;
   action: LeagueAuditResolutionAction;
   freeAgentRoleId: string;
+  jobReference?: string;
+  onApplying?(): void;
   members: { getMembers(): Promise<DiscordLeagueMember[]> };
   sheets: RepairSheets;
   discord: RepairDiscord;
 }): Promise<{ reference: string }> {
-  const release = acquireLeagueTransaction(input.operationScope, input.guildId);
+  const release = await acquireLeagueTransaction(input.operationScope, input.guildId);
   try {
     const members = await input.members.getMembers();
     const loaded = await input.sheets.load(members, input.freeAgentRoleId);
     const diagnostic = auditLeagueRoster(loaded.snapshot).find((candidate) =>
       humanizeLeagueAuditIssues(loaded.snapshot, [candidate])[0] === input.expectedFinding);
     if (!diagnostic) throw new LeagueAuditRepairStaleError();
-    const reference = `YSL-AUD-FIX-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const reference = input.jobReference ?? `YSL-AUD-FIX-${randomUUID().slice(0, 8).toUpperCase()}`;
     if (input.action === 'repair-roles') {
       const match = diagnostic.match(/^Discord member (\S+)/);
       if (!match) throw new Error('This issue no longer identifies one player whose Discord roles can be repaired.');
@@ -384,6 +386,7 @@ export async function executeLeagueAuditRepair(input: {
         expected.freeAgentRoleId,
       ]);
       const observedManagedRoleIds = member.roleIds.filter((roleId) => managedRoleIds.has(roleId));
+      input.onApplying?.();
       await applyDurableRepair({
         ...input,
         reference,
@@ -393,6 +396,7 @@ export async function executeLeagueAuditRepair(input: {
     }
     const plan = buildLeagueAuditSheetRepair(loaded.snapshot, diagnostic, input.action);
     const prepared = input.sheets.prepare(loaded, plan);
+    input.onApplying?.();
     await applyDurableRepair({
       ...input,
       reference,

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
 export type LeagueTransactionStatus =
@@ -217,12 +218,12 @@ export function saveLeagueTransactionPreview(db: Database.Database, input: {
   planFingerprint: string;
 }): void {
   db.prepare(`INSERT INTO league_transaction_previews
-      (guild_id, actor_user_id, intent_key, plan_fingerprint)
-    VALUES (?, ?, ?, ?)
+      (guild_id, actor_user_id, intent_key, plan_fingerprint, approval_reference)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(guild_id, actor_user_id, intent_key) DO UPDATE SET
-      plan_fingerprint = excluded.plan_fingerprint,
+      plan_fingerprint = excluded.plan_fingerprint, approval_reference = excluded.approval_reference,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`)
-    .run(input.guildId, input.actorUserId, input.intentKey, input.planFingerprint);
+    .run(input.guildId, input.actorUserId, input.intentKey, input.planFingerprint, randomUUID());
 }
 
 export function getLeagueTransactionPreviewFingerprint(
@@ -246,4 +247,17 @@ export function deleteLeagueTransactionPreview(
   db.prepare(`DELETE FROM league_transaction_previews
     WHERE guild_id = ? AND actor_user_id = ? AND intent_key = ?`)
     .run(guildId, actorUserId, intentKey);
+}
+
+export function getLeaguePreviewApproval(db: Database.Database, guildId: string, actorUserId: string, intentKey: string): string | undefined {
+  const row = db.prepare('SELECT COALESCE(approval_reference,plan_fingerprint) AS approval FROM league_transaction_previews WHERE guild_id=? AND actor_user_id=? AND intent_key=?').get(guildId,actorUserId,intentKey) as {approval:string} | undefined;
+  return row?.approval;
+}
+export function listOpenLeagueReconciliationTickets(db: Database.Database, guildId: string): LeagueReconciliationTicket[] {
+  return (db.prepare("SELECT * FROM league_reconciliation_tickets WHERE guild_id=? AND status='open'").all(guildId) as ReconciliationTicketRow[]).map(toReconciliationTicket);
+}
+
+export function listLeagueMutationProblems(db: Database.Database, guildId: string): string[] {
+  const rows = db.prepare(`SELECT reference FROM league_transactions WHERE guild_id=? AND status='reconciliation_required' UNION SELECT reference FROM league_audit_repairs WHERE guild_id=? AND status='reconciliation_required'`).all(guildId,guildId) as Array<{reference:string}>;
+  return rows.map(row=>row.reference);
 }

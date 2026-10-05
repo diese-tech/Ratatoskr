@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import { createLeagueOpsRuntime } from './services/leagueOpsRuntime.js';
+import { observeLeagueMember, scheduleDirtyLeagueCheck } from './services/leagueReconciliation.js';
+import type { LeagueJobWorker } from './services/leagueJobWorker.js';
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import { handleInteraction, registerGuildCommands } from './commands/index.js';
 import { env } from './config/env.js';
@@ -24,8 +27,7 @@ import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from './services
 import { DiscordLeagueGateway } from './services/leagueDiscord.js';
 import { reconcilePendingLeagueTransactions } from './services/leagueTransactions.js';
 import { runIsolatedStartupRecovery } from './services/startupRecovery.js';
-import { runLeagueAudit, startLeagueAuditWorker } from './services/leagueAudit.js';
-import { createLeagueAuditCardPort } from './services/leagueAuditDiscord.js';
+import { startLeagueAuditWorker } from './services/leagueAudit.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -68,9 +70,12 @@ const scoutSignupDependencies: ScoutSignupDependencies = {
 };
 
 let stopScoutNotificationWorker: (() => void) | undefined;
+let leagueWorker: LeagueJobWorker | undefined;
+let stopLeagueOps: (() => void) | undefined;
 let stopLeagueAuditWorker: (() => void) | undefined;
 
 async function shutdown() {
+  stopLeagueOps?.();
   stopLeagueAuditWorker?.();
   stopScoutNotificationWorker?.();
   await client.destroy();
@@ -110,7 +115,6 @@ client.once('clientReady', async () => {
   const leagueGuild = await client.guilds.fetch(env.DISCORD_GUILD_ID);
   const leagueSheets = new LeagueSheetsService(leagueSheetsConnection.gateway, leagueSheetsConnection.config);
   const leagueDiscord = new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId);
-  const leagueAuditCards = createLeagueAuditCardPort(client, db, env.DISCORD_GUILD_ID);
   const leagueRecovered = await runIsolatedStartupRecovery(
     'League transaction recovery',
     async () => {
@@ -142,28 +146,15 @@ client.once('clientReady', async () => {
   console.log(leagueRecovered
     ? 'Pending league transaction notices reconciled.'
     : 'League transaction recovery failed; continuing existing Scout startup.');
-  const runAudit = (trigger: 'startup' | 'scheduled') => runLeagueAudit({
-    db,
-    operationScope: storage.operationScope,
-    guildId: env.DISCORD_GUILD_ID,
-    trigger,
-    now: new Date(),
-    freeAgentRoleId: leagueConfig.freeAgentRoleId,
-    members: leagueDiscord,
-    sheets: leagueSheets,
-    cards: leagueAuditCards,
-  });
-  void runAudit('startup')
-    .then((result) => console.log(`Startup league roster audit completed (${result.status}).`))
-    .catch((error) => console.error('Startup league roster audit delivery remains pending:', error))
-    .finally(() => {
-      stopLeagueAuditWorker = startLeagueAuditWorker({
-        db,
-        guildId: env.DISCORD_GUILD_ID,
-        run: async () => { await runAudit('scheduled'); },
-      });
-      console.log('Daily league roster audit worker started (06:00 America/New_York).');
-    });
+  const runtime = createLeagueOpsRuntime({db,operationScope:storage.operationScope,client,guild:leagueGuild,sheets:leagueSheets,freeAgentRoleId:leagueConfig.freeAgentRoleId,transactionsChannelId:leagueConfig.transactionsChannelId});
+  leagueWorker = runtime.worker;
+  stopLeagueOps = runtime.stop;
+  await leagueWorker.recover();
+  leagueWorker.enqueue('audit',{trigger:'startup'},'audit:startup');
+  leagueWorker.enqueue('panel',{},'panel');
+  scheduleDirtyLeagueCheck(db,leagueWorker);
+  leagueWorker.start();
+  stopLeagueAuditWorker = startLeagueAuditWorker({db,guildId:env.DISCORD_GUILD_ID,run:async () => { leagueWorker!.enqueue('audit',{trigger:'scheduled'},'audit:scheduled'); }});
   await reconcilePostingScoutSetups(client, db);
   console.log('Pending scout signup posts reconciled.');
   await reconcilePendingScoutPublishes(client, db);
@@ -206,6 +197,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.on('guildMemberUpdate', async (_oldMember, newMember) => {
+  leagueMembershipChanged(newMember.guild.id,newMember.id,newMember.user.bot ? undefined : {discordId:newMember.id,displayName:newMember.displayName,roleIds:[...newMember.roles.cache.keys()]});
   try {
     await syncCaptainAccess(newMember);
   } catch (error) {
@@ -219,8 +211,24 @@ async function scoutMembershipChanged(guildId: string, userId: string) {
   catch (error) { await reportOperationalError(client, db, { guildId, action: 'Scout membership refresh' }, error); }
 }
 
-client.on('guildMemberAdd', (member) => scoutMembershipChanged(member.guild.id, member.id));
-client.on('guildMemberRemove', (member) => scoutMembershipChanged(member.guild.id, member.id));
+function leagueMembershipChanged(guildId: string, discordId: string, member: {discordId:string;displayName:string;roleIds:string[]} | null | undefined) {
+  if (!leagueWorker || guildId !== leagueWorker.guildId || member === undefined) return;
+  try { observeLeagueMember(db,leagueWorker,member,discordId); }
+  catch (error) { console.error('League member event could not be queued:',error); }
+}
+client.on('guildMemberAdd', async member => {
+  leagueMembershipChanged(member.guild.id,member.id,member.user.bot ? undefined : {discordId:member.id,displayName:member.displayName,roleIds:[...member.roles.cache.keys()]});
+  await scoutMembershipChanged(member.guild.id,member.id);
+});
+client.on('guildMemberRemove', async member => {
+  leagueMembershipChanged(member.guild.id,member.id,member.user?.bot ? undefined : null);
+  await scoutMembershipChanged(member.guild.id,member.id);
+});
+client.on('userUpdate', (_oldUser,user) => {
+  const guild = client.guilds.cache.get(env.DISCORD_GUILD_ID);
+  const member = guild?.members.cache.get(user.id);
+  if (member && !user.bot) leagueMembershipChanged(member.guild.id,user.id,{discordId:user.id,displayName:member.displayName,roleIds:[...member.roles.cache.keys()]});
+});
 client.on('roleDelete', async (role) => {
   try { await refreshScoutMemberReadiness(client, scoutSignupDependencies, role.guild.id, { eligibilityRoleId: role.id }); }
   catch (error) { await reportOperationalError(client, db, { guildId: role.guild.id, action: 'Scout eligibility role removal' }, error); }

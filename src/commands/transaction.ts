@@ -1,3 +1,5 @@
+import { leagueJobWorkerFor } from '../services/leagueJobWorker.js';
+import { buildLeagueIntentPlan, type LeagueTransactionIntent } from '../services/leagueTransactionIntent.js';
 import {
   MessageFlags,
   SlashCommandBuilder,
@@ -7,28 +9,21 @@ import {
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
-  buildDeparturePlan,
-  buildDiscordRenamePlan,
-  buildDropPlan,
-  buildPickupPlan,
-  buildSelfDropPlan,
-  buildTradePlan,
   LeagueMutationValidationError,
   type LeagueMutationPlan,
   type LeagueSnapshot,
 } from '../domain/leagueOperations.js';
-import { hasAccess, requireAccess } from '../services/authorization.js';
+import { hasAccess } from '../services/authorization.js';
 import { loadLeagueOperationsConfig } from '../config/league-operations.js';
 import { DiscordLeagueGateway } from '../services/leagueDiscord.js';
 import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from '../services/leagueSheets.js';
 import {
   deleteLeagueTransactionPreview,
+  getLeaguePreviewApproval,
   getLeagueTransactionPreviewFingerprint,
   saveLeagueTransactionPreview,
 } from '../db/repositories/leagueOperations.js';
 import {
-  executeLeagueTransaction,
-  LeagueTransactionPreviewChangedError,
   leagueTransactionPlanFingerprint,
 } from '../services/leagueTransactions.js';
 import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
@@ -81,39 +76,6 @@ export const transactionCommand = new SlashCommandBuilder()
     .addUserOption((option) => option.setName('player').setDescription('Player whose Discord display name changed.').setRequired(true))
     .addStringOption((option) => option.setName('league_name').setDescription('Exact current Discord display name.').setRequired(true).setMaxLength(100))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')));
-
-function planBuilder(interaction: ChatInputCommandInteraction): (snapshot: LeagueSnapshot) => LeagueMutationPlan {
-  const subcommand = interaction.options.getSubcommand();
-  if (subcommand === 'trade') {
-    const first = interaction.options.getUser('player_one', true).id;
-    const second = interaction.options.getUser('player_two', true).id;
-    return (snapshot) => buildTradePlan(snapshot, first, second);
-  }
-  if (subcommand === 'departure') {
-    const player = interaction.options.getString('player', true);
-    const replacement = interaction.options.getUser('replacement')?.id;
-    return (snapshot) => buildDeparturePlan(snapshot, player, replacement);
-  }
-  if (subcommand === 'self-drop') {
-    const player = interaction.options.getString('player', true);
-    const replacement = interaction.options.getUser('replacement')?.id;
-    return (snapshot) => buildSelfDropPlan(snapshot, player, replacement);
-  }
-  const player = interaction.options.getUser('player', true).id;
-  if (subcommand === 'drop') {
-    const replacement = interaction.options.getUser('replacement')?.id;
-    return (snapshot) => buildDropPlan(snapshot, player, replacement);
-  }
-  if (subcommand === 'pickup') {
-    const teamRole = interaction.options.getRole('team', true).id;
-    return (snapshot) => buildPickupPlan(snapshot, player, teamRole);
-  }
-  if (subcommand === 'rename') {
-    const leagueName = interaction.options.getString('league_name', true);
-    return (snapshot) => buildDiscordRenamePlan(snapshot, player, leagueName);
-  }
-  throw new Error('Unknown transaction type.');
-}
 
 function intentKey(interaction: ChatInputCommandInteraction): string {
   const subcommand = interaction.options.getSubcommand();
@@ -220,16 +182,16 @@ export async function handleTransactionCommand(
     return;
   }
   const guildId = interaction.guild.id;
-  const member = await interaction.guild.members.fetch(interaction.user.id);
-  if (!(await requireAccess(interaction, member, 'ADMIN'))) return;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!hasAccess(member,'ADMIN')) { await interaction.editReply('You do not have permission to use this command.'); return; }
 
   const transactionEnvironment = loadLeagueOperationsConfig();
   const { gateway, config } = createGoogleLeagueSheetsGateway();
   const sheets = new LeagueSheetsService(gateway, config);
   const discord = new DiscordLeagueGateway(interaction.guild, transactionEnvironment.transactionsChannelId);
-  const buildPlan = planBuilder(interaction);
   const previewIntent = intentKey(interaction);
+  const buildPlan = (snapshot: LeagueSnapshot) => buildLeagueIntentPlan(previewIntent,snapshot);
 
   const showPreview = async (message = '') => {
     const loaded = await sheets.load(await discord.getMembers(), transactionEnvironment.freeAgentRoleId);
@@ -260,36 +222,15 @@ export async function handleTransactionCommand(
     }
 
     const actorName = (member as GuildMember).displayName || interaction.user.globalName || interaction.user.username;
-    let result: Awaited<ReturnType<typeof executeLeagueTransaction>>;
-    try {
-      result = await executeLeagueTransaction({
-        db,
-        operationScope,
-        guildId,
-        actorUserId: interaction.user.id,
-        actorName,
-        freeAgentRoleId: transactionEnvironment.freeAgentRoleId,
-        now: new Date(),
-        sheets,
-        discord,
-        buildPlan,
-        expectedPlanFingerprint,
-      });
-    } catch (error) {
-      if (!(error instanceof LeagueTransactionPreviewChangedError)) throw error;
-      await persistPreviewAfterDelivery(
-        () => interaction.editReply(`League state changed after your preview. Review this updated transaction before confirming again.\n\n${preview(error.plan)}`),
-        () => saveLeagueTransactionPreview(db, {
-          guildId,
-          actorUserId: interaction.user.id,
-          intentKey: previewIntent,
-          planFingerprint: leagueTransactionPlanFingerprint(error.plan),
-        }),
-      );
+    const worker = leagueJobWorkerFor(operationScope,interaction.guild.id);
+    const job = worker.enqueue('transaction', {
+      selections: previewIntent, actorUserId: interaction.user.id, actorName, expectedPlanFingerprint,
+    } satisfies LeagueTransactionIntent, `transaction:${interaction.user.id}:${previewIntent}:${getLeaguePreviewApproval(db,guildId,interaction.user.id,previewIntent)}`);
+    if (job.status === 'BLOCKED_REVIEW') {
+      await showPreview(`This queued operation needs a new review. ${job.lastError ?? ''}\n\n`);
       return;
     }
-    deleteLeagueTransactionPreview(db, guildId, interaction.user.id, previewIntent);
-    await interaction.editReply(`Transaction completed. Reference: ${result.reference}`);
+    await interaction.editReply(`Transaction ${job.status === 'COMPLETED' ? 'completed' : job.status === 'QUEUED' ? 'queued' : job.status === 'RETRYING' ? 'waiting to retry' : job.status === 'RECONCILIATION_REQUIRED' ? 'requires reconciliation' : job.status === 'FAILED' ? 'failed' : 'processing'}. Reference: ${job.reference}\nLeague Ops Status tracks operations needing review.`);
   } catch (error) {
     if (!(await replyToTransactionValidation(interaction, error))) throw error;
     deleteLeagueTransactionPreview(db, guildId, interaction.user.id, previewIntent);

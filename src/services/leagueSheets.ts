@@ -370,6 +370,29 @@ export class LeagueSheetsService {
     };
   }
 
+  // Sheets has no server-side Discord-ID predicate. Read the three managed
+  // index tables, then only public divisions containing the affected identity.
+  // This read-only path never supplies a mutation's before-values.
+  async loadMember(discordId: string, member: DiscordLeagueMember | null, freeAgentRoleId: string): Promise<LeagueSnapshot> {
+    const [teamRows, rosterRows, nameRows] = await Promise.all([
+      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_TEAMS_RANGE),
+      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE),
+      this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_NAMES_RANGE),
+    ]);
+    const teams = parseTeams(teamRows);
+    const rosters = parseRosters(rosterRows);
+    const names = parseNames(nameRows);
+    const affectedDivisions = [...new Set([
+      ...rosters.filter(row => row.discordId === discordId).map(row => row.division),
+      ...names.filter(row => row.discordId === discordId).map(row => row.division),
+      ...teams.filter(team => member?.roleIds.includes(team.teamRoleId) || member?.roleIds.includes(team.divisionRoleId)).map(team => team.division),
+    ])];
+    const publicRosters = Object.fromEntries(await Promise.all(affectedDivisions.map(async division => [division,
+      parsePublic(await this.gateway.getValues(this.config.publicSpreadsheetId, `'${division} Roster'!${PUBLIC_RANGE}`)),
+    ])));
+    return { teams, rosters, names, discordMembers: member ? [member] : [], publicRosters, freeAgentRoleId };
+  }
+
   async assertUnchanged(loaded: LoadedLeagueSnapshot): Promise<void> {
     let fresh: LoadedLeagueSnapshot;
     try {

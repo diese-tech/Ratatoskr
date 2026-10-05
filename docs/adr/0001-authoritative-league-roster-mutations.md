@@ -87,3 +87,13 @@ A standalone self-drop uses the same self-drop sentence without the replacement 
 - Startup and daily audits surface drift before staff need the next transaction while keeping only one authoritative audit card in staff-ops.
 - The first release intentionally rejects cross-division moves and leaves captain/staff role changes manual.
 - Production rollout requires the Google service-account secret, both workbook IDs, the Free Agent role ID, and the transactions channel ID.
+
+## Amendment: durable league operations (#146)
+
+The guild fail-fast gate and exception-only rolling card are superseded by a durable SQLite intent queue and persistent League Ops status panel. One canonical worker per guild serializes transactions, explicitly confirmed repairs, targeted verification, and deep audits. Database claims prevent another worker instance from starting canonical work for the same guild while a job is active. A separate presentation lane edits/reposts the panel without holding canonical work.
+
+Each preview delivery receives a durable approval reference. Repeated equivalent active approvals and confirmations alias one job; completed approval keys are retained to prevent stale clicks from mutating twice. Execution rechecks administrator access, reloads sources, rebuilds the approved intent, and compares its fingerprint. Changed plans block for a refreshed preview. Existing transaction/repair records continue to govern rollback, ambiguous writes, public notices, and history recovery. Job recovery cannot blindly replay an interrupted external mutation.
+
+Verified per-Discord-ID observations are drift detectors, never mutation authority. Member events coalesce targeted checks; resource findings are replaced in place and aggregated across independent identities. Known dirty resources retry every two minutes until fresh checks converge. Full startup and 6 AM New York audits remain. Hourly panel repost is presentation only, persists its payload/reference, confirms the new authoritative card before cleanup, and recovers ambiguous delivery by nonce or footer reference. The panel remains present when healthy.
+
+Resource-scoped mutation parallelism, a technical Discord channel, and generalized/external queue infrastructure remain deferred. People Directory/History work remains owned by #128.
