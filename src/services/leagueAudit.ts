@@ -216,6 +216,9 @@ export async function refreshLeagueOpsPanel(
   input: Pick<Input, 'db' | 'guildId' | 'cards'> & { now: Date; repost?: boolean },
 ): Promise<string | undefined> {
   const recovered = await recoverPendingLeagueAudit(input);
+  // Recovery already completed the pending replacement. Refresh its content,
+  // but never start a second replacement during the same heartbeat retry.
+  if (recovered && input.repost) noteLeaguePanelRepost(input.db, input.guildId, input.now);
   if (recovered && !input.cards.edit)
     return getLeagueAuditState(input.db, input.guildId)?.currentMessageId ?? undefined;
   const prior = getLeagueAuditState(input.db, input.guildId);
@@ -249,7 +252,7 @@ export async function refreshLeagueOpsPanel(
     card.description += `\n\nPossibly partial operations: ${additionalProblems.length}\nReview Discord and managed sheets for: ${additionalProblems.slice(-5).join(', ')}`;
   const times = getLeagueAuditState(input.db, input.guildId);
   card.description += `\n\nLast targeted check: ${times?.lastTargetedAt ?? 'Pending'}\nLast full audit: ${times?.lastFullAt ?? 'Pending'}`;
-  if (prior?.currentMessageId && !input.repost && input.cards.edit) {
+  if (prior?.currentMessageId && (!input.repost || recovered) && input.cards.edit) {
     await input.cards.edit(prior.currentMessageId, card, reference);
     recordLeaguePanelEdit(input.db, {
       guildId: input.guildId,

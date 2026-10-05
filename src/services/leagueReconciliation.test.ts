@@ -136,6 +136,7 @@ class Panel implements LeagueAuditCardPort {
   edits = 0;
   fail = false;
   lose = false;
+  failDelete = false;
   async send(card: LeagueAuditCard, reference: string) {
     if (this.fail) throw Error('delivery failed');
     const id = `m${this.sent.length + 1}`;
@@ -158,6 +159,10 @@ class Panel implements LeagueAuditCardPort {
     this.events.push(`edit:${id}`);
   }
   async delete(id: string) {
+    if (this.failDelete) {
+      this.failDelete = false;
+      throw Error('cleanup failed');
+    }
     this.events.push(`delete:${id}`);
   }
 }
@@ -217,6 +222,33 @@ test('failed heartbeat preserves old authority; ambiguous delivery is adopted af
     f.db.close();
   }
 });
+
+for (const failure of ['ambiguous send', 'failed cleanup']) {
+  test(`heartbeat retry adopts its replacement without reposting after ${failure}`, async () => {
+    const f = setup();
+    const cards = new Panel();
+    try {
+      await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
+      cards.lose = failure === 'ambiguous send';
+      cards.failDelete = failure === 'failed cleanup';
+      await assert.rejects(refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now, repost: true }));
+      f.snapshot.discordMembers[0]!.displayName = 'Changed during recovery';
+      await checkLeagueMember({ ...f.input, discordId: 'one' });
+      const recoveredAt = new Date(now.getTime() + 60_000);
+      await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now: recoveredAt, repost: true });
+      assert.equal(cards.sent.length, 2);
+      assert.equal(getLeagueAuditState(f.db, 'g')!.currentMessageId, 'm2');
+      assert.equal(getLeagueAuditState(f.db, 'g')!.phase, 'settled');
+      assert.equal(getLeagueAuditState(f.db, 'g')!.lastRepostAt, recoveredAt.toISOString());
+      assert.deepEqual(cards.events.filter((event) => event.startsWith('delete:')), ['delete:m1']);
+      assert.equal(cards.events.at(-1), 'edit:m2');
+      assert.match(cards.sent[1]!.card.description, /Player names: 1/);
+    } finally {
+      f.worker.stop();
+      f.db.close();
+    }
+  });
+}
 
 test('hourly heartbeat restores its deadline from persistent delivery time and does not perform an audit', async () => {
   const { startLeaguePanelHeartbeat, PANEL_HEARTBEAT_MS } = await import('./leagueReconciliation.js');
