@@ -478,3 +478,18 @@ test('full and targeted loads batch fresh ranges per workbook and restrict targe
   const fresh = await service.loadMember('one', members[0]!, 'free-agent');
   assert.equal(fresh.rosters[0]!.player, 'Fresh name');
 });
+
+test('gateways for the same service account share pacing and quota cooldown', async () => {
+  const { getLeagueSheetsReadSchedule } = await import('./leagueSheets.js');
+  let time = 0;
+  const waits: number[] = [];
+  const clock = { now: () => time, wait: async (ms: number) => { waits.push(ms); time += ms; } };
+  const runtime = getLeagueSheetsReadSchedule('shared-test@example.com', clock);
+  const preview = getLeagueSheetsReadSchedule('shared-test@example.com', clock);
+  assert.equal(runtime, preview);
+  await assert.rejects(runtime(async () => { throw { status: 429 }; }));
+  await preview(async () => 'fresh preview');
+  await runtime(async () => 'fresh audit');
+  assert.deepEqual(waits, [60_000, 2000]);
+  assert.notEqual(getLeagueSheetsReadSchedule('other-test@example.com', clock), runtime);
+});

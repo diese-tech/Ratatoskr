@@ -303,7 +303,8 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
     const diagnostics = auditLeagueRoster(loaded.snapshot);
     issues = humanizeLeagueAuditIssues(loaded.snapshot, diagnostics);
     result = issues.length ? 'dirty' : 'clean';
-    replaceFullLeagueFindings(input.db, input.guildId, loaded.snapshot, diagnostics, issues, input.now);
+    replaceFullLeagueFindings(input.db, input.guildId, loaded.snapshot, diagnostics,
+      diagnostics.map((diagnostic) => humanizeLeagueAuditIssues(loaded.snapshot, [diagnostic])[0]!), input.now);
     dismissResolvedRepairReviews(input.db, input.guildId, issues);
   } catch (error) {
     console.error('League roster audit could not read every source:', error);

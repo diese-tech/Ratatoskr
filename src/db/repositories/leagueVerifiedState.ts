@@ -73,7 +73,8 @@ export function listLeagueFindings(
     db
       .prepare('SELECT resource_key,findings_json FROM league_findings WHERE guild_id=? ORDER BY resource_key')
       .all(guildId) as Array<{ resource_key: string; findings_json: string }>
-  ).map((r) => ({ resourceKey: r.resource_key, findings: JSON.parse(r.findings_json) as string[] }));
+  ).map((r) => ({ resourceKey: r.resource_key, findings: (JSON.parse(r.findings_json) as unknown[]).map((finding) =>
+    typeof finding === 'string' ? finding : 'Stored roster finding could not be read. A fresh full audit is required before resolving it.') }));
 }
 export function replaceFullLeagueFindings(
   db: Database.Database,
@@ -98,7 +99,7 @@ export function replaceFullLeagueFindings(
       const key = id ? `member:${id}` : `sheet:${diagnostic}`;
       groups.set(key, [...(groups.get(key) ?? []), humanized[index]!]);
     });
-    for (const [key, findings] of groups) replaceLeagueFindings(db, guildId, key, findings, now);
+    for (const [key, findings] of groups) replaceLeagueFindings(db, guildId, key, [...new Set(findings)], now);
     for (const id of ids) cacheVerifiedLeagueMember(db, guildId, id, snapshot, now, 'full');
   })();
 }

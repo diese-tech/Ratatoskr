@@ -72,6 +72,16 @@ export function createLeagueSheetsReadSchedule(
   };
 }
 
+const leagueSheetsReadSchedules = new Map<string, ReturnType<typeof createLeagueSheetsReadSchedule>>();
+export function getLeagueSheetsReadSchedule(accountId: string, clock?: Parameters<typeof createLeagueSheetsReadSchedule>[0]) {
+  let schedule = leagueSheetsReadSchedules.get(accountId);
+  if (!schedule) {
+    schedule = createLeagueSheetsReadSchedule(clock);
+    leagueSheetsReadSchedules.set(accountId, schedule);
+  }
+  return schedule;
+}
+
 export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv = process.env): {
   gateway: LeagueSheetsGateway;
   config: LeagueSheetsConfig;
@@ -83,7 +93,7 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
   const serviceAccount = ServiceAccountSchema.parse(credentials);
   const auth = new GoogleAuth({ credentials: serviceAccount, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
 
-  const scheduleRead = createLeagueSheetsReadSchedule();
+  const scheduleRead = getLeagueSheetsReadSchedule(serviceAccount.client_email);
 
   const request = async <T>(options: { url: string; method?: 'GET' | 'POST'; data?: unknown }): Promise<T> => {
     const client = await auth.getClient();

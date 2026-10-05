@@ -424,3 +424,23 @@ test('historical cleanup selects only bot-owned standalone alerts with an exact 
   assert.equal(isResolvedLeagueAlertMessage({ ...message, content: 'League Ops Status\nReference: YSL-REC-resolved' }, 'rat', references), false);
   assert.equal(isResolvedLeagueAlertMessage(message, undefined, references), false);
 });
+
+test('duplicate malformed roster diagnostics remain readable in the persistent panel', async () => {
+  const f = setup();
+  const cards = new Panel();
+  try {
+    f.snapshot.rosters.push({ ...f.snapshot.rosters[0]!, sheetRow: 100 });
+    f.snapshot.names = f.snapshot.names.filter((row) => row.discordId !== 'one');
+    await runLeagueAudit({ ...f.input, trigger: 'scheduled', members: { getMembers: async () => f.snapshot.discordMembers },
+      sheets: { load: async () => ({ snapshot: f.snapshot, sources: {} as never }) }, cards });
+    const findings = listLeagueFindings(f.db, 'g').flatMap((entry) => entry.findings);
+    assert.ok(findings.length > 0);
+    assert.ok(findings.every((finding) => typeof finding === 'string'));
+    assert.match(cards.sent[0]!.card.description, /Attention required/);
+    assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review issues');
+    f.db.prepare("UPDATE league_findings SET findings_json='[null]' WHERE guild_id='g'").run();
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
+    assert.match(cards.sent[0]!.card.description, /Attention required/);
+    assert.ok(listLeagueFindings(f.db, 'g').every((entry) => entry.findings.every((finding) => typeof finding === 'string')));
+  } finally { f.worker.stop(); f.db.close(); }
+});
