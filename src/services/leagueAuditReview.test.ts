@@ -71,6 +71,17 @@ test('review issues opens one human-readable finding at a time with private pagi
   ]);
 });
 
+test('a one-issue audit omits duplicate navigation controls', () => {
+  const view = buildLeagueAuditReviewView([
+    'imso cheeky is in Current Rosters but is no longer in the Discord server. Confirm whether this is a departure before changing the roster.',
+  ], 0, 'YSL-AUD-ONE');
+
+  assert.deepEqual(view.actions, [
+    { id: 'league-audit:resolve:YSL-AUD-ONE:0', label: 'Resolve this issue', disabled: false },
+  ]);
+  assert.equal(new Set(view.actions.map((action) => action.id)).size, view.actions.length);
+});
+
 test('name resolution offers one Discord-authoritative action without exposing sheet-model choices', () => {
   const view = buildLeagueAuditResolutionView(
     'Little Monsters VD\nDiscord name now: “DilliD (Soka)”\nCurrent Rosters sheet: “DilliD (Soka)”\nPlayer Name History sheet: “DilliD”\nRequired: update the managed roster sheets to the Discord name. Previous names stay in history.',
@@ -115,11 +126,25 @@ test('an absent free agent can be routed to a confirmed inactive-player repair',
   });
 });
 
+test('an absent rostered player explains both departure and self-drop paths', () => {
+  const view = buildLeagueAuditResolutionView(
+    'imso cheeky is in Current Rosters but is no longer in the Discord server. Confirm whether this is a departure before changing the roster.',
+    0,
+    'YSL-AUD-1234',
+  );
+
+  assert.match(view.description, /\/transaction departure/);
+  assert.match(view.description, /\/transaction self-drop/);
+  assert.match(view.description, /left the server/i);
+});
+
 test('manual-only findings explain that Discord cannot safely guess a correction', () => {
   const view = buildLeagueAuditReviewView([
     'Vanaheim has more than one division role in League Teams. Use one division role for every Vanaheim team.',
   ], 0, 'YSL-AUD-1234');
 
   assert.match(view.description, /manual sheet review/i);
-  assert.equal(view.actions[1]?.disabled, true);
+  assert.deepEqual(view.actions, [
+    { id: 'league-audit:resolve:YSL-AUD-1234:0', label: 'Resolve this issue', disabled: true },
+  ]);
 });

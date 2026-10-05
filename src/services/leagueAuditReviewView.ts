@@ -38,14 +38,15 @@ export function buildLeagueAuditReviewView(findings: string[], requestedPage: nu
   const page = Math.max(0, Math.min(requestedPage, Math.max(0, findings.length - 1)));
   const finding = findings[page] ?? 'This audit no longer has any open issues.';
   const resolvable = canResolveInDiscord(finding);
+  const resolveAction = { id: `league-audit:resolve:${reference}:${page}`, label: 'Resolve this issue', disabled: !resolvable };
   return {
     title: `League Roster Audit — ${categoryFor(finding)}`,
     description: `${finding}${resolvable ? '' : '\n\nThis needs a manual sheet review because Ratatoskr cannot safely choose the correct value.'}`,
     footer: `Issue ${findings.length ? page + 1 : 0} of ${findings.length}`,
-    actions: [
+    actions: findings.length <= 1 ? [resolveAction] : [
       { id: `league-audit:page:${reference}:${Math.max(0, page - 1)}`, label: 'Previous', disabled: page === 0 },
-      { id: `league-audit:resolve:${reference}:${page}`, label: 'Resolve this issue', disabled: !resolvable },
-      { id: `league-audit:page:${reference}:${Math.min(Math.max(0, findings.length - 1), page + 1)}`, label: 'Next', disabled: page >= findings.length - 1 },
+      resolveAction,
+      { id: `league-audit:page:${reference}:${Math.min(findings.length - 1, page + 1)}`, label: 'Next', disabled: page >= findings.length - 1 },
     ],
   };
 }
@@ -101,8 +102,8 @@ export function buildLeagueAuditResolutionView(
     };
   }
   return {
-    title: 'Resolve departure',
-    description: `${finding}\n\nRun \`/transaction departure\` and select this player. That existing preview lets you choose an optional replacement before anything changes.`,
+    title: 'Resolve player who left the server',
+    description: `${finding}\n\nChoose the roster move that actually happened:\n- Run \`/transaction departure\` if the player left the league.\n- Run \`/transaction self-drop\` if the player self-dropped.\n\nBoth commands can select a rostered player who already left the server and let you choose an optional replacement before anything changes.`,
     footer: `Issue ${page + 1}`,
     actions: [back],
   };

@@ -293,6 +293,19 @@ test('self-drop records the suspension without free agency and can fill the vaca
   ]);
 });
 
+test('self-drop records an absent player suspension without attempting a Discord role change', () => {
+  const current = snapshot();
+  current.discordMembers = current.discordMembers.filter((member) => member.discordId !== 'two');
+  const plan = buildSelfDropPlan(current, 'two');
+  assert.equal(plan.kind, 'self-drop');
+  assert.equal(plan.rosters.some((row) => row.discordId === 'two'), false);
+  assert.equal(plan.nameUpdates.find((row) => row.discordId === 'two')?.leagueStatus, SELF_DROP_LEAGUE_STATUS);
+  assert.deepEqual(plan.discordRoleChanges, []);
+  assert.deepEqual(plan.publicChanges, [
+    { division: 'Vanaheim', area: 'team', group: 'The Sewer', from: 'Two', to: '' },
+  ]);
+});
+
 test('departure removes an absent player without creating a free agent or Discord role mutation', () => {
   const current = snapshot();
   current.discordMembers = current.discordMembers.filter((member) => member.discordId !== 'two');

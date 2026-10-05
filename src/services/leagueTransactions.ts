@@ -158,10 +158,10 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
     const currentNames = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
     if (currentNames.length !== 1) throw new Error(`Discord member ${discordId} must have exactly one current name record.`);
     if (!member) {
-      const isDepartedPlayer = plan.kind === 'departure'
+      const isAbsentExitPlayer = (plan.kind === 'departure' || plan.kind === 'self-drop')
         && discordId === plan.playerIds[0]
         && !plan.discordRoleChanges.some((change) => change.discordId === discordId);
-      if (isDepartedPlayer && rosterRows.length === 1) {
+      if (isAbsentExitPlayer && rosterRows.length === 1) {
         continue;
       }
       throw new Error(`Discord member ${discordId} could not be loaded.`);
@@ -276,6 +276,9 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
     };
   }
   if (plan.kind === 'self-drop') {
+    const outgoingPlayer = plan.discordRoleChanges.some((change) => change.discordId === plan.playerIds[0])
+      ? `<@${plan.playerIds[0]}>`
+      : `**${plan.players[0]}**`;
     const replacement = plan.playerIds[1]
       ? ` ${mention(team.teamRoleId)} picks up <@${plan.playerIds[1]}> in their place.`
       : '';
@@ -283,7 +286,7 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
       content: mention(team.teamRoleId),
       allowedRoleIds: [team.teamRoleId],
       title: 'Word Travels the Branches',
-      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n<@${plan.playerIds[0]}> self-drops from ${mention(team.teamRoleId)}.${replacement}`,
+      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${outgoingPlayer} self-drops from ${mention(team.teamRoleId)}.${replacement}`,
       footer: `Posted by ${actorName}`,
     };
   }
@@ -338,7 +341,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     const issues = humanizeLeagueAuditIssues(
       loaded.snapshot,
       auditLeagueRoster(loaded.snapshot,
-        plan.kind === 'departure'
+        plan.kind === 'departure' || plan.kind === 'self-drop'
           ? { allowAbsentRosterMemberId: plan.playerIds[0] }
           : plan.kind === 'rename'
             ? { allowDiscordNameRepairMemberId: plan.playerIds[0] }
@@ -367,14 +370,17 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       throw new LeagueTransactionPreviewChangedError(plan);
     }
     assertDiscordPreconditions(loaded.snapshot, plan);
-    if (plan.kind === 'departure') await input.discord.validateMemberAbsent(plan.playerIds[0]!);
+    const outgoingPlayerIsAbsent = (plan.kind === 'departure' || plan.kind === 'self-drop')
+      && !plan.discordRoleChanges.some((change) => change.discordId === plan.playerIds[0]);
+    if (outgoingPlayerIsAbsent) await input.discord.validateMemberAbsent(plan.playerIds[0]!);
     let prepared: PreparedLeagueSheetMutation;
     try {
       prepared = input.sheets.prepare(loaded, plan);
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
-    const roleValidationPlayerIds = plan.kind === 'departure' ? plan.playerIds.slice(1) : plan.playerIds;
+    const roleValidationPlayerIds = plan.playerIds.filter((discordId) =>
+      plan.discordRoleChanges.some((change) => change.discordId === discordId));
     const beforeByPlayer = new Map(roleValidationPlayerIds.map((discordId) => [
       discordId,
       expectedRoleState(loaded.snapshot, loaded.snapshot.rosters, loaded.snapshot.names, discordId),

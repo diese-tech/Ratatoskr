@@ -257,6 +257,14 @@ test('combined exit announcements use one team notice and the locked transaction
     'Ratatoskr carries word from <@&team-a>.\n\n**One** leaves <@&team-a> and the YSL server. <@&team-a> picks up <@free> in their place.');
 });
 
+test('absent self-drop announcement uses the stored league name instead of a dead Discord mention', () => {
+  const current = snapshot();
+  current.discordMembers = current.discordMembers.filter((member) => member.discordId !== 'one');
+  const selfDrop = buildSelfDropPlan(current, 'one');
+  assert.equal(buildLeagueAnnouncement(selfDrop, 'Admin')?.description,
+    'Ratatoskr carries word from <@&team-a>.\n\n**One** self-drops from <@&team-a>.');
+});
+
 test('departure resolves only its selected absent roster member and skips Discord role mutation', async () => {
   const f = fixture();
   f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
@@ -302,6 +310,51 @@ test('self-drop with replacement performs both live Discord role changes under o
     'sheet-preflight', 'sheet-targets', 'discord-preflight:one', 'discord-preflight:free',
     'discord:one', 'discord:free', 'sheet-apply', 'announce', 'history',
   ]);
+  f.db.close();
+});
+
+test('self-drop processes a rostered player who already left Discord without role mutation', async () => {
+  const f = fixture();
+  f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
+  const result = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildSelfDropPlan(current, 'one'),
+  });
+  assert.equal(getLeagueTransaction(f.db, result.reference)?.kind, 'self-drop');
+  assert.deepEqual(f.events, ['sheet-preflight', 'discord-absence:one', 'sheet-targets', 'sheet-apply', 'announce', 'history']);
+  f.db.close();
+});
+
+test('absent self-drop with replacement validates absence and mutates only the replacement', async () => {
+  const f = fixture();
+  f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
+  await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildSelfDropPlan(current, 'one', 'free'),
+  });
+  assert.deepEqual(f.events, [
+    'sheet-preflight', 'discord-absence:one', 'sheet-targets', 'discord-preflight:free',
+    'discord:free', 'sheet-apply', 'announce', 'history',
+  ]);
+  f.db.close();
+});
+
+test('absent self-drop fails closed if the player returned after the roster snapshot loaded', async () => {
+  const f = fixture();
+  f.current.discordMembers = f.current.discordMembers.filter((member) => member.discordId !== 'one');
+  f.discord.validateMemberAbsent = async () => {
+    f.events.push('discord-absence:one');
+    throw new LeagueMutationValidationError('That player is back in the YSL server.');
+  };
+  await assert.rejects(() => executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: (current) => buildSelfDropPlan(current, 'one'),
+  }), /back in the YSL server/i);
+  assert.deepEqual(f.events, ['sheet-preflight', 'discord-absence:one']);
+  assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
 });
 

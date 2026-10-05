@@ -52,7 +52,11 @@ export const transactionCommand = new SlashCommandBuilder()
   .addSubcommand((subcommand) => subcommand
     .setName('self-drop')
     .setDescription('Record a self-drop and optional same-division replacement.')
-    .addUserOption((option) => option.setName('player').setDescription('Rostered player who self-dropped.').setRequired(true))
+    .addStringOption((option) => option
+      .setName('player')
+      .setDescription('Rostered player who self-dropped, including players who left Discord.')
+      .setAutocomplete(true)
+      .setRequired(true))
     .addUserOption((option) => option.setName('replacement').setDescription('Optional same-division free agent replacing them.'))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
@@ -90,14 +94,15 @@ function planBuilder(interaction: ChatInputCommandInteraction): (snapshot: Leagu
     const replacement = interaction.options.getUser('replacement')?.id;
     return (snapshot) => buildDeparturePlan(snapshot, player, replacement);
   }
+  if (subcommand === 'self-drop') {
+    const player = interaction.options.getString('player', true);
+    const replacement = interaction.options.getUser('replacement')?.id;
+    return (snapshot) => buildSelfDropPlan(snapshot, player, replacement);
+  }
   const player = interaction.options.getUser('player', true).id;
   if (subcommand === 'drop') {
     const replacement = interaction.options.getUser('replacement')?.id;
     return (snapshot) => buildDropPlan(snapshot, player, replacement);
-  }
-  if (subcommand === 'self-drop') {
-    const replacement = interaction.options.getUser('replacement')?.id;
-    return (snapshot) => buildSelfDropPlan(snapshot, player, replacement);
   }
   if (subcommand === 'pickup') {
     const teamRole = interaction.options.getRole('team', true).id;
@@ -118,8 +123,11 @@ function intentKey(interaction: ChatInputCommandInteraction): string {
   if (subcommand === 'departure') {
     return JSON.stringify([subcommand, interaction.options.getString('player', true), interaction.options.getUser('replacement')?.id ?? null]);
   }
+  if (subcommand === 'self-drop') {
+    return JSON.stringify([subcommand, interaction.options.getString('player', true), interaction.options.getUser('replacement')?.id ?? null]);
+  }
   const player = interaction.options.getUser('player', true).id;
-  if (subcommand === 'drop' || subcommand === 'self-drop') {
+  if (subcommand === 'drop') {
     return JSON.stringify([subcommand, player, interaction.options.getUser('replacement')?.id ?? null]);
   }
   if (subcommand === 'pickup') return JSON.stringify([subcommand, player, interaction.options.getRole('team', true).id]);
@@ -149,7 +157,7 @@ function preview(plan: LeagueMutationPlan): string {
 
 const divisionOrder = new Map([['Vanaheim', 0], ['Alfheim', 1], ['Svartalfheim', 2]]);
 
-export function buildDepartureAutocompleteChoices(
+export function buildRosterPlayerAutocompleteChoices(
   rosters: Awaited<ReturnType<LeagueSheetsService['listRosterPlayers']>>,
   focused: string,
 ): { name: string; value: string }[] {
@@ -167,7 +175,7 @@ export function buildDepartureAutocompleteChoices(
 }
 
 export async function handleTransactionAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
-  if (interaction.options.getSubcommand(false) !== 'departure'
+  if (!['departure', 'self-drop'].includes(interaction.options.getSubcommand(false) ?? '')
     || interaction.options.getFocused(true).name !== 'player'
     || !interaction.guild) {
     await interaction.respond([]);
@@ -182,13 +190,13 @@ export async function handleTransactionAutocomplete(interaction: AutocompleteInt
     }
     const { gateway, config } = createGoogleLeagueSheetsGateway();
     const sheets = new LeagueSheetsService(gateway, config);
-    const choices = buildDepartureAutocompleteChoices(
+    const choices = buildRosterPlayerAutocompleteChoices(
       await sheets.listRosterPlayers(),
       interaction.options.getFocused(),
     );
     await interaction.respond(choices);
   } catch (error) {
-    console.error('Transaction departure autocomplete failed:', error);
+    console.error('Transaction roster-player autocomplete failed:', error);
     await interaction.respond([]);
   }
 }

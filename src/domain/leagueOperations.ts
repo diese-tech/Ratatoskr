@@ -456,7 +456,8 @@ function buildExitPlan(
     });
   }
 
-  const discordRoleChanges = kind === 'departure' ? [] : [{
+  const outgoingMemberPresent = snapshot.discordMembers.some((member) => member.discordId === discordId);
+  const discordRoleChanges = kind === 'departure' || (kind === 'self-drop' && !outgoingMemberPresent) ? [] : [{
     discordId,
     remove: [team.teamRoleId],
     add: kind === 'drop' ? [snapshot.freeAgentRoleId] : [],
