@@ -41,3 +41,21 @@ test('migration 30 preserves v29 preview approvals and authoritative audit card 
     db.close();
   }
 });
+
+test('migration 32 preserves interrupted repairs and prior alert cleanup without assuming resolution', () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec('CREATE TABLE schema_migrations(id INTEGER PRIMARY KEY,name TEXT NOT NULL)');
+    for (const migration of migrations.filter((m) => m.id < 32)) {
+      db.exec(migration.sql);
+      db.prepare('INSERT INTO schema_migrations VALUES(?,?)').run(migration.id, migration.name);
+    }
+    db.prepare("INSERT INTO league_audit_repairs(reference,guild_id,audit_reference,actor_user_id,finding,action,status) VALUES('old','g','audit','admin','Old drift','use-discord-name','reconciliation_required')").run();
+    db.prepare("INSERT INTO league_alert_cleanup VALUES('g','done','2026-10-05T20:00:00Z')").run();
+    runMigrations(db);
+    runMigrations(db);
+    assert.equal((db.prepare("SELECT status FROM league_audit_repairs WHERE reference='old'").get() as { status: string }).status, 'reconciliation_required');
+    assert.equal((db.prepare('SELECT count(*) n FROM league_repair_resolutions').get() as { n: number }).n, 0);
+    assert.equal((db.prepare('SELECT count(*) n FROM league_alert_cleanup').get() as { n: number }).n, 1);
+  } finally { db.close(); }
+});

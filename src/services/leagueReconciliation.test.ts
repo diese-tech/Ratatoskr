@@ -444,3 +444,119 @@ test('duplicate malformed roster diagnostics remain readable in the persistent p
     assert.ok(listLeagueFindings(f.db, 'g').every((entry) => entry.findings.every((finding) => typeof finding === 'string')));
   } finally { f.worker.stop(); f.db.close(); }
 });
+
+test('partial operations expose recovery controls and prevent legacy alert cleanup until explicitly reconciled', async () => {
+  const { createLeagueAuditRepair, markLeagueAuditRepairReconciliationRequired } = await import('../db/repositories/leagueAuditRepairs.js');
+  const { previewLeagueRepairRecovery, reconcileLeagueRepairRecord } = await import('./leagueRepairRecovery.js');
+  const f = setup();
+  const cards = new Panel();
+  const cleanups: string[] = [];
+  let failCleanup = true;
+  const port: LeagueAuditCardPort = Object.assign(cards, { deleteLegacyResolvedAlerts: async (at: string) => {
+    if (failCleanup) throw Error('cleanup unavailable');
+    cleanups.push(at);
+  } });
+  const input = { ...f.input, members: { getMembers: async () => f.snapshot.discordMembers },
+    sheets: { load: async () => ({ snapshot: f.snapshot, sources: {} as never }) }, cards: port };
+  try {
+    createLeagueAuditRepair(f.db, { reference: 'old-repair', guildId: 'g', actorUserId: 'old-admin', auditReference: 'old', finding: 'Old finding', action: 'use-discord-name' });
+    markLeagueAuditRepairReconciliationRequired(f.db, 'old-repair', 'Interrupted');
+    await runLeagueAudit({ ...input, trigger: 'scheduled' });
+    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Review operations'));
+    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Recheck roster'));
+    assert.deepEqual(cleanups, []);
+    const preview = await previewLeagueRepairRecovery(input, 'old-repair');
+    await reconcileLeagueRepairRecord({ ...input, reference: 'old-repair', actorUserId: 'admin', expectedFingerprint: preview.fingerprint });
+    await assert.rejects(refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now }), /cleanup unavailable/);
+    assert.match(cards.sent[0]!.card.description, /Status: Healthy/);
+    failCleanup = false;
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
+    assert.deepEqual(cleanups, [getLeagueAuditState(f.db, 'g')!.lastFullAt]);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('heartbeat retry after legacy alert cleanup failure edits its replacement without posting another panel', async () => {
+  const f = setup();
+  const cards = new Panel();
+  let fail = false;
+  const port: LeagueAuditCardPort = Object.assign(cards, { deleteLegacyResolvedAlerts: async () => { if (fail) throw Error('cleanup failed'); } });
+  try {
+    await runLeagueAudit({ ...f.input, trigger: 'scheduled', members: { getMembers: async () => f.snapshot.discordMembers },
+      sheets: { load: async () => ({ snapshot: f.snapshot, sources: {} as never }) }, cards: port });
+    f.db.prepare("DELETE FROM league_alert_cleanup WHERE guild_id='g'").run();
+    fail = true;
+    const queuedAt = new Date(Date.parse(getLeagueAuditState(f.db, 'g')!.lastRepostAt!) + 3_600_000).toISOString();
+    await assert.rejects(refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now: new Date(queuedAt), repost: true, repostQueuedAt: queuedAt }), /cleanup failed/);
+    assert.equal(cards.sent.length, 2);
+    fail = false;
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now: new Date(Date.parse(queuedAt) + 60_000), repost: true, repostQueuedAt: queuedAt });
+    assert.equal(cards.sent.length, 2);
+    assert.equal(cards.events.at(-1), 'edit:m2');
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('targeted convergence after a dirty full audit cannot authorize legacy cleanup', async () => {
+  const f = setup();
+  const cards = new Panel();
+  const cleaned: string[] = [];
+  const port: LeagueAuditCardPort = Object.assign(cards, { deleteLegacyResolvedAlerts: async (at: string) => { cleaned.push(at); } });
+  const input = { ...f.input, members: { getMembers: async () => f.snapshot.discordMembers },
+    sheets: { load: async () => ({ snapshot: f.snapshot, sources: {} as never }) }, cards: port };
+  try {
+    const original = f.snapshot.discordMembers[0]!.displayName;
+    f.snapshot.discordMembers[0]!.displayName = 'Dirty full audit';
+    await runLeagueAudit({ ...input, trigger: 'scheduled' });
+    assert.equal(getLeagueAuditState(f.db, 'g')!.lastCleanFullAt, null);
+    f.snapshot.discordMembers[0]!.displayName = original;
+    await checkLeagueMember({ ...f.input, discordId: 'one', now: new Date(now.getTime() + 60_000) });
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now: new Date(now.getTime() + 60_000) });
+    assert.match(cards.sent[0]!.card.description, /Status: Healthy/);
+    assert.deepEqual(cleaned, []);
+    const cleanAt = new Date(now.getTime() + 120_000);
+    await runLeagueAudit({ ...input, trigger: 'scheduled', now: cleanAt });
+    assert.equal(getLeagueAuditState(f.db, 'g')!.lastCleanFullAt, cleanAt.toISOString());
+    assert.equal(getLeagueAuditState(f.db, 'g')!.lastFullAt, cleanAt.toISOString());
+    assert.deepEqual(cleaned, [cleanAt.toISOString()]);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('transaction-only interruptions do not advertise an audit-repair recovery button', async () => {
+  const { createLeagueTransaction, markLeagueTransactionReconciliationRequired } = await import('../db/repositories/leagueOperations.js');
+  const f = setup();
+  const cards = new Panel();
+  try {
+    createLeagueTransaction(f.db, { reference: 'old-transaction', guildId: 'g', kind: 'trade', actorUserId: 'admin', payload: {} });
+    markLeagueTransactionReconciliationRequired(f.db, 'old-transaction', 'Interrupted transaction');
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
+    assert.ok(!cards.sent[0]!.card.actions?.some((action) => action.label === 'Review operations'));
+    assert.doesNotMatch(cards.sent[0]!.card.description, /Select Review operations/);
+    assert.match(cards.sent[0]!.card.description, /transaction notice\/history for: old-transaction/);
+    assert.match(cards.sent[0]!.card.description, /Do not replay the transaction/);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('legacy cleanup advances its reusable watermark only after successful deletion', async () => {
+  const { getLegacyLeagueAlertCleanupCutoff } = await import('../db/repositories/leagueOperations.js');
+  const f = setup();
+  const cards = new Panel();
+  const calls: Array<[string, string | undefined]> = [];
+  let fail = false;
+  const port: LeagueAuditCardPort = Object.assign(cards, { deleteLegacyResolvedAlerts: async (at: string, previous?: string) => {
+    calls.push([at, previous]);
+    if (fail) throw Error('deletion failed');
+  } });
+  const input = { ...f.input, members: { getMembers: async () => f.snapshot.discordMembers }, sheets: { load: async () => ({ snapshot: f.snapshot, sources: {} as never }) }, cards: port };
+  try {
+    await runLeagueAudit({ ...input, trigger: 'scheduled' });
+    const previous = getLegacyLeagueAlertCleanupCutoff(f.db, 'g')!;
+    assert.deepEqual(calls, [[previous, undefined]]);
+    fail = true;
+    await runLeagueAudit({ ...input, trigger: 'scheduled', now: new Date(now.getTime() + 1000) }).catch(() => {});
+    assert.equal(getLegacyLeagueAlertCleanupCutoff(f.db, 'g'), previous);
+    assert.equal(calls.at(-1)![1], previous);
+    fail = false;
+    await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
+    assert.notEqual(getLegacyLeagueAlertCleanupCutoff(f.db, 'g'), previous);
+  } finally { f.worker.stop(); f.db.close(); }
+});

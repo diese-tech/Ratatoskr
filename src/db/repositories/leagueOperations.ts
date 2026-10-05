@@ -285,3 +285,14 @@ export function listLeagueMutationProblems(db: Database.Database, guildId: strin
 export function hasPendingLeagueDeliveries(db: Database.Database, guildId: string): boolean {
   return Boolean(db.prepare("SELECT 1 FROM league_transactions WHERE guild_id=? AND status='announcement_pending' LIMIT 1").get(guildId));
 }
+
+export function wasLeagueAlertCleaned(db: Database.Database, guildId: string, reference: string): boolean {
+  return Boolean(db.prepare('SELECT 1 FROM league_alert_cleanup WHERE guild_id=? AND reference=?').get(guildId, reference));
+}
+
+export function getLegacyLeagueAlertCleanupCutoff(db: Database.Database, guildId: string): string | undefined {
+  const prefix = 'legacy-alerts-before:';
+  const row = db.prepare('SELECT MAX(reference) reference FROM league_alert_cleanup WHERE guild_id=? AND reference LIKE ?')
+    .get(guildId, `${prefix}%`) as { reference: string | null };
+  return row.reference?.slice(prefix.length);
+}

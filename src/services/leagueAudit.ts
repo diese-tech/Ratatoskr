@@ -12,6 +12,7 @@ import {
   settleLeagueAuditCard,
   type PersistedLeagueOpsCard,
   noteLeagueCheck,
+  noteCleanFullLeagueAudit,
   noteLeaguePanelRepost,
   recordLeaguePanelEdit,
 } from '../db/repositories/leagueAudits.js';
@@ -22,15 +23,19 @@ import {
   listLeagueMutationProblems,
   listResolvedLeagueAlertReferences,
   markLeagueAlertCleaned,
+  getLegacyLeagueAlertCleanupCutoff,
+  wasLeagueAlertCleaned,
 } from '../db/repositories/leagueOperations.js';
 import { LeagueSheetInputError, type LoadedLeagueSnapshot } from './leagueSheets.js';
 import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
+import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 
 export type LeagueAuditCard = PersistedLeagueOpsCard;
 
 export interface LeagueAuditCardPort {
   deleteResolvedAlerts?(references: string[]): Promise<void>;
+  deleteLegacyResolvedAlerts?(verifiedBefore: string, previouslyScannedBefore?: string): Promise<void>;
   findByReference(reference: string): Promise<string | undefined>;
   send(card: LeagueAuditCard, reference: string): Promise<string>;
   delete(messageId: string): Promise<void>;
@@ -213,7 +218,7 @@ export async function recoverPendingLeagueAudit(input: Pick<Input, 'db' | 'guild
 }
 
 export async function refreshLeagueOpsPanel(
-  input: Pick<Input, 'db' | 'guildId' | 'cards'> & { now: Date; repost?: boolean },
+  input: Pick<Input, 'db' | 'guildId' | 'cards'> & { now: Date; repost?: boolean; repostQueuedAt?: string },
 ): Promise<string | undefined> {
   const recovered = await recoverPendingLeagueAudit(input);
   // Recovery already completed the pending replacement. Refresh its content,
@@ -227,8 +232,19 @@ export async function refreshLeagueOpsPanel(
       await input.cards.deleteResolvedAlerts(resolvedAlerts);
       for (const reference of resolvedAlerts) markLeagueAlertCleaned(input.db, input.guildId, reference);
     }
+    const auditState = getLeagueAuditState(input.db, input.guildId);
+    const verifiedAt = auditState?.lastCleanFullAt === auditState?.lastFullAt ? auditState?.lastCleanFullAt : undefined;
+    if (result === 'clean' && verifiedAt && input.cards.deleteLegacyResolvedAlerts) {
+      const checkpoint = `legacy-alerts-before:${verifiedAt}`;
+      if (!wasLeagueAlertCleaned(input.db, input.guildId, checkpoint)) {
+        await input.cards.deleteLegacyResolvedAlerts(verifiedAt, getLegacyLeagueAlertCleanupCutoff(input.db, input.guildId));
+        markLeagueAlertCleaned(input.db, input.guildId, checkpoint);
+      }
+    }
   };
   const prior = getLeagueAuditState(input.db, input.guildId);
+  const alreadyReposted = input.repostQueuedAt && prior?.lastRepostAt
+    && Date.parse(prior.lastRepostAt) >= Date.parse(input.repostQueuedAt);
   const resources = listLeagueFindings(input.db, input.guildId);
   const readErrors = resources.filter((entry) => entry.resourceKey === 'connection').flatMap((entry) => entry.findings);
   const issues = [
@@ -237,6 +253,9 @@ export async function refreshLeagueOpsPanel(
   const tickets = listOpenLeagueReconciliationTickets(input.db, input.guildId);
   for (const ticket of tickets) if (!issues.includes(ticket.summary)) issues.push(ticket.summary);
   const mutationProblems = listLeagueMutationProblems(input.db, input.guildId);
+  const recoverableRepairs = listIncompleteLeagueAuditRepairs(input.db)
+    .filter((repair) => repair.guildId === input.guildId && repair.status === 'reconciliation_required');
+  const repairReferences = new Set(recoverableRepairs.map((repair) => repair.reference));
   const jobs = listActionableLeagueJobs(input.db, input.guildId).filter(
     (job) => !['panel', 'heartbeat'].includes(job.type),
   );
@@ -250,6 +269,8 @@ export async function refreshLeagueOpsPanel(
     card.description =
       'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
   if (!issues.length) card.actions = undefined;
+  if (recoverableRepairs.length) card.actions = [...(card.actions ?? []), { id: 'league-recovery:list', label: 'Review operations' }];
+  card.actions = [...(card.actions ?? []), { id: 'league-recovery:recheck', label: 'Recheck roster' }];
   if (jobs.length)
     card.description +=
       `\n\nOperations to review: ${jobs.length}\n` +
@@ -261,11 +282,16 @@ export async function refreshLeagueOpsPanel(
         )
         .join('\n');
   const additionalProblems = mutationProblems.filter((reference) => !jobs.some((job) => job.reference === reference));
-  if (additionalProblems.length)
-    card.description += `\n\nPossibly partial operations: ${additionalProblems.length}\nReview Discord and managed sheets for: ${additionalProblems.slice(-5).join(', ')}`;
+  if (additionalProblems.length) {
+    card.description += `\n\nPossibly partial operations: ${additionalProblems.length}`;
+    const repairs = additionalProblems.filter((reference) => repairReferences.has(reference));
+    const transactions = additionalProblems.filter((reference) => !repairReferences.has(reference));
+    if (repairs.length) card.description += `\nSelect Review operations to inspect and reconcile repairs: ${repairs.slice(-5).join(', ')}`;
+    if (transactions.length) card.description += `\nInspect Discord, managed sheets and transaction notice/history for: ${transactions.slice(-5).join(', ')}. Do not replay the transaction.`;
+  }
   const times = getLeagueAuditState(input.db, input.guildId);
   card.description += `\n\nLast targeted check: ${times?.lastTargetedAt ?? 'Pending'}\nLast full audit: ${times?.lastFullAt ?? 'Pending'}`;
-  if (prior?.currentMessageId && (!input.repost || recovered) && input.cards.edit) {
+  if (prior?.currentMessageId && (!input.repost || recovered || alreadyReposted) && input.cards.edit) {
     await input.cards.edit(prior.currentMessageId, card, reference);
     recordLeaguePanelEdit(input.db, {
       guildId: input.guildId,
@@ -352,6 +378,7 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
     });
   }
   if (result !== 'error') noteLeagueCheck(input.db, input.guildId, 'full', input.now);
+  if (result === 'clean') noteCleanFullLeagueAudit(input.db, input.guildId, input.now);
   return { status: result, issues };
 }
 

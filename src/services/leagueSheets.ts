@@ -18,9 +18,12 @@ type CellRows = Cell[][];
 export type SheetValueUpdate = { range: string; values: CellRows };
 export type SelfDropPresentation = { sheetId: number; legend: CellRows; ruleExists: boolean };
 
+// Reuse is opt-in for presentation only. Proof reads always bypass it.
+export type LeagueSheetsReadOptions = { purpose: 'presentation' | 'fresh' };
+
 export interface LeagueSheetsGateway {
-  getValues(spreadsheetId: string, range: string): Promise<CellRows>;
-  getValuesBatch?(spreadsheetId: string, ranges: string[]): Promise<CellRows[]>;
+  getValues(spreadsheetId: string, range: string, options?: LeagueSheetsReadOptions): Promise<CellRows>;
+  getValuesBatch?(spreadsheetId: string, ranges: string[], options?: LeagueSheetsReadOptions): Promise<CellRows[]>;
   batchUpdate(spreadsheetId: string, updates: SheetValueUpdate[], valueInputOption?: 'RAW' | 'USER_ENTERED'): Promise<void>;
   append(spreadsheetId: string, range: string, values: CellRows, valueInputOption?: 'RAW' | 'USER_ENTERED'): Promise<void>;
   getSelfDropPresentation(spreadsheetId: string): Promise<SelfDropPresentation>;
@@ -54,7 +57,21 @@ export function createLeagueSheetsReadSchedule(
 ) {
   let tail: Promise<unknown> = Promise.resolve();
   let nextReadAt = 0;
-  return <T>(read: () => Promise<T>): Promise<T> => {
+  type ReadEntry = { workbook: string; pending: Promise<unknown>; expiresAt: number };
+  const reusable = new Map<string, ReadEntry>();
+  const ttlMs = 3000;
+  const maxEntries = 128;
+  const schedule = <T>(read: () => Promise<T>, reuse?: {
+    workbook: string; key: string; purpose: 'presentation' | 'fresh';
+  }): Promise<T> => {
+    const key = reuse ? JSON.stringify([reuse.workbook, reuse.key]) : '';
+    if (reuse?.purpose === 'presentation') {
+      for (const [candidate, entry] of reusable)
+        if (entry.expiresAt <= clock.now()) reusable.delete(candidate);
+      const existing = reusable.get(key);
+      if (existing) return existing.pending.then((value) => structuredClone(value) as T);
+    }
+
     const pending = tail.then(async () => {
       const delay = nextReadAt - clock.now();
       if (delay > 0) await clock.wait(delay);
@@ -68,8 +85,23 @@ export function createLeagueSheetsReadSchedule(
       }
     });
     tail = pending.catch(() => {});
-    return pending;
+    if (reuse?.purpose !== 'presentation') return pending;
+    // Bound queued/in-flight entries too. Eviction sacrifices reuse, never pacing.
+    if (reusable.size >= maxEntries) reusable.delete(reusable.keys().next().value!);
+    const entry: ReadEntry = { workbook: reuse.workbook, pending, expiresAt: Infinity };
+    reusable.set(key, entry);
+    void pending.then(() => {
+      if (reusable.get(key) === entry) entry.expiresAt = clock.now() + ttlMs;
+    }, () => {
+      if (reusable.get(key) === entry) reusable.delete(key);
+    });
+    return pending.then((value) => structuredClone(value));
   };
+  schedule.invalidateWorkbook = (workbook: string): void => {
+    for (const [key, entry] of reusable)
+      if (entry.workbook === workbook) reusable.delete(key);
+  };
+  return schedule;
 }
 
 const leagueSheetsReadSchedules = new Map<string, ReturnType<typeof createLeagueSheetsReadSchedule>>();
@@ -95,30 +127,54 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
 
   const scheduleRead = getLeagueSheetsReadSchedule(serviceAccount.client_email);
 
-  const request = async <T>(options: { url: string; method?: 'GET' | 'POST'; data?: unknown }): Promise<T> => {
+  const gateway = createScheduledLeagueSheetsGateway(scheduleRead, async <T>(options: LeagueSheetsRequest) => {
     const client = await auth.getClient();
-    const response = await (options.method === 'POST'
-      ? client.request<T>({ ...options, retry: false })
-      : scheduleRead(() => client.request<T>({ ...options, retry: false })));
-    return response.data;
+    return (await client.request<T>({ ...options, retry: false })).data;
+  });
+  return { gateway, config: { adminSpreadsheetId: parsed.YSL_ADMIN_SPREADSHEET_ID, publicSpreadsheetId: parsed.YSL_PUBLIC_SPREADSHEET_ID } };
+}
+
+type LeagueSheetsRequest = { url: string; method?: 'GET' | 'POST'; data?: unknown };
+
+// One shared scheduler owns pacing, quota cooldown, and presentation reuse.
+export function createScheduledLeagueSheetsGateway(
+  scheduleRead: ReturnType<typeof createLeagueSheetsReadSchedule>,
+  send: <T>(options: LeagueSheetsRequest) => Promise<T>,
+): LeagueSheetsGateway {
+  const request = async <T>(options: LeagueSheetsRequest,
+    readOptions: LeagueSheetsReadOptions = { purpose: 'fresh' }, validate?: (data: T) => void): Promise<T> => {
+    const workbook = /\/spreadsheets\/([^/:?]+)/.exec(options.url)![1]!;
+    if (options.method === 'POST') {
+      // Invalidate even on ambiguous failure; do not let an older in-flight
+      // read populate the cache after an external write starts or settles.
+      scheduleRead.invalidateWorkbook(workbook);
+      try { return await send<T>(options); }
+      finally { scheduleRead.invalidateWorkbook(workbook); }
+    }
+    return scheduleRead(async () => {
+      const data = await send<T>(options);
+      validate?.(data);
+      return data;
+    }, { workbook, key: options.url, purpose: readOptions.purpose });
   };
   const gateway: LeagueSheetsGateway = {
-    async getValuesBatch(spreadsheetId, ranges) {
+    async getValuesBatch(spreadsheetId, ranges, options) {
       if (!ranges.length) return [];
       const query = new URLSearchParams({ valueRenderOption: 'FORMATTED_VALUE' });
       for (const range of ranges) query.append('ranges', range);
       const data = await request<{ valueRanges?: Array<{ values?: CellRows }> }>({
         url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${query}`,
+      }, options, (result) => {
+        if (result.valueRanges?.length !== ranges.length)
+          throw new Error('Sheets batch read returned an incomplete range set.');
       });
-      if (data.valueRanges?.length !== ranges.length)
-        throw new Error('Sheets batch read returned an incomplete range set.');
-      return data.valueRanges.map((range) => range.values ?? []);
+      return data.valueRanges!.map((range) => range.values ?? []);
     },
-    async getValues(spreadsheetId, range) {
+    async getValues(spreadsheetId, range, options) {
       const encoded = encodeURIComponent(range);
       const data = await request<{ values?: CellRows }>({
         url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encoded}?valueRenderOption=FORMATTED_VALUE`,
-      });
+      }, options);
       return data.values ?? [];
     },
     async batchUpdate(spreadsheetId, updates, valueInputOption = 'RAW') {
@@ -201,13 +257,7 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
       }
     },
   };
-  return {
-    gateway,
-    config: {
-      adminSpreadsheetId: parsed.YSL_ADMIN_SPREADSHEET_ID,
-      publicSpreadsheetId: parsed.YSL_PUBLIC_SPREADSHEET_ID,
-    },
-  };
+  return gateway;
 }
 
 const ADMIN_TEAMS_RANGE = "'League Teams'!A5:L100";
@@ -406,7 +456,7 @@ export class LeagueSheetsService {
   }
 
   async listRosterPlayers(): Promise<LeagueRosterRow[]> {
-    const rows = await this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE);
+    const rows = await this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE, { purpose: 'presentation' });
     return parseRosters(rows);
   }
 

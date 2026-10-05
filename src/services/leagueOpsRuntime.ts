@@ -7,7 +7,7 @@ import {
   listLeagueMutationProblems,
   hasPendingLeagueDeliveries,
 } from '../db/repositories/leagueOperations.js';
-import { getLeagueAuditRepair } from '../db/repositories/leagueAuditRepairs.js';
+import { getLeagueAuditRepair, markLeagueAuditRepairReconciliationRequired } from '../db/repositories/leagueAuditRepairs.js';
 import { listActionableLeagueJobs, transitionLeagueJob } from '../db/repositories/leagueJobs.js';
 import {
   getVerifiedLeagueMember,
@@ -33,12 +33,15 @@ import { refreshLeagueOpsPanel, runLeagueAudit, type LeagueAuditCardPort } from 
 import { createLeagueAuditCardPort } from './leagueAuditDiscord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
 import type { LeagueSheetsService } from './leagueSheets.js';
+import { registerLeagueRepairRecovery, reconcileLeagueRepairRecord } from './leagueRepairRecovery.js';
 export type LeagueRepairIntent = {
   actorUserId: string;
   actorName: string;
   auditReference: string;
   expectedFinding: string;
   action: LeagueAuditResolutionAction;
+  reconcileReference?: string;
+  expectedRecoveryFingerprint?: string;
 };
 type LeagueOpsSheets = Pick<
   LeagueSheetsService,
@@ -59,6 +62,7 @@ export function createLeagueOpsRuntime(input: {
   const guildId = guild.id;
   const discord = input.discord ?? new DiscordLeagueGateway(guild, input.transactionsChannelId);
   const cards = input.cards ?? createLeagueAuditCardPort(input.client, db, guildId);
+  registerLeagueRepairRecovery({ db, operationScope, guildId, sheets, members: discord, freeAgentRoleId });
   let worker: LeagueJobWorker;
   const refresh = () => {
     worker.enqueue('panel', {}, 'panel', 500);
@@ -169,6 +173,12 @@ export function createLeagueOpsRuntime(input: {
         try {
           await authorize(intent.actorUserId);
           phase('VALIDATING');
+          if (intent.reconcileReference) {
+            await reconcileLeagueRepairRecord({ db, operationScope, guildId, sheets, members: discord, freeAgentRoleId,
+              reference: intent.reconcileReference, expectedFingerprint: intent.expectedRecoveryFingerprint ?? '', actorUserId: intent.actorUserId });
+            await audit('scheduled');
+            return { reference: intent.reconcileReference, manuallyReconciled: true };
+          }
           const result = await executeLeagueAuditRepair({
             ...intent,
             db,
@@ -252,7 +262,7 @@ export function createLeagueOpsRuntime(input: {
         scheduleDirtyLeagueCheck(db, worker);
       },
       audit: async (job) => audit((job.payload as { trigger: 'startup' | 'scheduled' }).trigger),
-      heartbeat: async () => refreshLeagueOpsPanel({ db, guildId, cards, now: new Date(), repost: true }),
+      heartbeat: async (job) => refreshLeagueOpsPanel({ db, guildId, cards, now: new Date(), repost: true, repostQueuedAt: job.createdAt }),
     },
     async (job) => {
       const transaction = getLeagueTransaction(db, job.reference);
@@ -261,6 +271,9 @@ export function createLeagueOpsRuntime(input: {
         transitionLeagueJob(db, job.reference, 'COMPLETED');
         return;
       }
+      if (repair?.status === 'applying')
+        markLeagueAuditRepairReconciliationRequired(db, repair.reference,
+          'Repair was interrupted during an external write. Review and explicitly reconcile the recorded operation; do not replay it.');
       // Recovery inspects fresh sources, but convergence alone cannot prove an
       // interrupted external write's approved history/notice was committed.
       try {
@@ -268,7 +281,10 @@ export function createLeagueOpsRuntime(input: {
       } catch (error) {
         console.error('Fresh league recovery check unavailable:', error);
       }
-      if (!transaction && !repair && ['LOADING', 'VALIDATING'].includes(job.status))
+      // Audit repairs persist their record before the first external write.
+      // An APPLYING repair without that record is still pre-write intent.
+      if (!transaction && !repair && (['LOADING', 'VALIDATING'].includes(job.status)
+        || (job.type === 'repair' && job.status === 'APPLYING')))
         transitionLeagueJob(db, job.reference, 'QUEUED');
       else
         transitionLeagueJob(db, job.reference, 'RECONCILIATION_REQUIRED', {

@@ -8,6 +8,7 @@ import {
   PermissionFlagsBits,
   RESTJSONErrorCodes,
   type Client,
+  type Collection,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getValidatedStaffChannel } from './operationalErrors.js';
@@ -27,12 +28,29 @@ export function isResolvedLeagueAlertMessage(
   return Boolean(reference && references.has(reference));
 }
 
+export function isLegacyResolvedLeagueAlertMessage(
+  message: { author: { id: string }; content: string; createdTimestamp: number },
+  botUserId: string | undefined,
+  verifiedBefore: string,
+): boolean {
+  return Boolean(botUserId && message.author.id === botUserId && message.createdTimestamp < Date.parse(verifiedBefore)
+    && /^Ratatoskr could not finish \*\*League roster audit (repair|review)\*\*\./.test(message.content)
+    && /^Reference: [0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\s*$/mi.test(message.content));
+}
+
 export function createLeagueAuditCardPort(
   client: Client,
   db: Database.Database,
   guildId: string,
 ): LeagueAuditCardPort {
   return {
+    async deleteLegacyResolvedAlerts(verifiedBefore, previouslyScannedBefore) {
+      const channel = await getValidatedStaffChannel(client, db, guildId);
+      const bot = channel.guild.members.me ?? await channel.guild.members.fetchMe();
+      if (!channel.permissionsFor(bot)?.has(PermissionFlagsBits.ReadMessageHistory))
+        throw new Error('bot cannot read staff-ops history for legacy league alert cleanup');
+      await deleteLegacyResolvedLeagueAlerts(channel.messages, client.user?.id, verifiedBefore, previouslyScannedBefore);
+    },
     async deleteResolvedAlerts(references) {
       const channel = await getValidatedStaffChannel(client, db, guildId);
       const bot = channel.guild.members.me ?? await channel.guild.members.fetchMe();
@@ -120,4 +138,32 @@ export function createLeagueAuditCardPort(
       }
     },
   };
+}
+
+// The durable cutoff advances only after a complete successful scan/deletion.
+export async function deleteLegacyResolvedLeagueAlerts(
+  history: { fetch(options: { limit: number; before?: string }): Promise<Collection<string, {
+    id: string; author: { id: string }; content: string; createdTimestamp: number; delete(): Promise<unknown>;
+  }>> },
+  botUserId: string | undefined,
+  verifiedBefore: string,
+  previouslyScannedBefore?: string,
+): Promise<void> {
+  let before: string | undefined;
+  while (true) {
+    const messages = await history.fetch({ limit: 100, ...(before ? { before } : {}) });
+    for (const message of messages.values()) {
+      if (previouslyScannedBefore && message.createdTimestamp < Date.parse(previouslyScannedBefore)) continue;
+      if (!isLegacyResolvedLeagueAlertMessage(message, botUserId, verifiedBefore)) continue;
+      try { await message.delete(); }
+      catch (error) {
+        if (!(error && typeof error === 'object' && 'code' in error && error.code === RESTJSONErrorCodes.UnknownMessage)) throw error;
+      }
+    }
+    if (messages.size < 100 || (previouslyScannedBefore
+      && messages.last()!.createdTimestamp < Date.parse(previouslyScannedBefore))) return;
+    const oldest = messages.last();
+    if (!oldest || oldest.id === before) throw new Error('Legacy league alert cleanup could not advance history pagination');
+    before = oldest.id;
+  }
 }

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan } from '../domain/leagueOperations.js';
 import {
+  createLeagueSheetsReadSchedule,
+  createScheduledLeagueSheetsGateway,
   LeagueSheetDriftError,
   LeagueSheetInputError,
   LeagueSheetsService,
@@ -492,4 +494,161 @@ test('gateways for the same service account share pacing and quota cooldown', as
   await runtime(async () => 'fresh audit');
   assert.deepEqual(waits, [60_000, 2000]);
   assert.notEqual(getLeagueSheetsReadSchedule('other-test@example.com', clock), runtime);
+});
+
+function scheduledFixture() {
+  let time = 0;
+  const waits: number[] = [];
+  const data = serviceFixture().gateway;
+  const calls: string[] = [];
+  let failure: unknown;
+  const schedule = createLeagueSheetsReadSchedule({ now: () => time, wait: async (ms) => { waits.push(ms); time += ms; } });
+  const gateway = createScheduledLeagueSheetsGateway(schedule, async <T>(options: { url: string; method?: 'GET' | 'POST' }) => {
+    calls.push(options.url);
+    if (failure) { const error = failure; failure = undefined; throw error; }
+    if (options.method === 'POST') return {} as T;
+    const url = new URL(options.url);
+    const workbook = url.pathname.split('/')[3]!;
+    if (url.pathname.endsWith('values:batchGet')) return { valueRanges: await Promise.all(url.searchParams.getAll('ranges').map(async (range) => ({ values: await data.getValues(workbook, range) }))) } as T;
+    if (url.pathname.includes('/values/')) return { values: await data.getValues(workbook, decodeURIComponent(url.pathname.split('/values/')[1]!)) } as T;
+    return { sheets: [{ properties: { sheetId: 1, title: 'Player Name History' } }] } as T;
+  });
+  return { gateway, data, calls, waits, schedule, service: new LeagueSheetsService(gateway, { adminSpreadsheetId: 'admin', publicSpreadsheetId: 'public' }), advance: (ms: number) => { time += ms; }, fail: (error: unknown) => { failure = error; } };
+}
+
+const presentation = { purpose: 'presentation' } as const;
+
+test('shared Sheets scheduler coalesces concurrent GET and batchGet presentation reads and briefly reuses results', async () => {
+  const f = scheduledFixture();
+  const other = createScheduledLeagueSheetsGateway(f.schedule, async <T>() => { throw Error('identical in-flight reads must share the existing transport'); return {} as T; });
+  const range = "'Current Rosters'!A5:J";
+  const [first, second] = await Promise.all([f.gateway.getValues('admin', range, presentation), other.getValues('admin', range, presentation)]);
+  assert.equal(f.calls.length, 1);
+  first[1]![5] = 'caller mutation';
+  assert.notEqual(second[1]![5], 'caller mutation');
+  assert.notEqual((await other.getValues('admin', range, presentation))[1]![5], 'caller mutation');
+  assert.equal(f.calls.length, 1);
+  await Promise.all([f.gateway.getValuesBatch!('admin', [range], presentation), other.getValuesBatch!('admin', [range], presentation)]);
+  assert.equal(f.calls.length, 2);
+  await f.gateway.getValuesBatch!('admin', [range], presentation);
+  assert.equal(f.calls.length, 2);
+  f.advance(3001);
+  await f.gateway.getValuesBatch!('admin', [range], presentation);
+  assert.equal(f.calls.length, 3);
+});
+
+test('writes invalidate workbook presentation reads, including ambiguous writes and late in-flight results', async () => {
+  const f = scheduledFixture();
+  await f.gateway.getValues('admin', 'A1', presentation);
+  await f.gateway.getValues('public', 'A1', presentation);
+  const before = f.calls.length;
+  await f.gateway.append('admin', 'A1', [['write']]);
+  await f.gateway.getValues('public', 'A1', presentation);
+  assert.equal(f.calls.length, before + 1);
+  await f.gateway.getValues('admin', 'A1', presentation);
+  assert.equal(f.calls.length, before + 2);
+  f.fail({ status: 503 });
+  await assert.rejects(f.gateway.batchUpdate('admin', [{ range: 'A1', values: [['write']] }]));
+  await f.gateway.getValues('admin', 'A1', presentation);
+  assert.equal(f.calls.length, before + 4);
+  let release!: (value: string) => void;
+  const old = f.schedule(() => new Promise<string>((resolve) => { release = resolve; }), { workbook: 'admin', key: 'late', ...presentation });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  f.schedule.invalidateWorkbook('admin');
+  release('old');
+  await old;
+  assert.equal(await f.schedule(async () => 'new', { workbook: 'admin', key: 'late', ...presentation }), 'new');
+});
+
+test('failed presentation reads are not cached and 429 cooldown still paces the next request', async () => {
+  for (const status of [429, 503]) {
+    const f = scheduledFixture();
+    f.fail({ status });
+    await assert.rejects(f.gateway.getValues('admin', 'A1', presentation));
+    await f.gateway.getValues('admin', 'A1', presentation);
+    assert.equal(f.calls.length, 2);
+    assert.deepEqual(f.waits, [status === 429 ? 60_000 : 2000]);
+  }
+});
+
+test('autocomplete reuses presentation rows while validation and targeted reconciliation always issue fresh reads', async () => {
+  const f = scheduledFixture();
+  await Promise.all([f.service.listRosterPlayers(), f.service.listRosterPlayers()]);
+  await f.service.listRosterPlayers();
+  assert.equal(f.calls.length, 1);
+  const loaded = await f.service.load(members, 'free-agent');
+  const fullReads = f.calls.length - 1;
+  await f.service.load(members, 'free-agent');
+  assert.equal(f.calls.length, 1 + 2 * fullReads);
+  await f.service.loadMember('one', members[0]!, 'free-agent');
+  const before = f.calls.length;
+  await f.service.loadMember('one', members[0]!, 'free-agent');
+  assert.equal(f.calls.length, before + 2);
+  f.data.changed = true;
+  await assert.rejects(f.service.assertUnchanged(loaded), LeagueSheetDriftError);
+  assert.equal(f.calls.length, before + 2 + fullReads);
+});
+
+test('fresh proof reads do not join identical in-flight presentation requests', async () => {
+  const f = scheduledFixture();
+  await Promise.all([f.gateway.getValues('admin', 'A1', presentation), f.gateway.getValues('admin', 'A1'), f.gateway.getValues('admin', 'A1', { purpose: 'fresh' })]);
+  assert.equal(f.calls.length, 3);
+});
+
+test('repair confirmation and explicit recovery never reuse presentation or previous proof reads', async () => {
+  const { openDatabase } = await import('../db/client.js');
+  const { createLeagueAuditRepair, markLeagueAuditRepairReconciliationRequired } = await import('../db/repositories/leagueAuditRepairs.js');
+  const { previewLeagueRepairRecovery, reconcileLeagueRepairRecord } = await import('./leagueRepairRecovery.js');
+  const { executeLeagueAuditRepair, LeagueAuditRepairStaleError } = await import('./leagueAuditResolution.js');
+  const f = scheduledFixture();
+  const db = openDatabase(':memory:');
+  try {
+    createLeagueAuditRepair(db, { reference: 'interrupted', guildId: 'g', auditReference: 'old', actorUserId: 'admin', finding: 'old', action: 'use-discord-name' });
+    markLeagueAuditRepairReconciliationRequired(db, 'interrupted', 'unknown');
+    await f.service.listRosterPlayers();
+    const input = { db, operationScope: db, guildId: 'g', freeAgentRoleId: 'free-agent', members: { getMembers: async () => members }, sheets: f.service };
+    const before = f.calls.length;
+    const preview = await previewLeagueRepairRecovery(input, 'interrupted');
+    const reads = f.calls.length - before;
+    assert.equal(reads, 4);
+    await assert.rejects(reconcileLeagueRepairRecord({ ...input, reference: 'interrupted', expectedFingerprint: preview.fingerprint, actorUserId: 'admin' }));
+    assert.equal(f.calls.length, before + 2 * reads);
+    await assert.rejects(executeLeagueAuditRepair({ ...input, auditReference: 'stale', expectedFinding: 'no longer present', actorUserId: 'admin', actorName: 'Admin', action: 'use-discord-name', discord: { validateDisplayName: async () => { throw Error('no writes'); }, reconcileManagedRoles: async () => { throw Error('no writes'); } }, now: new Date() }), LeagueAuditRepairStaleError);
+    assert.equal(f.calls.length, before + 3 * reads);
+  } finally { db.close(); }
+});
+
+test('presentation cache is bounded and incomplete batch reads are never retained', async () => {
+  let time = 0;
+  const schedule = createLeagueSheetsReadSchedule({ now: () => time, wait: async (ms) => { time += ms; } });
+  const pending = Array.from({ length: 129 }, (_, i) => schedule(async () => i, { workbook: 'admin', key: String(i), ...presentation }));
+  let attempts = 0;
+  const evicted = schedule(async () => { attempts++; return 0; }, { workbook: 'admin', key: '0', ...presentation });
+  await Promise.all([...pending, evicted]);
+  assert.equal(attempts, 1);
+  let batches = 0;
+  const gateway = createScheduledLeagueSheetsGateway(schedule, async <T>() => { batches++; return { valueRanges: batches === 1 ? [] : [{ values: [['okay']] }] } as T; });
+  await assert.rejects(gateway.getValuesBatch!('admin', ['A1'], presentation), /incomplete/);
+  assert.deepEqual(await gateway.getValuesBatch!('admin', ['A1'], presentation), [[['okay']]]);
+  assert.equal(batches, 2);
+});
+
+test('a workbook write prevents an already-running GET from repopulating presentation reuse', async () => {
+  let time = 0;
+  const schedule = createLeagueSheetsReadSchedule({ now: () => time, wait: async (ms) => { time += ms; } });
+  let release!: (value: unknown) => void;
+  let reads = 0;
+  const gateway = createScheduledLeagueSheetsGateway(schedule, async <T>(options: { method?: 'GET' | 'POST' }) => {
+    if (options.method === 'POST') return {} as T;
+    reads++;
+    if (reads === 1) return await new Promise<T>((resolve) => { release = (value) => resolve(value as T); });
+    return { values: [['after write']] } as T;
+  });
+  const old = gateway.getValues('admin', 'A1', presentation);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await gateway.batchUpdate('admin', [{ range: 'A1', values: [['after write']] }]);
+  release({ values: [['before write']] });
+  assert.deepEqual(await old, [['before write']]);
+  assert.deepEqual(await gateway.getValues('admin', 'A1', presentation), [['after write']]);
+  assert.equal(reads, 2);
 });

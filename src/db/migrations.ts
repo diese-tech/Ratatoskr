@@ -838,4 +838,21 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 32,
+    name: 'league_repair_manual_resolution',
+    sql: `CREATE TABLE league_repair_resolutions (
+      reference TEXT PRIMARY KEY REFERENCES league_audit_repairs(reference),
+      guild_id TEXT NOT NULL,
+      actor_user_id TEXT NOT NULL,
+      verification_fingerprint TEXT NOT NULL,
+      verification_json TEXT NOT NULL,
+      resolved_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );`,
+  },
+  {
+    id: 33,
+    name: 'league_clean_full_audit_evidence',
+    sql: 'ALTER TABLE league_audit_cards ADD COLUMN last_clean_full_at TEXT;',
+  },
 ];

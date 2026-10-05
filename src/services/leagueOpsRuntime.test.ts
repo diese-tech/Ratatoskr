@@ -324,3 +324,42 @@ test('public notice failure keeps durable recovery and retries delivery without 
     f.db.close();
   }
 });
+
+test('hard-interrupted applying repairs become reviewable and explicitly close without mutation replay', async () => {
+  const { createLeagueAuditRepair, getLeagueAuditRepair } = await import('../db/repositories/leagueAuditRepairs.js');
+  const { previewRegisteredLeagueRepairRecovery } = await import('./leagueRepairRecovery.js');
+  const f = await fixture();
+  try {
+    const interrupted = enqueueLeagueJob(f.db, { guildId: 'g', type: 'repair', payload: {}, dedupeKey: 'interrupted-repair' });
+    transitionLeagueJob(f.db, interrupted.reference, 'APPLYING');
+    createLeagueAuditRepair(f.db, { reference: interrupted.reference, guildId: 'g', auditReference: 'old-audit', actorUserId: 'admin', finding: 'Old name drift', action: 'use-discord-name' });
+    await f.runtime.worker.recover();
+    assert.equal(getLeagueAuditRepair(f.db, interrupted.reference)!.status, 'reconciliation_required');
+    assert.equal(getLeagueJob(f.db, interrupted.reference)!.status, 'RECONCILIATION_REQUIRED');
+    assert.equal(f.writes, 0);
+    const preview = await previewRegisteredLeagueRepairRecovery(f.db, 'g', interrupted.reference);
+    const close = f.runtime.worker.enqueue('repair', { actorUserId: 'admin', actorName: 'Admin', auditReference: '', expectedFinding: '', action: 'use-discord-name',
+      reconcileReference: interrupted.reference, expectedRecoveryFingerprint: preview.fingerprint }, 'close-interrupted');
+    f.runtime.worker.start();
+    assert.equal((await settled(f, close.reference)).status, 'COMPLETED');
+    assert.equal(getLeagueAuditRepair(f.db, interrupted.reference)!.status, 'failed');
+    assert.equal(f.writes, 0);
+  } finally { f.runtime.stop(); f.db.close(); }
+});
+
+test('startup requeues applying repair intent only when no durable mutation record exists', async () => {
+  const f = await fixture();
+  try {
+    const repair = enqueueLeagueJob(f.db, { guildId: 'g', type: 'repair', payload: { actorUserId: 'admin', auditReference: 'stale-audit', expectedFinding: 'stale finding', action: 'use-discord-name' }, dedupeKey: 'pre-record-repair' });
+    transitionLeagueJob(f.db, repair.reference, 'APPLYING');
+    const transaction = enqueueLeagueJob(f.db, { guildId: 'g', type: 'transaction', payload: f.intent(), dedupeKey: 'unrecorded-transaction' });
+    transitionLeagueJob(f.db, transaction.reference, 'APPLYING');
+    await f.runtime.worker.recover();
+    assert.equal(getLeagueJob(f.db, repair.reference)?.status, 'QUEUED');
+    assert.equal(getLeagueJob(f.db, transaction.reference)?.status, 'RECONCILIATION_REQUIRED');
+    assert.equal(f.writes, 0);
+    f.runtime.worker.start();
+    assert.equal((await settled(f, repair.reference)).status, 'COMPLETED');
+    assert.equal(f.writes, 0);
+  } finally { f.runtime.stop(); f.db.close(); }
+});

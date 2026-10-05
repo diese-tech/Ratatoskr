@@ -89,3 +89,18 @@ export function markLeagueAuditRepairReconciliationRequired(
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE reference = ? AND status <> 'completed'`).run(errorMessage, reference);
 }
+
+export function getLeagueRepairResolution(db: Database.Database, guildId: string, reference: string): boolean {
+  return Boolean(db.prepare('SELECT 1 FROM league_repair_resolutions WHERE reference=? AND guild_id=?').get(reference, guildId));
+}
+
+export function recordLeagueRepairResolution(db: Database.Database, input: {
+  reference: string; guildId: string; actorUserId: string; fingerprint: string; verification: unknown;
+}): void {
+  db.prepare(`INSERT INTO league_repair_resolutions(reference,guild_id,actor_user_id,verification_fingerprint,verification_json)
+    VALUES(?,?,?,?,?)`).run(input.reference, input.guildId, input.actorUserId, input.fingerprint, JSON.stringify(input.verification));
+  const changed = db.prepare(`UPDATE league_audit_repairs SET status='failed', error_message=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE reference=? AND guild_id=? AND status='reconciliation_required'`)
+    .run(`Manually reconciled by ${input.actorUserId}; fresh surfaces verified. No mutation replayed.`, input.reference, input.guildId).changes;
+  if (changed !== 1) throw new Error('Repair reconciliation state changed before it could be saved.');
+}
