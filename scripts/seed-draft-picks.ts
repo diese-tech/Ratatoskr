@@ -66,7 +66,8 @@ async function main() {
   const byId = new Map(picks.filter((pick) => pick.discordId).map((pick) => [pick.discordId, pick]));
   const historyMarks = history!.flatMap((row, index) => {
     const pick = byId.get(String(row[6] ?? '').trim());
-    return pick && !String(row[12] ?? '').trim()
+    // Renames are not roster moves (the runtime skips them too).
+    return pick && String(row[1] ?? '').trim() !== 'rename' && !String(row[12] ?? '').trim()
       ? [{ row: index + 6, reference: String(row[0]), player: String(row[7]), label: draftPickLabel({ ...pick, round: String(pick.round) }) }]
       : [];
   });
@@ -87,7 +88,7 @@ async function main() {
     await call(`${base}/${adminId}:batchUpdate`, { requests: [{ addSheet: { properties: { title: 'Draft Picks' } } }] });
     adminMeta = await sheetsMeta(adminId);
   }
-  await call(`${base}/${adminId}/values:batchClear`, { ranges: ["'Draft Picks'!A6:I"] });
+  // Write first, then clear only leftover rows, so a failed write never erases staff-entered IDs.
   await call(`${base}/${adminId}/values:batchUpdate`, {
     valueInputOption: 'RAW',
     data: [
@@ -99,6 +100,7 @@ async function main() {
       ...historyMarks.map((mark) => ({ range: `'Transaction History'!M${mark.row}`, values: [[mark.label]] })),
     ],
   });
+  await call(`${base}/${adminId}/values:batchClear`, { ranges: [`'Draft Picks'!A${picks.length + 6}:I`] });
   const picksSheet = adminMeta.find((sheet) => sheet.properties.title === 'Draft Picks')!;
   const historySheet = adminMeta.find((sheet) => sheet.properties.title === 'Transaction History')!;
   const rules = [

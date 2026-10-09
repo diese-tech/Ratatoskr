@@ -71,7 +71,9 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
     [normalizeName(String(row[3] ?? '')), String(row[0] ?? '').trim()] as [string, string],
   ]));
   const currentName = new Map(sources.nameHistory.map((row) => [String(row[0] ?? '').trim(), String(row[1] ?? '').trim()]));
-  const rostered = new Map(sources.rosters.map((row) => [String(row[4] ?? '').trim(), { division: String(row[0] ?? '').trim(), franchise: String(row[1] ?? '').trim() }]));
+  const rostered = new Map(sources.rosters.map((row) => [String(row[4] ?? '').trim(), {
+    division: String(row[0] ?? '').trim(), franchise: String(row[1] ?? '').trim(), teamRole: String(row[3] ?? '').trim(),
+  }]));
 
   return picks.map((pick) => {
     const key = normalizeName(pick.draftName);
@@ -91,7 +93,8 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
     const current = discordId ? rostered.get(discordId) : undefined;
     const status = keptStatus.startsWith('Moved ·') && !keptStatus.includes('before tracking') ? keptStatus
       : !discordId ? 'Unknown'
-      : current?.division === pick.division && current.franchise === pick.team ? 'On drafted team'
+      // Draft headers name the franchise today; accept the division-suffixed team role too.
+      : current?.division === pick.division && [current.franchise, current.teamRole].includes(pick.team) ? 'On drafted team'
         : `Moved · before tracking · now ${current ? `${current.division} ${current.franchise}` : 'not rostered'}`;
     return { ...pick, discordId: discordId ?? '', currentName: discordId ? currentName.get(discordId) ?? '' : '', matchSource, status };
   });

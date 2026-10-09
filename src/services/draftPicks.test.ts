@@ -69,3 +69,14 @@ test('re-seeding keeps staff-entered IDs and runtime move records', () => {
     ['id-some', 'Member Directory name', 'Moved · drop · YSL-TRX-1'],
   ]);
 });
+
+test('a division-suffixed draft header still counts as the drafted team', () => {
+  const [pick] = resolveDraftPicks(
+    [{ division: 'Svartalfheim', team: 'The Sewer SD', round: 1, pick: '1', draftName: 'thehofather' }],
+    {
+      vetting: [], memberDirectory: [], nameHistory: [['id-ho', 'thehofather', 'thehofather']],
+      rosters: [['Svartalfheim', 'The Sewer', 'r', 'The Sewer SD', 'id-ho', 'thehofather']],
+    },
+  );
+  assert.equal(pick?.status, 'On drafted team');
+});

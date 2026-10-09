@@ -761,13 +761,15 @@ export class LeagueSheetsService {
       // Column M drives the Transaction History yellow conditional-format rule.
       row.push(pick ? draftPickLabel(pick) : '');
     }
-    await this.gateway.append(this.config.adminSpreadsheetId, "'Transaction History'!A:M", transactionRows, 'RAW');
+    // Status first: the history row is the idempotency marker, so anything written after it
+    // would be skipped by recovery. Rewriting the same status on retry is harmless.
     if (moved.size) {
       await this.gateway.batchUpdate(this.config.adminSpreadsheetId, [...moved.values()].map((pick) => ({
         range: `'Draft Picks'!I${pick.sheetRow}`,
         values: [[`Moved · ${plan.kind} · ${record.reference}`]],
       })), 'RAW');
     }
+    await this.gateway.append(this.config.adminSpreadsheetId, "'Transaction History'!A:M", transactionRows, 'RAW');
     return [...moved.values()];
   }
 

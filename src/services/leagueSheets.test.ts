@@ -351,6 +351,21 @@ test('history marks top-4 draft picks in column M and records the move on Draft 
   ]);
 });
 
+test('Draft Picks status is written before the history row so recovery cannot skip it', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:I"), [
+    ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two', 'Member Directory', 'On drafted team'],
+  ]);
+  gateway.append = async () => { throw new Error('append failed'); };
+  const loaded = await service.load(members, 'free-agent');
+  await assert.rejects(service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
+    reference: 'YSL-TRX-TRADE', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin',
+  }), /append failed/);
+  assert.deepEqual(gateway.writes.at(-1)?.updates, [
+    { range: "'Draft Picks'!I6", values: [['Moved · trade · YSL-TRX-TRADE']] },
+  ]);
+});
+
 test('history proceeds unmarked when the Draft Picks tab has not been seeded', async () => {
   const { gateway, service } = serviceFixture();
   const getValues = gateway.getValues.bind(gateway);
