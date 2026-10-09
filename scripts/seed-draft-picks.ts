@@ -1,9 +1,9 @@
 // Seeds the Admin 'Draft Picks' tab (each captain's first four draft picks, resolved to Discord IDs)
 // and backfills Transaction History column M for moves made before tracking existed.
 // Dry run by default; pass --write to apply. Re-running keeps staff-entered IDs.
-//   railway run npx tsx scripts/seed-draft-picks.ts [--write] [--since=YYYY-MM-DD] [--allow-partial] [--fresh]
-// --fresh: new season. Ignore the existing tab (old IDs and move statuses); pair with --since=<draft date>.
-// --since: only backfill history on/after the draft (use when history predates this season's draft).
+//   railway run npx tsx scripts/seed-draft-picks.ts [--write] [--since=YYYY-MM-DD] [--allow-partial]
+// --since: the draft date. Only history on/after it counts. It is stored in Draft Picks B4; a later run
+//   with a different date is a new season and starts the tab over, while omitting it reuses B4.
 // --allow-partial: write even if fewer than 3 divisions x 8 teams x 4 picks were parsed.
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
@@ -17,12 +17,9 @@ type SheetMeta = { properties: { sheetId: number; title: string }; conditionalFo
 
 const write = process.argv.includes('--write');
 const allowPartial = process.argv.includes('--allow-partial');
-const fresh = process.argv.includes('--fresh');
-const since = process.argv.find((arg) => arg.startsWith('--since='))?.slice('--since='.length) ?? '';
+const sinceArg = process.argv.find((arg) => arg.startsWith('--since='))?.slice('--since='.length) ?? '';
 const EXPECTED_PICKS = DRAFT_DIVISIONS.length * 8 * 4;
-if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new Error(`--since must be YYYY-MM-DD, got "${since}".`);
-// A new season without a cutoff would relabel last season's history against this draft.
-if (fresh && write && !since) throw new Error('--fresh --write requires --since=<draft date>.');
+if (sinceArg && !/^\d{4}-\d{2}-\d{2}$/.test(sinceArg)) throw new Error(`--since must be YYYY-MM-DD, got "${sinceArg}".`);
 const adminId = process.env.YSL_ADMIN_SPREADSHEET_ID!;
 const publicId = process.env.YSL_PUBLIC_SPREADSHEET_ID!;
 const auth = new GoogleAuth({
@@ -63,15 +60,21 @@ async function main() {
   const [vetting, ...draftTabs] = await read(publicId, ['FinalizedVetting!A2:D', ...DRAFT_DIVISIONS.map((division) => `'${division} Draft'!A1:O60`)]);
   let adminMeta = await sheetsMeta(adminId);
   const picksTabExists = adminMeta.some((sheet) => sheet.properties.title === 'Draft Picks');
-  const [memberDirectory, nameHistory, rosters, history, existing] = await read(adminId, [
+  const [memberDirectory, nameHistory, rosters, history, existing, storedDate] = await read(adminId, [
     "'Member Directory'!A6:D", "'Player Name History'!A6:C", "'Current Rosters'!A6:F", "'Transaction History'!A6:M",
-    ...(picksTabExists ? ["'Draft Picks'!A6:J"] : []),
+    ...(picksTabExists ? ["'Draft Picks'!A6:J", "'Draft Picks'!B4"] : []),
   ]);
+  // The tab remembers its draft date. Same date (or none given) = same season: keep staff-entered IDs
+  // and move records across re-runs. A different date = new season: start over.
+  const tabDate = String(storedDate?.[0]?.[0] ?? '').trim();
+  const since = sinceArg || tabDate;
+  const newSeason = Boolean(sinceArg && tabDate && sinceArg !== tabDate);
+  if (newSeason) console.log(`New season: draft date ${tabDate} -> ${sinceArg}. Existing Draft Picks rows are not carried over.`);
 
   const picks = resolveDraftPicks(
     DRAFT_DIVISIONS.flatMap((division, index) => parseDraftTab(division, draftTabs[index]!)),
     { vetting: vetting!, memberDirectory: memberDirectory!, nameHistory: nameHistory!, rosters: rosters!, history: history!, since },
-    fresh ? [] : existing ?? [],
+    newSeason ? [] : existing ?? [],
   );
   const byId = new Map(picks.filter((pick) => pick.discordId).map((pick) => [pick.discordId, pick]));
   // Recompute column M for every in-season row so ID corrections also clear stale marks.
@@ -132,6 +135,7 @@ async function main() {
     data: [
       { range: "'Draft Picks'!A2", values: [['YSL Top-4 Draft Picks']] },
       { range: "'Draft Picks'!A3", values: [['Each captain\'s first four picks. Yellow = moved since the draft. Ratatoskr fills Status on trades/drops; type a missing Discord ID into column F.']] },
+      { range: "'Draft Picks'!A4:B4", values: [['Draft date', since]] },
       { range: "'Draft Picks'!A5:J5", values: [DRAFT_PICK_HEADERS] },
       { range: `'Draft Picks'!A6:J${picks.length + 5}`, values: picks.map(draftPickRow) },
       { range: "'Transaction History'!M5", values: [['Top-4 Pick']] },
