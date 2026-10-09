@@ -78,8 +78,10 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
   }]));
 
   const historyMoves = new Map<string, string>();
+  const historyRefs = new Set<string>();
   for (const row of sources.history ?? []) {
     const [reference, move, date, discordId] = [row[0], row[1], row[2], row[6]].map((cell) => String(cell ?? '').trim());
+    if (discordId && reference) historyRefs.add(`${reference}|${discordId}`);
     if (discordId && move && move !== 'rename' && date >= (sources.since ?? '')) historyMoves.set(discordId, `Moved · ${move} · ${reference}`);
   }
   return picks.map((pick) => {
@@ -99,7 +101,12 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
       : found;
     const current = discordId ? rostered.get(discordId) : undefined;
     // Once moved, always moved: a later return to the drafted team must not erase the record.
-    const status = keptStatus.startsWith('Moved ·') ? keptStatus
+    // A kept status is only evidence for the same player: runtime statuses must name a history
+    // reference for this ID, and pre-tracking statuses survive only if staff did not change the ID.
+    const keptRef = /· (\S+)$/.exec(keptStatus)?.[1] ?? '';
+    const keptApplies = keptStatus.startsWith('Moved · before tracking') ? keptId === found[1]
+      : keptStatus.startsWith('Moved ·') && historyRefs.has(`${keptRef}|${discordId}`);
+    const status = keptApplies ? keptStatus
       : discordId && historyMoves.has(discordId) ? historyMoves.get(discordId)!
       : !discordId ? 'Unknown'
       // Draft headers name the franchise today; accept the division-suffixed team role too.
@@ -111,4 +118,18 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
 
 export function draftPickRow(pick: ResolvedDraftPick): Cell[] {
   return [pick.division, pick.team, pick.round, pick.pick, pick.draftName, pick.discordId, pick.currentName, pick.matchSource, pick.status];
+}
+
+// Each division must yield 8 distinct teams with rounds 1-4 exactly once; a stray or duplicated
+// Cap: block can otherwise hide a missing team behind a correct total.
+export function draftParseProblems(picks: DraftPick[]): string[] {
+  return DRAFT_DIVISIONS.flatMap((division) => {
+    const teams = new Map<string, number[]>();
+    for (const pick of picks.filter((candidate) => candidate.division === division))
+      teams.set(pick.team, [...(teams.get(pick.team) ?? []), pick.round]);
+    const problems = teams.size === 8 ? [] : [`${division}: ${teams.size} teams parsed, expected 8`];
+    for (const [team, rounds] of teams)
+      if ([...rounds].sort().join() !== '1,2,3,4') problems.push(`${division} ${team || '(blank team)'}: rounds ${rounds.join(',')}`);
+    return problems;
+  });
 }

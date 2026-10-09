@@ -7,7 +7,7 @@
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import {
-  DRAFT_DIVISIONS, DRAFT_PICK_HEADERS, draftPickRow, parseDraftTab, resolveDraftPicks,
+  DRAFT_DIVISIONS, DRAFT_PICK_HEADERS, draftParseProblems, draftPickRow, parseDraftTab, resolveDraftPicks,
 } from '../src/services/draftPicks.js';
 import { draftPickLabel } from '../src/services/leagueSheets.js';
 
@@ -90,8 +90,9 @@ async function main() {
 
   if (!write) { console.log('\nDry run. Re-run with --write to apply.'); return; }
   // A short parse would drop protected picks (and their staff-entered IDs) from the tab.
-  if (picks.length !== EXPECTED_PICKS && !allowPartial) {
-    throw new Error(`Parsed ${picks.length} picks, expected ${EXPECTED_PICKS}. Check the draft tabs, or pass --allow-partial.`);
+  const problems = draftParseProblems(picks);
+  if ((picks.length !== EXPECTED_PICKS || problems.length) && !allowPartial) {
+    throw new Error(`Draft parse is incomplete (${picks.length}/${EXPECTED_PICKS}): ${problems.join('; ') || 'count mismatch'}. Check the draft tabs, or pass --allow-partial.`);
   }
 
   if (!picksTabExists) {

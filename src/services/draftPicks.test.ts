@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeName, parseDraftTab, resolveDraftPicks } from './draftPicks.js';
+import { draftParseProblems, normalizeName, parseDraftTab, resolveDraftPicks } from './draftPicks.js';
 
 // Mirrors the live draft grid: header row, Pick/Name row, Cap: row, then one row per round.
 function draftTab() {
@@ -60,6 +60,7 @@ test('re-seeding keeps staff-entered IDs and runtime move records', () => {
   ];
   const resolved = resolveDraftPicks(picks, {
     vetting: [], memberDirectory: [['id-some', 'someone', 'Someone', 'Someone']], nameHistory: [], rosters: [],
+    history: [['YSL-TRX-1', 'drop', '2026-10-06', 'Alfheim', 'The Sewer', 'Free Agents', 'id-some', 'Someone']],
   }, [
     ['Alfheim', 'The Sewer', '3', '20', 'Nobody', 'id-typed', '', 'UNRESOLVED', 'Unknown'],
     ['Alfheim', 'The Sewer', '4', '29', 'Someone', 'id-some', '', 'Member Directory name', 'Moved · drop · YSL-TRX-1'],
@@ -105,4 +106,28 @@ test('moves stay recorded after a return: kept statuses and qualifying history b
     'Moved · before tracking · now not rostered',
     'Moved · pickup · YSL-2',
   ]);
+});
+
+test('a corrected Discord ID does not inherit another player move record', () => {
+  const [pick] = resolveDraftPicks(
+    [{ division: 'Alfheim', team: 'The Sewer', round: 1, pick: '4', draftName: 'Right' }],
+    {
+      vetting: [], memberDirectory: [], nameHistory: [['id-wrong', 'Right', 'Right']],
+      rosters: [['Alfheim', 'The Sewer', 'r', 'The Sewer AD', 'id-right', 'Right']],
+      history: [['YSL-1', 'drop', '2026-10-06', 'Alfheim', 'The Sewer', 'Free Agents', 'id-wrong', 'Wrong']],
+    },
+    [['Alfheim', 'The Sewer', '1', '4', 'Right', 'id-right', '', 'Player Name History', 'Moved · drop · YSL-1']],
+  );
+  assert.equal(pick?.discordId, 'id-right');
+  assert.equal(pick?.status, 'On drafted team');
+});
+
+test('parse validation reports missing teams and duplicated rounds', () => {
+  const full = ['Vanaheim', 'Alfheim', 'Svartalfheim'].flatMap((division) =>
+    Array.from({ length: 8 }, (_, team) => [1, 2, 3, 4].map((round) => ({ division, team: `T${team}`, round, pick: '', draftName: 'x' }))).flat());
+  assert.deepEqual(draftParseProblems(full), []);
+  const broken = full.filter((pick) => !(pick.division === 'Alfheim' && pick.team === 'T7'))
+    .concat([1, 2, 3, 4].map((round) => ({ division: 'Alfheim', team: 'T0', round, pick: '', draftName: 'dup' })));
+  assert.equal(broken.length, full.length);
+  assert.deepEqual(draftParseProblems(broken), ['Alfheim: 7 teams parsed, expected 8', 'Alfheim T0: rounds 1,2,3,4,1,2,3,4']);
 });
