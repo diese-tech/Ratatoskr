@@ -19,7 +19,10 @@ const write = process.argv.includes('--write');
 const allowPartial = process.argv.includes('--allow-partial');
 const sinceArg = process.argv.find((arg) => arg.startsWith('--since='))?.slice('--since='.length) ?? '';
 const EXPECTED_PICKS = DRAFT_DIVISIONS.length * 8 * 4;
-if (sinceArg && !/^\d{4}-\d{2}-\d{2}$/.test(sinceArg)) throw new Error(`--since must be YYYY-MM-DD, got "${sinceArg}".`);
+// Round-trip through Date so shape-valid but impossible dates (2026-13-01, 2026-02-30) are rejected.
+const sinceTime = new Date(`${sinceArg}T00:00:00Z`).getTime();
+if (sinceArg && !(/^\d{4}-\d{2}-\d{2}$/.test(sinceArg) && !Number.isNaN(sinceTime) && new Date(sinceTime).toISOString().startsWith(sinceArg)))
+  throw new Error(`--since must be a real YYYY-MM-DD date, got "${sinceArg}".`);
 const adminId = process.env.YSL_ADMIN_SPREADSHEET_ID!;
 const publicId = process.env.YSL_PUBLIC_SPREADSHEET_ID!;
 const auth = new GoogleAuth({
