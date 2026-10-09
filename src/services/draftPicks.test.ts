@@ -131,3 +131,11 @@ test('parse validation reports missing teams and duplicated rounds', () => {
   assert.equal(broken.length, full.length);
   assert.deepEqual(draftParseProblems(broken), ['Alfheim: 7 teams parsed, expected 8', 'Alfheim T0: rounds 1,2,3,4,1,2,3,4']);
 });
+
+test('parse validation rejects a blank team header even with complete rounds', () => {
+  const picks = ['Vanaheim', 'Alfheim', 'Svartalfheim'].flatMap((division) =>
+    Array.from({ length: 8 }, (_, team) => [1, 2, 3, 4].map((round) => ({
+      division, team: division === 'Vanaheim' && team === 7 ? '' : `T${team}`, round, pick: '', draftName: 'x',
+    }))).flat());
+  assert.deepEqual(draftParseProblems(picks), ['Vanaheim: a Cap: block has a blank team header']);
+});

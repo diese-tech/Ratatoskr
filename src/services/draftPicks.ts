@@ -128,6 +128,7 @@ export function draftParseProblems(picks: DraftPick[]): string[] {
     for (const pick of picks.filter((candidate) => candidate.division === division))
       teams.set(pick.team, [...(teams.get(pick.team) ?? []), pick.round]);
     const problems = teams.size === 8 ? [] : [`${division}: ${teams.size} teams parsed, expected 8`];
+    if (teams.has('')) problems.push(`${division}: a Cap: block has a blank team header`);
     for (const [team, rounds] of teams)
       if ([...rounds].sort().join() !== '1,2,3,4') problems.push(`${division} ${team || '(blank team)'}: rounds ${rounds.join(',')}`);
     return problems;
