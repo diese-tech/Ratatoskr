@@ -332,7 +332,7 @@ test('departure history records the former team and inactive destination without
 
 test('history marks top-4 draft picks in column M and records the move on Draft Picks', async () => {
   const { gateway, service } = serviceFixture();
-  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:I"), [
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
     ['Vanaheim', 'Dream Walkers', '1', '3', 'Uno', 'other', 'Other', 'Member Directory', 'On drafted team'],
     ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two', 'Member Directory', 'On drafted team'],
   ]);
@@ -347,13 +347,13 @@ test('history marks top-4 draft picks in column M and records the move on Draft 
   ]);
   assert.deepEqual(moves.map((move) => move.discordId), ['two']);
   assert.deepEqual(gateway.writes.at(-1)?.updates, [
-    { range: "'Draft Picks'!I7", values: [['Moved · trade · YSL-TRX-TRADE']] },
+    { range: "'Draft Picks'!I7:J7", values: [['Moved · trade · YSL-TRX-TRADE', 'two']] },
   ]);
 });
 
 test('Draft Picks status is written before the history row so recovery cannot skip it', async () => {
   const { gateway, service } = serviceFixture();
-  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:I"), [
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
     ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two', 'Member Directory', 'On drafted team'],
   ]);
   gateway.append = async () => { throw new Error('append failed'); };
@@ -362,7 +362,7 @@ test('Draft Picks status is written before the history row so recovery cannot sk
     reference: 'YSL-TRX-TRADE', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin',
   }), /append failed/);
   assert.deepEqual(gateway.writes.at(-1)?.updates, [
-    { range: "'Draft Picks'!I6", values: [['Moved · trade · YSL-TRX-TRADE']] },
+    { range: "'Draft Picks'!I6:J6", values: [['Moved · trade · YSL-TRX-TRADE', 'two']] },
   ]);
 });
 
@@ -384,7 +384,7 @@ test('history proceeds unmarked when the Draft Picks tab has not been seeded', a
 test('history recovery does not re-mark an already recorded reference', async () => {
   const { gateway, service } = serviceFixture();
   gateway.data.set(gateway.key('admin', "'Transaction History'!A6:A"), [['YSL-TRX-TRADE']]);
-  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:I"), [
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
     ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two', 'Member Directory', 'On drafted team'],
   ]);
   const loaded = await service.load(members, 'free-agent');

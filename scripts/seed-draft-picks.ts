@@ -60,7 +60,7 @@ async function main() {
   const picksTabExists = adminMeta.some((sheet) => sheet.properties.title === 'Draft Picks');
   const [memberDirectory, nameHistory, rosters, history, existing] = await read(adminId, [
     "'Member Directory'!A6:D", "'Player Name History'!A6:C", "'Current Rosters'!A6:F", "'Transaction History'!A6:M",
-    ...(picksTabExists ? ["'Draft Picks'!A6:I"] : []),
+    ...(picksTabExists ? ["'Draft Picks'!A6:J"] : []),
   ]);
 
   const picks = resolveDraftPicks(
@@ -105,17 +105,17 @@ async function main() {
     data: [
       { range: "'Draft Picks'!A2", values: [['YSL Top-4 Draft Picks']] },
       { range: "'Draft Picks'!A3", values: [['Each captain\'s first four picks. Yellow = moved since the draft. Ratatoskr fills Status on trades/drops; type a missing Discord ID into column F.']] },
-      { range: "'Draft Picks'!A5:I5", values: [DRAFT_PICK_HEADERS] },
-      { range: `'Draft Picks'!A6:I${picks.length + 5}`, values: picks.map(draftPickRow) },
+      { range: "'Draft Picks'!A5:J5", values: [DRAFT_PICK_HEADERS] },
+      { range: `'Draft Picks'!A6:J${picks.length + 5}`, values: picks.map(draftPickRow) },
       { range: "'Transaction History'!M5", values: [['Top-4 Pick']] },
       ...historyMarks.map((mark) => ({ range: `'Transaction History'!M${mark.row}`, values: [[mark.label]] })),
     ],
   });
-  await call(`${base}/${adminId}/values:batchClear`, { ranges: [`'Draft Picks'!A${picks.length + 6}:I`] });
+  await call(`${base}/${adminId}/values:batchClear`, { ranges: [`'Draft Picks'!A${picks.length + 6}:J`] });
   const picksSheet = adminMeta.find((sheet) => sheet.properties.title === 'Draft Picks')!;
   const historySheet = adminMeta.find((sheet) => sheet.properties.title === 'Transaction History')!;
   const rules = [
-    ...(hasRule(picksSheet, PICKS_RULE) ? [] : [yellowRule(picksSheet.properties.sheetId, 9, PICKS_RULE)]),
+    ...(hasRule(picksSheet, PICKS_RULE) ? [] : [yellowRule(picksSheet.properties.sheetId, 10, PICKS_RULE)]),
     ...(hasRule(historySheet, HISTORY_RULE) ? [] : [yellowRule(historySheet.properties.sheetId, 13, HISTORY_RULE)]),
   ];
   if (rules.length) await call(`${base}/${adminId}:batchUpdate`, { requests: rules });

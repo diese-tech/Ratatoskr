@@ -7,7 +7,7 @@ type Rows = Cell[][];
 export const DRAFT_DIVISIONS = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
 export const PROTECTED_ROUNDS = 4;
 export const DRAFT_PICK_HEADERS = [
-  'Division', 'Team', 'Round', 'Pick #', 'Draft Name', 'Discord ID', 'Current League Name', 'Match Source', 'Status',
+  'Division', 'Team', 'Round', 'Pick #', 'Draft Name', 'Discord ID', 'Current League Name', 'Match Source', 'Status', 'Status For ID',
 ];
 
 export type DraftPick = { division: string; team: string; round: number; pick: string; draftName: string };
@@ -78,10 +78,8 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
   }]));
 
   const historyMoves = new Map<string, string>();
-  const historyRefs = new Set<string>();
   for (const row of sources.history ?? []) {
     const [reference, move, date, discordId] = [row[0], row[1], row[2], row[6]].map((cell) => String(cell ?? '').trim());
-    if (discordId && reference) historyRefs.add(`${reference}|${discordId}`);
     if (discordId && move && move !== 'rename' && date >= (sources.since ?? '')) historyMoves.set(discordId, `Moved · ${move} · ${reference}`);
   }
   return picks.map((pick) => {
@@ -95,17 +93,15 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
     const kept = previous.get(`${pick.division}|${pick.team}|${pick.round}`);
     const keptId = String(kept?.[5] ?? '').trim();
     const keptStatus = String(kept?.[8] ?? '').trim();
+    const keptStatusId = String(kept?.[9] ?? '').trim();
     const found = candidates.find(([, id]) => id) ?? ['UNRESOLVED', ''];
     const [matchSource, discordId] = keptId && keptId !== found[1]
       ? [String(kept?.[7] ?? '').trim() === 'UNRESOLVED' ? 'Manual' : String(kept?.[7] ?? '').trim() || 'Manual', keptId]
       : found;
     const current = discordId ? rostered.get(discordId) : undefined;
     // Once moved, always moved: a later return to the drafted team must not erase the record.
-    // A kept status is only evidence for the same player: runtime statuses must name a history
-    // reference for this ID, and pre-tracking statuses survive only if staff did not change the ID.
-    const keptRef = /· (\S+)$/.exec(keptStatus)?.[1] ?? '';
-    const keptApplies = keptStatus.startsWith('Moved · before tracking') ? keptId === found[1]
-      : keptStatus.startsWith('Moved ·') && historyRefs.has(`${keptRef}|${discordId}`);
+    // Column J names the player a status was recorded for, so an ID correction never inherits it.
+    const keptApplies = keptStatus.startsWith('Moved ·') && keptStatusId === discordId;
     const status = keptApplies ? keptStatus
       : discordId && historyMoves.has(discordId) ? historyMoves.get(discordId)!
       : !discordId ? 'Unknown'
@@ -117,7 +113,8 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
 }
 
 export function draftPickRow(pick: ResolvedDraftPick): Cell[] {
-  return [pick.division, pick.team, pick.round, pick.pick, pick.draftName, pick.discordId, pick.currentName, pick.matchSource, pick.status];
+  return [pick.division, pick.team, pick.round, pick.pick, pick.draftName, pick.discordId, pick.currentName, pick.matchSource, pick.status,
+    pick.status.startsWith('Moved') ? pick.discordId : ''];
 }
 
 // Each division must yield 8 distinct teams with rounds 1-4 exactly once; a stray or duplicated

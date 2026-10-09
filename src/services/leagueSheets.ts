@@ -315,7 +315,7 @@ export type DraftPickMove = {
   sheetRow: number;
 };
 
-export const DRAFT_PICKS_RANGE = "'Draft Picks'!A6:I";
+export const DRAFT_PICKS_RANGE = "'Draft Picks'!A6:J";
 
 export function draftPickLabel(pick: Pick<DraftPickMove, 'division' | 'team' | 'round' | 'pick'>): string {
   return `${pick.division} ${pick.team} R${pick.round} (#${pick.pick})`;
@@ -765,8 +765,8 @@ export class LeagueSheetsService {
     // would be skipped by recovery. Rewriting the same status on retry is harmless.
     if (moved.size) {
       await this.gateway.batchUpdate(this.config.adminSpreadsheetId, [...moved.values()].map((pick) => ({
-        range: `'Draft Picks'!I${pick.sheetRow}`,
-        values: [[`Moved · ${plan.kind} · ${record.reference}`]],
+        range: `'Draft Picks'!I${pick.sheetRow}:J${pick.sheetRow}`,
+        values: [[`Moved · ${plan.kind} · ${record.reference}`, pick.discordId]],
       })), 'RAW');
     }
     await this.gateway.append(this.config.adminSpreadsheetId, "'Transaction History'!A:M", transactionRows, 'RAW');

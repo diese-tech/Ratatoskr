@@ -63,7 +63,7 @@ test('re-seeding keeps staff-entered IDs and runtime move records', () => {
     history: [['YSL-TRX-1', 'drop', '2026-10-06', 'Alfheim', 'The Sewer', 'Free Agents', 'id-some', 'Someone']],
   }, [
     ['Alfheim', 'The Sewer', '3', '20', 'Nobody', 'id-typed', '', 'UNRESOLVED', 'Unknown'],
-    ['Alfheim', 'The Sewer', '4', '29', 'Someone', 'id-some', '', 'Member Directory name', 'Moved · drop · YSL-TRX-1'],
+    ['Alfheim', 'The Sewer', '4', '29', 'Someone', 'id-some', '', 'Member Directory name', 'Moved · drop · YSL-TRX-1', 'id-some'],
   ]);
   assert.deepEqual(resolved.map((pick) => [pick.discordId, pick.matchSource, pick.status]), [
     ['id-typed', 'Manual', 'Moved · before tracking · now not rostered'],
@@ -101,7 +101,7 @@ test('moves stay recorded after a return: kept statuses and qualifying history b
       ['YSL-2', 'pickup', '2026-10-07', 'Alfheim', 'Free Agents', 'The Sewer', 'id-ret', 'Returned'],
     ],
     since: '2026-10-01',
-  }, [['Alfheim', 'The Sewer', '1', '4', 'Back', 'id-back', 'Back', 'Player Name History', 'Moved · before tracking · now not rostered']]);
+  }, [['Alfheim', 'The Sewer', '1', '4', 'Back', 'id-back', 'Back', 'Player Name History', 'Moved · before tracking · now not rostered', 'id-back']]);
   assert.deepEqual(resolved.map((pick) => pick.status), [
     'Moved · before tracking · now not rostered',
     'Moved · pickup · YSL-2',
@@ -138,4 +138,14 @@ test('parse validation rejects a blank team header even with complete rounds', (
       division, team: division === 'Vanaheim' && team === 7 ? '' : `T${team}`, round, pick: '', draftName: 'x',
     }))).flat());
   assert.deepEqual(draftParseProblems(picks), ['Vanaheim: a Cap: block has a blank team header']);
+});
+
+test('a manually entered ID keeps its own pre-tracking move record after the player returns', () => {
+  const [pick] = resolveDraftPicks(
+    [{ division: 'Alfheim', team: 'The Sewer', round: 1, pick: '4', draftName: 'Nomatch' }],
+    { vetting: [], memberDirectory: [], nameHistory: [], rosters: [['Alfheim', 'The Sewer', 'r', 'The Sewer AD', 'id-man', 'Man']] },
+    [['Alfheim', 'The Sewer', '1', '4', 'Nomatch', 'id-man', '', 'Manual', 'Moved · before tracking · now not rostered', 'id-man']],
+  );
+  assert.equal(pick?.matchSource, 'Manual');
+  assert.equal(pick?.status, 'Moved · before tracking · now not rostered');
 });
