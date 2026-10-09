@@ -101,11 +101,31 @@ async function main() {
   if ((picks.length !== EXPECTED_PICKS || problems.length) && !allowPartial) {
     throw new Error(`Draft parse is incomplete (${picks.length}/${EXPECTED_PICKS}): ${problems.join('; ') || 'count mismatch'}. Check the draft tabs, or pass --allow-partial.`);
   }
+  // One player per slot: lookups are keyed by Discord ID, so a duplicate would silently hide a slot.
+  const seen = new Map<string, string>();
+  const duplicates = picks.flatMap((pick) => {
+    const slot = `${pick.division} ${pick.team} R${pick.round}`;
+    const other = pick.discordId ? seen.get(pick.discordId) : undefined;
+    if (pick.discordId) seen.set(pick.discordId, slot);
+    return other ? [`${pick.discordId} is in both ${other} and ${slot}`] : [];
+  });
+  if (duplicates.length) throw new Error(`Duplicate Discord IDs in Draft Picks: ${duplicates.join('; ')}. Fix column F, then re-run.`);
 
   if (!picksTabExists) {
     await call(`${base}/${adminId}:batchUpdate`, { requests: [{ addSheet: { properties: { title: 'Draft Picks' } } }] });
     adminMeta = await sheetsMeta(adminId);
   }
+  // Discord IDs exceed Sheets' 15-digit number precision; keep the ID columns (F, J) as plain text.
+  const picksSheetId = adminMeta.find((sheet) => sheet.properties.title === 'Draft Picks')!.properties.sheetId;
+  await call(`${base}/${adminId}:batchUpdate`, {
+    requests: [5, 9].map((column) => ({
+      repeatCell: {
+        range: { sheetId: picksSheetId, startRowIndex: 5, startColumnIndex: column, endColumnIndex: column + 1 },
+        cell: { userEnteredFormat: { numberFormat: { type: 'TEXT' } } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    })),
+  });
   // Write first, then clear only leftover rows, so a failed write never erases staff-entered IDs.
   await call(`${base}/${adminId}/values:batchUpdate`, {
     valueInputOption: 'RAW',
