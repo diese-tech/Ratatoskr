@@ -1,7 +1,8 @@
 // Seeds the Admin 'Draft Picks' tab (each captain's first four draft picks, resolved to Discord IDs)
 // and backfills Transaction History column M for moves made before tracking existed.
 // Dry run by default; pass --write to apply. Re-running keeps staff-entered IDs.
-//   railway run npx tsx scripts/seed-draft-picks.ts [--write] [--since=YYYY-MM-DD] [--allow-partial]
+//   railway run npx tsx scripts/seed-draft-picks.ts [--write] [--since=YYYY-MM-DD] [--allow-partial] [--fresh]
+// --fresh: new season. Ignore the existing tab (old IDs and move statuses); pair with --since=<draft date>.
 // --since: only backfill history on/after the draft (use when history predates this season's draft).
 // --allow-partial: write even if fewer than 3 divisions x 8 teams x 4 picks were parsed.
 import 'dotenv/config';
@@ -16,6 +17,7 @@ type SheetMeta = { properties: { sheetId: number; title: string }; conditionalFo
 
 const write = process.argv.includes('--write');
 const allowPartial = process.argv.includes('--allow-partial');
+const fresh = process.argv.includes('--fresh');
 const since = process.argv.find((arg) => arg.startsWith('--since='))?.slice('--since='.length) ?? '';
 const EXPECTED_PICKS = DRAFT_DIVISIONS.length * 8 * 4;
 const adminId = process.env.YSL_ADMIN_SPREADSHEET_ID!;
@@ -66,7 +68,7 @@ async function main() {
   const picks = resolveDraftPicks(
     DRAFT_DIVISIONS.flatMap((division, index) => parseDraftTab(division, draftTabs[index]!)),
     { vetting: vetting!, memberDirectory: memberDirectory!, nameHistory: nameHistory!, rosters: rosters!, history: history!, since },
-    existing ?? [],
+    fresh ? [] : existing ?? [],
   );
   const byId = new Map(picks.filter((pick) => pick.discordId).map((pick) => [pick.discordId, pick]));
   const historyMarks = history!.flatMap((row, index) => {
