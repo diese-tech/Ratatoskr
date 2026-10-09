@@ -326,8 +326,73 @@ test('departure history records the former team and inactive destination without
   });
   assert.deepEqual(gateway.appends[0]?.values[0], [
     'YSL-TRX-DEPARTURE', 'departure', '2026-09-30', 'Vanaheim', 'Dream Walkers', 'Inactive',
-    'one', 'One', 'admin', '', 'Completed', 'Admin',
+    'one', 'One', 'admin', '', 'Completed', 'Admin', '',
   ]);
+});
+
+test('history marks top-4 draft picks in column M and records the move on Draft Picks', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
+    ['Vanaheim', 'Dream Walkers', '1', '3', 'Uno', 'other', 'Other', 'Member Directory', 'On drafted team'],
+    ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two Before Rename', 'Member Directory', 'On drafted team'],
+  ]);
+  const loaded = await service.load(members, 'free-agent');
+  const moves = await service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
+    reference: 'YSL-TRX-TRADE', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin',
+  });
+  assert.equal(gateway.appends[0]?.range, "'Transaction History'!A:M");
+  assert.deepEqual(gateway.appends[0]?.values.map((row) => [row[6], row[12]]), [
+    ['one', ''],
+    ['two', 'Vanaheim The Sewer R2 (#16)'],
+  ]);
+  assert.deepEqual(moves.map((move) => [move.discordId, move.player]), [['two', 'Two']]);
+  assert.deepEqual(gateway.writes.at(-1)?.updates, [
+    { range: "'Draft Picks'!I7:J7", values: [['Moved · trade · YSL-TRX-TRADE', 'two']] },
+  ]);
+});
+
+test('Draft Picks status is written before the history row so recovery cannot skip it', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
+    ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two', 'Member Directory', 'On drafted team'],
+  ]);
+  gateway.append = async () => { throw new Error('append failed'); };
+  const loaded = await service.load(members, 'free-agent');
+  await assert.rejects(service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
+    reference: 'YSL-TRX-TRADE', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin',
+  }), /append failed/);
+  assert.deepEqual(gateway.writes.at(-1)?.updates, [
+    { range: "'Draft Picks'!I6:J6", values: [['Moved · trade · YSL-TRX-TRADE', 'two']] },
+  ]);
+});
+
+test('history proceeds unmarked when the Draft Picks tab has not been seeded', async () => {
+  const { gateway, service } = serviceFixture();
+  const getValues = gateway.getValues.bind(gateway);
+  gateway.getValues = async (spreadsheetId, range) => {
+    if (range.includes('Draft Picks')) throw Object.assign(new Error('Unable to parse range'), { status: 400 });
+    return getValues(spreadsheetId, range);
+  };
+  const loaded = await service.load(members, 'free-agent');
+  const moves = await service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
+    reference: 'YSL-TRX-TRADE', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin',
+  });
+  assert.deepEqual(moves, []);
+  assert.deepEqual(gateway.appends[0]?.values.map((row) => row[12]), ['', '']);
+});
+
+test('history recovery does not re-mark an already recorded reference', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.set(gateway.key('admin', "'Transaction History'!A6:A"), [['YSL-TRX-TRADE']]);
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
+    ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two', 'Member Directory', 'On drafted team'],
+  ]);
+  const loaded = await service.load(members, 'free-agent');
+  const moves = await service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
+    reference: 'YSL-TRX-TRADE', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin',
+  });
+  assert.deepEqual(moves, []);
+  assert.equal(gateway.appends.length, 0);
 });
 
 test('combined self-drop history records outgoing discipline and incoming replacement under one reference', async () => {

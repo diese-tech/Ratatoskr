@@ -19,6 +19,16 @@ Drop, self-drop, and departure accept an optional **replacement** selected from 
 
 `/transaction rename` retains its existing workflow: change the member's Discord name first, then preview and confirm syncing that name to league records. Issue #146 does not change this behavior. A separate follow-up will support an administrator-declared league name across Ratatoskr-managed surfaces, including the Discord server nickname, while preserving preview/confirm, rollback/reconciliation, and name-history safety.
 
+## Top-4 draft picks
+
+League rules protect each captain's first four draft picks (rounds 1–4; the `Cap:` line is not a pick). Moves of those players are marked so staff can review trades for competitive balance.
+
+- The Admin **Draft Picks** tab lists every top-4 pick with its Discord ID. Seed or refresh it with `railway run npx tsx scripts/seed-draft-picks.ts` (dry run), review the unresolved and moved lists, then re-run with `--write`. Draft names often differ from league names, so type any unresolved Discord ID into column F and re-run; staff-entered IDs are kept.
+- When a confirmed transaction moves a listed player, Ratatoskr writes the pick into **Transaction History** column M (`Top-4 Pick`), sets the Draft Picks status to `Moved · <move> · <reference>` (column J records whose move it is, so correcting an ID never carries over another player's record), and posts one unpinged note in staff-ops. Conditional formatting turns both rows yellow; do not highlight roster cells by hand.
+- The seed run also backfills column M for earlier history rows and marks picks that moved before tracking (`Moved · before tracking`).
+- The tab records its draft date in B4 (`--since=YYYY-MM-DD`, optional for Season One). Re-runs reuse it and keep staff-entered IDs. For a new season, pass the new draft date; a different date starts the tab over so last season's IDs and move statuses are not carried over, and history before that date is ignored.
+- Without a Draft Picks tab, transactions proceed unmarked. The staff-ops note is best-effort; the Transaction History row is the record.
+
 ## Automatic safety checks
 
 - Every confirmed mutation runs a complete Discord/private-sheet/public-sheet audit.
@@ -27,7 +37,7 @@ Drop, self-drop, and departure accept an optional **replacement** selected from 
 - Every confirmed mutation re-reads the managed sheet values and player roles immediately before changing anything.
 - A mismatch stops the command; Ratatoskr does not normalize or overwrite the unexpected value. It records one durable reconciliation ticket and refreshes the League Ops status panel.
 - Current Rosters updates are row-targeted. Unrelated rows, internal blanks, and manually maintained cells on unrelated rows are preserved.
-- Public writes are restricted to the eight seven-player team blocks and the two free-agent columns on each visible roster tab. Draft tabs are never read or written by the transaction service.
+- Public writes are restricted to the eight seven-player team blocks and the two free-agent columns on each visible roster tab. Draft tabs are never read or written by the transaction service; only `scripts/seed-draft-picks.ts` reads them.
 
 ## Durable queue and League Ops status panel
 

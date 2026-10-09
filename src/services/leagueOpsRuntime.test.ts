@@ -52,7 +52,7 @@ async function fixture() {
         } else if (change.to) group.push(change.to);
       }
     },
-    appendTransactionHistory: async () => {},
+    appendTransactionHistory: async () => [],
   };
   const discord = {
     getMembers: async () => structuredClone(snapshot.discordMembers),

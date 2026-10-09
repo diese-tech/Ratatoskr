@@ -302,6 +302,25 @@ export type LeagueSheetSources = {
 
 export type LoadedLeagueSnapshot = { snapshot: LeagueSnapshot; sources: LeagueSheetSources };
 
+// A captain's first four draft picks (rounds 1-4, not the Cap: line). Seeded by
+// scripts/seed-draft-picks.ts into the Admin 'Draft Picks' tab; moves of these players are
+// marked so staff can review trades for competitive balance.
+export type DraftPickMove = {
+  discordId: string;
+  player: string;
+  division: string;
+  team: string;
+  round: string;
+  pick: string;
+  sheetRow: number;
+};
+
+export const DRAFT_PICKS_RANGE = "'Draft Picks'!A6:J";
+
+export function draftPickLabel(pick: Pick<DraftPickMove, 'division' | 'team' | 'round' | 'pick'>): string {
+  return `${pick.division} ${pick.team} R${pick.round} (#${pick.pick})`;
+}
+
 export type LeagueTransactionRecord = {
   reference: string;
   effectiveDate: string;
@@ -700,9 +719,9 @@ export class LeagueSheetsService {
   async appendTransactionHistory(
     plan: LeagueMutationPlan,
     record: LeagueTransactionRecord,
-  ): Promise<void> {
+  ): Promise<DraftPickMove[]> {
     const existing = await this.gateway.getValues(this.config.adminSpreadsheetId, "'Transaction History'!A6:A");
-    if (existing.some((row) => String(row[0] ?? '') === record.reference)) return;
+    if (existing.some((row) => String(row[0] ?? '') === record.reference)) return [];
     const exitDestination = plan.kind === 'drop'
       ? 'Free Agents'
       : plan.kind === 'departure' ? 'Inactive'
@@ -734,6 +753,53 @@ export class LeagueSheetsService {
       plan.playerIds[0] ?? '',
       plan.players[0] ?? '', record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
     ]];
-    await this.gateway.append(this.config.adminSpreadsheetId, "'Transaction History'!A:L", transactionRows, 'RAW');
+    const picks = plan.kind === 'rename' ? new Map<string, DraftPickMove>() : await this.loadDraftPicks();
+    const moved = new Map<string, DraftPickMove>();
+    for (const row of transactionRows) {
+      const pick = picks.get(String(row[6] ?? ''));
+      // The transaction row carries the current name; Draft Picks may predate a rename.
+      if (pick) moved.set(pick.discordId, { ...pick, player: String(row[7] ?? '') || pick.player });
+      // Column M drives the Transaction History yellow conditional-format rule.
+      row.push(pick ? draftPickLabel(pick) : '');
+    }
+    // Status first: the history row is the idempotency marker, so anything written after it
+    // would be skipped by recovery. Rewriting the same status on retry is harmless.
+    if (moved.size) {
+      await this.gateway.batchUpdate(this.config.adminSpreadsheetId, [...moved.values()].map((pick) => ({
+        range: `'Draft Picks'!I${pick.sheetRow}:J${pick.sheetRow}`,
+        values: [[`Moved · ${plan.kind} · ${record.reference}`, pick.discordId]],
+      })), 'RAW');
+    }
+    await this.gateway.append(this.config.adminSpreadsheetId, "'Transaction History'!A:M", transactionRows, 'RAW');
+    return [...moved.values()];
+  }
+
+  // A missing tab (400) means tracking has not been seeded yet; transactions proceed unmarked.
+  private async loadDraftPicks(): Promise<Map<string, DraftPickMove>> {
+    let rows: CellRows;
+    try {
+      rows = await this.gateway.getValues(this.config.adminSpreadsheetId, DRAFT_PICKS_RANGE);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'status' in error && error.status === 400) {
+        console.warn('Draft Picks tab is unavailable; top-4 pick tracking is skipped.');
+        return new Map();
+      }
+      throw error;
+    }
+    const picks = new Map<string, DraftPickMove>();
+    rows.forEach((row, index) => {
+      const discordId = String(row[5] ?? '').trim();
+      if (!discordId) return;
+      picks.set(discordId, {
+        discordId,
+        player: String(row[6] ?? '').trim() || String(row[4] ?? '').trim(),
+        division: String(row[0] ?? '').trim(),
+        team: String(row[1] ?? '').trim(),
+        round: String(row[2] ?? '').trim(),
+        pick: String(row[3] ?? '').trim(),
+        sheetRow: index + 6,
+      });
+    });
+    return picks;
   }
 }

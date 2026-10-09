@@ -12,7 +12,7 @@ import {
   resolveOpenLeagueReconciliationTickets,
   transitionLeagueTransaction,
 } from '../db/repositories/leagueOperations.js';
-import { LeagueSheetDriftError, LeagueSheetInputError, LeagueSheetReconciliationRequiredError } from './leagueSheets.js';
+import { LeagueSheetDriftError, LeagueSheetInputError, LeagueSheetReconciliationRequiredError, type DraftPickMove } from './leagueSheets.js';
 import { createLeagueAuditRepair, getLeagueAuditRepair } from '../db/repositories/leagueAuditRepairs.js';
 import {
   buildLeagueAnnouncement,
@@ -62,7 +62,7 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
       return { publicUpdates: [] };
     },
     apply: async () => { events.push('sheet-apply'); if (sheetFailure) throw sheetFailure; },
-    appendTransactionHistory: async () => { events.push('history'); },
+    appendTransactionHistory: async (): Promise<DraftPickMove[]> => { events.push('history'); return []; },
   };
   const discord = {
     validateMemberAbsent: async (discordId: string, _presentRemedy?: 'drop' | 'self-drop') => { events.push(`discord-absence:${discordId}`); },
@@ -95,6 +95,25 @@ test('every confirmed mutation audits before Discord and completes the durable s
   ]);
   assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   assert.equal(getLeagueTransaction(f.db, result.reference)?.announcementId, 'message');
+  f.db.close();
+});
+
+test('moving a top-4 draft pick sends one best-effort staff note after history', async () => {
+  const f = fixture();
+  const notes: string[] = [];
+  f.sheets.appendTransactionHistory = async () => {
+    f.events.push('history');
+    return [{ discordId: 'two', player: 'Two', division: 'Vanaheim', team: 'B', round: '2', pick: '16', sheetRow: 6 }];
+  };
+  const discord = { ...f.discord, notifyStaff: async (content: string) => { notes.push(content); throw new Error('staff-ops down'); } };
+  const result = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord,
+    buildPlan: (current) => buildTradePlan(current, 'one', 'two'),
+  });
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0], `Top-4 draft pick moved (trade · ${result.reference}):\n**Two** (Vanaheim B R2 (#16))`);
+  assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   f.db.close();
 });
 
@@ -212,17 +231,17 @@ test('replacement selection changes the durable preview fingerprint', () => {
   );
 });
 
-test('trade announcement uses the locked Yggdrasil copy and pings only both team roles', () => {
+test('trade announcement uses the locked Yggdrasil copy, pings only both team roles, and resolves player names', () => {
   const plan = buildTradePlan(snapshot(), 'one', 'two');
   assert.deepEqual(buildLeagueAnnouncement(plan, 'Admin'), {
-    content: '<@&team-a> <@&team-b>',
+    content: '<@&team-a> <@&team-b> <@one> <@two>',
     allowedRoleIds: ['team-a', 'team-b'],
     title: 'Word Travels the Branches',
     description: [
       'Ratatoskr carries news of an agreement between <@&team-a> and <@&team-b>.',
       '',
-      '<@one> leaves <@&team-a> to join <@&team-b>.',
-      '<@two> leaves <@&team-b> to join <@&team-a>.',
+      '**One** (<@one>) leaves <@&team-a> to join <@&team-b>.',
+      '**Two** (<@two>) leaves <@&team-b> to join <@&team-a>.',
     ].join('\n'),
     footer: 'Posted by Admin',
   });
@@ -243,18 +262,20 @@ test('departure announcement uses the locked copy, stored league name, and only 
 
 test('combined exit announcements use one team notice and the locked transaction language', () => {
   const drop = buildDropPlan(snapshot(), 'one', 'free');
+  assert.equal(buildLeagueAnnouncement(drop, 'Admin')?.content, '<@&team-a> <@one> <@free>');
+  assert.deepEqual(buildLeagueAnnouncement(drop, 'Admin')?.allowedRoleIds, ['team-a']);
   assert.equal(buildLeagueAnnouncement(drop, 'Admin')?.description,
-    'Ratatoskr carries word from <@&team-a>.\n\n<@&team-a> drops <@one> into free agency and picks up <@free>.');
+    'Ratatoskr carries word from <@&team-a>.\n\n<@&team-a> drops **One** (<@one>) into free agency and picks up **Free** (<@free>).');
 
   const selfDrop = buildSelfDropPlan(snapshot(), 'one', 'free');
   assert.equal(buildLeagueAnnouncement(selfDrop, 'Admin')?.description,
-    'Ratatoskr carries word from <@&team-a>.\n\n<@one> self-drops from <@&team-a>. <@&team-a> picks up <@free> in their place.');
+    'Ratatoskr carries word from <@&team-a>.\n\n**One** (<@one>) self-drops from <@&team-a>. <@&team-a> picks up **Free** (<@free>) in their place.');
 
   const departed = snapshot();
   departed.discordMembers = departed.discordMembers.filter((member) => member.discordId !== 'one');
   const departure = buildDeparturePlan(departed, 'one', 'free');
   assert.equal(buildLeagueAnnouncement(departure, 'Admin')?.description,
-    'Ratatoskr carries word from <@&team-a>.\n\n**One** leaves <@&team-a> and the YSL server. <@&team-a> picks up <@free> in their place.');
+    'Ratatoskr carries word from <@&team-a>.\n\n**One** leaves <@&team-a> and the YSL server. <@&team-a> picks up **Free** (<@free>) in their place.');
 });
 
 test('absent self-drop announcement uses the stored league name instead of a dead Discord mention', () => {

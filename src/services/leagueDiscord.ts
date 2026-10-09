@@ -4,6 +4,7 @@ import {
   RESTJSONErrorCodes,
   type Guild,
   type GuildMember,
+  type GuildTextBasedChannel,
 } from 'discord.js';
 import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange } from '../domain/leagueOperations.js';
 import type { LeagueAnnouncement, LeagueDiscordPort, LeagueRoleState } from './leagueTransactions.js';
@@ -56,7 +57,13 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     private readonly guild: Guild,
     private readonly transactionsChannelId: string,
     private readonly memberReadOptions: MemberReadOptions = {},
+    private readonly staffChannel?: () => Promise<GuildTextBasedChannel>,
   ) {}
+
+  async notifyStaff(content: string): Promise<void> {
+    if (!this.staffChannel) return;
+    await (await this.staffChannel()).send({ content, allowedMentions: { parse: [] } });
+  }
 
   private currentMembers(): DiscordLeagueMember[] {
     return this.guild.members.cache.filter((member) => !member.user.bot).map(roleSnapshot);

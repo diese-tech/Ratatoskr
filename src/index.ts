@@ -15,7 +15,7 @@ import { reconcileCancelledScoutSignupPosts } from './services/scoutCancel.js';
 import { reconcileFinishedScoutPosts } from './services/scoutFinish.js';
 import { reconcilePostingScoutSetups } from './services/scoutCreate.js';
 import { reconcilePendingScoutPublishes, reconcilePendingScoutRosterUpdates } from './services/scoutPublish.js';
-import { reportOperationalError } from './services/operationalErrors.js';
+import { getValidatedStaffChannel, reportOperationalError } from './services/operationalErrors.js';
 import { handleInteractionError, leagueTransactionReconciliationContext } from './services/interactionErrors.js';
 import { startScoutNotificationWorker } from './services/scoutNotifications.js';
 import { processDueScoutLifecycleCleanups } from './services/scoutLifecycleCleanup.js';
@@ -114,7 +114,8 @@ client.once('clientReady', async () => {
   console.log('Guild slash commands registered.');
   const leagueGuild = await client.guilds.fetch(env.DISCORD_GUILD_ID);
   const leagueSheets = new LeagueSheetsService(leagueSheetsConnection.gateway, leagueSheetsConnection.config);
-  const leagueDiscord = new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId);
+  const leagueDiscord = new DiscordLeagueGateway(leagueGuild, leagueConfig.transactionsChannelId, {},
+    () => getValidatedStaffChannel(client, db, leagueGuild.id));
   const leagueRecovered = await runIsolatedStartupRecovery(
     'League transaction recovery',
     async () => {
