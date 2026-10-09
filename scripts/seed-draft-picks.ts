@@ -1,7 +1,9 @@
 // Seeds the Admin 'Draft Picks' tab (each captain's first four draft picks, resolved to Discord IDs)
 // and backfills Transaction History column M for moves made before tracking existed.
 // Dry run by default; pass --write to apply. Re-running keeps staff-entered IDs.
-//   railway run npx tsx scripts/seed-draft-picks.ts [--write]
+//   railway run npx tsx scripts/seed-draft-picks.ts [--write] [--since=YYYY-MM-DD] [--allow-partial]
+// --since: only backfill history on/after the draft (use when history predates this season's draft).
+// --allow-partial: write even if fewer than 3 divisions x 8 teams x 4 picks were parsed.
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import {
@@ -13,6 +15,9 @@ type Rows = (string | number | boolean | null)[][];
 type SheetMeta = { properties: { sheetId: number; title: string }; conditionalFormats?: Array<{ booleanRule?: { condition?: { values?: Array<{ userEnteredValue?: string }> } } }> };
 
 const write = process.argv.includes('--write');
+const allowPartial = process.argv.includes('--allow-partial');
+const since = process.argv.find((arg) => arg.startsWith('--since='))?.slice('--since='.length) ?? '';
+const EXPECTED_PICKS = DRAFT_DIVISIONS.length * 8 * 4;
 const adminId = process.env.YSL_ADMIN_SPREADSHEET_ID!;
 const publicId = process.env.YSL_PUBLIC_SPREADSHEET_ID!;
 const auth = new GoogleAuth({
@@ -68,11 +73,12 @@ async function main() {
     const pick = byId.get(String(row[6] ?? '').trim());
     // Renames are not roster moves (the runtime skips them too).
     return pick && String(row[1] ?? '').trim() !== 'rename' && !String(row[12] ?? '').trim()
+      && String(row[2] ?? '').trim() >= since
       ? [{ row: index + 6, reference: String(row[0]), player: String(row[7]), label: draftPickLabel({ ...pick, round: String(pick.round) }) }]
       : [];
   });
 
-  console.log(`Parsed ${picks.length} top-4 picks (expected ${DRAFT_DIVISIONS.length * 8 * 4}).`);
+  console.log(`Parsed ${picks.length} top-4 picks (expected ${EXPECTED_PICKS}).`);
   const unresolved = picks.filter((pick) => !pick.discordId);
   console.log(`\nUnresolved (${unresolved.length}) — type the Discord ID into column F of Draft Picks, then re-run:`);
   for (const pick of unresolved) console.log(`  ${pick.division} ${pick.team} R${pick.round} (#${pick.pick}): ${pick.draftName}`);
@@ -83,6 +89,10 @@ async function main() {
   for (const mark of historyMarks) console.log(`  row ${mark.row} ${mark.reference} ${mark.player}: ${mark.label}`);
 
   if (!write) { console.log('\nDry run. Re-run with --write to apply.'); return; }
+  // A short parse would drop protected picks (and their staff-entered IDs) from the tab.
+  if (picks.length !== EXPECTED_PICKS && !allowPartial) {
+    throw new Error(`Parsed ${picks.length} picks, expected ${EXPECTED_PICKS}. Check the draft tabs, or pass --allow-partial.`);
+  }
 
   if (!picksTabExists) {
     await call(`${base}/${adminId}:batchUpdate`, { requests: [{ addSheet: { properties: { title: 'Draft Picks' } } }] });
