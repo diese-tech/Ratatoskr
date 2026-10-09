@@ -159,3 +159,12 @@ test('parse validation rejects team headers that are not roster franchises', () 
     Array.from({ length: 8 }, (_, team) => [division, `T${team}`, 'r', `T${team} XD`, `id-${division}-${team}`, 'p']));
   assert.deepEqual(draftParseProblems(picks, rosters), ['Alfheim: "Teh Sewer" is not a team in Current Rosters']);
 });
+
+test('a slot with a different drafted player does not keep the old ID or status', () => {
+  const [pick] = resolveDraftPicks(
+    [{ division: 'Alfheim', team: 'The Sewer', round: 1, pick: '4', draftName: 'NewSeason' }],
+    { vetting: [], memberDirectory: [], nameHistory: [], rosters: [] },
+    [['Alfheim', 'The Sewer', '1', '4', 'LastSeason', 'id-old', '', 'Manual', 'Moved · drop · YSL-1', 'id-old']],
+  );
+  assert.deepEqual([pick?.discordId, pick?.matchSource, pick?.status], ['', 'UNRESOLVED', 'Unknown']);
+});

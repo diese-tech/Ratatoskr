@@ -61,7 +61,10 @@ function uniqueIndex(entries: Array<[string, string]>): Map<string, string> {
 // Staff corrections win when re-seeding: an existing Discord ID (typed in by hand) and a
 // runtime 'Moved · <move> · <reference>' status from the current tab are kept.
 export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, existing: Rows = []): ResolvedDraftPick[] {
-  const previous = new Map(existing.map((row) => [`${row[0]}|${row[1]}|${row[2]}`, row]));
+  // Keyed by draft name too, so reusing the draft tabs next season never carries a slot's old player over.
+  const slotKey = (division: unknown, team: unknown, round: unknown, draftName: unknown) =>
+    `${division}|${team}|${round}|${normalizeName(String(draftName ?? ''))}`;
+  const previous = new Map(existing.map((row) => [slotKey(row[0], row[1], row[2], row[4]), row]));
   const byUsername = uniqueIndex(sources.memberDirectory.map((row) => [String(row[1] ?? '').trim().toLowerCase(), String(row[0] ?? '').trim()]));
   const vettingDiscordName = uniqueIndex(sources.vetting.map((row) => [normalizeName(String(row[2] ?? '')), String(row[3] ?? '').trim().toLowerCase()]));
   const byLeagueName = uniqueIndex(sources.nameHistory.flatMap((row) => [
@@ -90,7 +93,7 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
       ['Player Name History', byLeagueName.get(key)],
       ['Member Directory name', byDisplayName.get(key)],
     ];
-    const kept = previous.get(`${pick.division}|${pick.team}|${pick.round}`);
+    const kept = previous.get(slotKey(pick.division, pick.team, pick.round, pick.draftName));
     const keptId = String(kept?.[5] ?? '').trim();
     const keptStatus = String(kept?.[8] ?? '').trim();
     const keptStatusId = String(kept?.[9] ?? '').trim();
