@@ -757,7 +757,8 @@ export class LeagueSheetsService {
     const moved = new Map<string, DraftPickMove>();
     for (const row of transactionRows) {
       const pick = picks.get(String(row[6] ?? ''));
-      if (pick) moved.set(pick.discordId, pick);
+      // The transaction row carries the current name; Draft Picks may predate a rename.
+      if (pick) moved.set(pick.discordId, { ...pick, player: String(row[7] ?? '') || pick.player });
       // Column M drives the Transaction History yellow conditional-format rule.
       row.push(pick ? draftPickLabel(pick) : '');
     }

@@ -71,13 +71,15 @@ async function main() {
     fresh ? [] : existing ?? [],
   );
   const byId = new Map(picks.filter((pick) => pick.discordId).map((pick) => [pick.discordId, pick]));
+  // Recompute column M for every in-season row so ID corrections also clear stale marks.
+  // Renames are not roster moves (the runtime skips them too).
   const historyMarks = history!.flatMap((row, index) => {
-    const pick = byId.get(String(row[6] ?? '').trim());
-    // Renames are not roster moves (the runtime skips them too).
-    return pick && String(row[1] ?? '').trim() !== 'rename' && !String(row[12] ?? '').trim()
-      && String(row[2] ?? '').trim() >= since
-      ? [{ row: index + 6, reference: String(row[0]), player: String(row[7]), label: draftPickLabel({ ...pick, round: String(pick.round) }) }]
-      : [];
+    if (String(row[2] ?? '').trim() < since) return [];
+    const pick = String(row[1] ?? '').trim() === 'rename' ? undefined : byId.get(String(row[6] ?? '').trim());
+    const label = pick ? draftPickLabel({ ...pick, round: String(pick.round) }) : '';
+    return label === String(row[12] ?? '').trim()
+      ? []
+      : [{ row: index + 6, reference: String(row[0]), player: String(row[7]), label }];
   });
 
   console.log(`Parsed ${picks.length} top-4 picks (expected ${EXPECTED_PICKS}).`);
@@ -87,8 +89,8 @@ async function main() {
   const moved = picks.filter((pick) => pick.status.startsWith('Moved'));
   console.log(`\nMoved top-4 picks (${moved.length}) — rows that will be yellow:`);
   for (const pick of moved) console.log(`  ${pick.division} ${pick.team} R${pick.round} (#${pick.pick}): ${pick.draftName} → ${pick.status}`);
-  console.log(`\nTransaction History rows to mark (${historyMarks.length}):`);
-  for (const mark of historyMarks) console.log(`  row ${mark.row} ${mark.reference} ${mark.player}: ${mark.label}`);
+  console.log(`\nTransaction History column M changes (${historyMarks.length}):`);
+  for (const mark of historyMarks) console.log(`  row ${mark.row} ${mark.reference} ${mark.player}: ${mark.label || '(clear stale mark)'}`);
 
   if (!write) { console.log('\nDry run. Re-run with --write to apply.'); return; }
   // A short parse would drop protected picks (and their staff-entered IDs) from the tab.

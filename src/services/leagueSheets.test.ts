@@ -334,7 +334,7 @@ test('history marks top-4 draft picks in column M and records the move on Draft 
   const { gateway, service } = serviceFixture();
   gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
     ['Vanaheim', 'Dream Walkers', '1', '3', 'Uno', 'other', 'Other', 'Member Directory', 'On drafted team'],
-    ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two', 'Member Directory', 'On drafted team'],
+    ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two Before Rename', 'Member Directory', 'On drafted team'],
   ]);
   const loaded = await service.load(members, 'free-agent');
   const moves = await service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
@@ -345,7 +345,7 @@ test('history marks top-4 draft picks in column M and records the move on Draft 
     ['one', ''],
     ['two', 'Vanaheim The Sewer R2 (#16)'],
   ]);
-  assert.deepEqual(moves.map((move) => move.discordId), ['two']);
+  assert.deepEqual(moves.map((move) => [move.discordId, move.player]), [['two', 'Two']]);
   assert.deepEqual(gateway.writes.at(-1)?.updates, [
     { range: "'Draft Picks'!I7:J7", values: [['Moved · trade · YSL-TRX-TRADE', 'two']] },
   ]);
