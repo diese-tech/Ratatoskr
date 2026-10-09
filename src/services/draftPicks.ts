@@ -118,14 +118,19 @@ export function draftPickRow(pick: ResolvedDraftPick): Cell[] {
 }
 
 // Each division must yield 8 distinct teams with rounds 1-4 exactly once; a stray or duplicated
-// Cap: block can otherwise hide a missing team behind a correct total.
-export function draftParseProblems(picks: DraftPick[]): string[] {
+// Cap: block can otherwise hide a missing team behind a correct total. With rosters, team names
+// must also be that division's franchises (or team roles), so a mistyped header cannot replace one.
+export function draftParseProblems(picks: DraftPick[], rosters: Rows = []): string[] {
   return DRAFT_DIVISIONS.flatMap((division) => {
     const teams = new Map<string, number[]>();
     for (const pick of picks.filter((candidate) => candidate.division === division))
       teams.set(pick.team, [...(teams.get(pick.team) ?? []), pick.round]);
     const problems = teams.size === 8 ? [] : [`${division}: ${teams.size} teams parsed, expected 8`];
     if (teams.has('')) problems.push(`${division}: a Cap: block has a blank team header`);
+    const known = new Set(rosters.filter((row) => String(row[0] ?? '').trim() === division)
+      .flatMap((row) => [String(row[1] ?? '').trim(), String(row[3] ?? '').trim()]));
+    if (known.size) for (const team of teams.keys())
+      if (team && !known.has(team)) problems.push(`${division}: "${team}" is not a team in Current Rosters`);
     for (const [team, rounds] of teams)
       if ([...rounds].sort().join() !== '1,2,3,4') problems.push(`${division} ${team || '(blank team)'}: rounds ${rounds.join(',')}`);
     return problems;

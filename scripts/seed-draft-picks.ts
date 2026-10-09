@@ -90,7 +90,7 @@ async function main() {
 
   if (!write) { console.log('\nDry run. Re-run with --write to apply.'); return; }
   // A short parse would drop protected picks (and their staff-entered IDs) from the tab.
-  const problems = draftParseProblems(picks);
+  const problems = draftParseProblems(picks, rosters!);
   if ((picks.length !== EXPECTED_PICKS || problems.length) && !allowPartial) {
     throw new Error(`Draft parse is incomplete (${picks.length}/${EXPECTED_PICKS}): ${problems.join('; ') || 'count mismatch'}. Check the draft tabs, or pass --allow-partial.`);
   }

@@ -149,3 +149,13 @@ test('a manually entered ID keeps its own pre-tracking move record after the pla
   assert.equal(pick?.matchSource, 'Manual');
   assert.equal(pick?.status, 'Moved · before tracking · now not rostered');
 });
+
+test('parse validation rejects team headers that are not roster franchises', () => {
+  const picks = ['Vanaheim', 'Alfheim', 'Svartalfheim'].flatMap((division) =>
+    Array.from({ length: 8 }, (_, team) => [1, 2, 3, 4].map((round) => ({
+      division, team: division === 'Alfheim' && team === 0 ? 'Teh Sewer' : `T${team}`, round, pick: '', draftName: 'x',
+    }))).flat());
+  const rosters = ['Vanaheim', 'Alfheim', 'Svartalfheim'].flatMap((division) =>
+    Array.from({ length: 8 }, (_, team) => [division, `T${team}`, 'r', `T${team} XD`, `id-${division}-${team}`, 'p']));
+  assert.deepEqual(draftParseProblems(picks, rosters), ['Alfheim: "Teh Sewer" is not a team in Current Rosters']);
+});
