@@ -23,6 +23,8 @@ import {
   type LeagueTransactionRecord,
   type LoadedLeagueSnapshot,
   type PreparedLeagueSheetMutation,
+  type DraftPickMove,
+  draftPickLabel,
 } from './leagueSheets.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
 import {
@@ -57,7 +59,7 @@ export interface LeagueSheetsPort {
     record: LeagueTransactionRecord,
     prepared: PreparedLeagueSheetMutation,
   ): Promise<void>;
-  appendTransactionHistory(plan: LeagueMutationPlan, record: LeagueTransactionRecord): Promise<void>;
+  appendTransactionHistory(plan: LeagueMutationPlan, record: LeagueTransactionRecord): Promise<DraftPickMove[] | void>;
 }
 
 export interface LeagueDiscordPort {
@@ -68,6 +70,7 @@ export interface LeagueDiscordPort {
   applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
   rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState, applied: LeagueRoleState): Promise<void>;
   findAnnouncement(reference: string): Promise<string | undefined>;
+  notifyStaff?(content: string): Promise<void>;
   announce(announcement: LeagueAnnouncement, reference: string): Promise<string>;
 }
 
@@ -248,69 +251,64 @@ function expectedRoleState(
 
 export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: string): LeagueAnnouncement | undefined {
   const mention = (roleId: string) => `<@&${roleId}>`;
+  // Embed user mentions only resolve for members the viewer's client has cached (mobile often has not).
+  // Mentioning present players in content ships their user objects with the message (no ping:
+  // allowedMentions only lists roles), and the bold league name keeps a readable label regardless.
+  const present = new Set(plan.discordRoleChanges.map((change) => change.discordId));
+  const player = (index: number) => present.has(plan.playerIds[index]!)
+    ? `**${plan.players[index]}** (<@${plan.playerIds[index]}>)`
+    : `**${plan.players[index]}**`;
+  const content = (roleIds: string[]) => [
+    ...roleIds.map(mention),
+    ...plan.playerIds.filter((id) => present.has(id)).map((id) => `<@${id}>`),
+  ].join(' ');
   if (plan.kind === 'rename') return undefined;
   if (plan.kind === 'trade') {
     const [firstTeam, secondTeam] = plan.teams;
     return {
-      content: `${mention(firstTeam!.teamRoleId)} ${mention(secondTeam!.teamRoleId)}`,
+      content: content([firstTeam!.teamRoleId, secondTeam!.teamRoleId]),
       allowedRoleIds: [firstTeam!.teamRoleId, secondTeam!.teamRoleId],
       title: 'Word Travels the Branches',
       description: [
         `Ratatoskr carries news of an agreement between ${mention(firstTeam!.teamRoleId)} and ${mention(secondTeam!.teamRoleId)}.`,
         '',
-        `<@${plan.playerIds[0]}> leaves ${mention(firstTeam!.teamRoleId)} to join ${mention(secondTeam!.teamRoleId)}.`,
-        `<@${plan.playerIds[1]}> leaves ${mention(secondTeam!.teamRoleId)} to join ${mention(firstTeam!.teamRoleId)}.`,
+        `${player(0)} leaves ${mention(firstTeam!.teamRoleId)} to join ${mention(secondTeam!.teamRoleId)}.`,
+        `${player(1)} leaves ${mention(secondTeam!.teamRoleId)} to join ${mention(firstTeam!.teamRoleId)}.`,
       ].join('\n'),
       footer: `Posted by ${actorName}`,
     };
   }
   const team = plan.teams[0]!;
-  if (plan.kind === 'departure') {
-    const replacement = plan.players[1] && plan.playerIds[1]
-      ? ` ${mention(team.teamRoleId)} picks up <@${plan.playerIds[1]}> in their place.`
-      : '';
-    return {
-      content: mention(team.teamRoleId),
-      allowedRoleIds: [team.teamRoleId],
-      title: 'Word Travels the Branches',
-      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n**${plan.players[0]}** leaves ${mention(team.teamRoleId)} and the YSL server.${replacement}`,
-      footer: `Posted by ${actorName}`,
-    };
-  }
-  if (plan.kind === 'self-drop') {
-    const outgoingPlayer = plan.discordRoleChanges.some((change) => change.discordId === plan.playerIds[0])
-      ? `<@${plan.playerIds[0]}>`
-      : `**${plan.players[0]}**`;
-    const replacement = plan.playerIds[1]
-      ? ` ${mention(team.teamRoleId)} picks up <@${plan.playerIds[1]}> in their place.`
-      : '';
-    return {
-      content: mention(team.teamRoleId),
-      allowedRoleIds: [team.teamRoleId],
-      title: 'Word Travels the Branches',
-      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${outgoingPlayer} self-drops from ${mention(team.teamRoleId)}.${replacement}`,
-      footer: `Posted by ${actorName}`,
-    };
-  }
-  if (plan.kind === 'drop' && plan.playerIds[1]) {
-    return {
-      content: mention(team.teamRoleId),
-      allowedRoleIds: [team.teamRoleId],
-      title: 'Word Travels the Branches',
-      description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${mention(team.teamRoleId)} drops <@${plan.playerIds[0]}> into free agency and picks up <@${plan.playerIds[1]}>.`,
-      footer: `Posted by ${actorName}`,
-    };
-  }
-  const line = plan.kind === 'drop'
-    ? `<@${plan.playerIds[0]}> leaves ${mention(team.teamRoleId)} and enters free agency.`
-    : `<@${plan.playerIds[0]}> leaves free agency to join ${mention(team.teamRoleId)}.`;
+  const replacement = plan.playerIds[1]
+    ? ` ${mention(team.teamRoleId)} picks up ${player(1)} in their place.`
+    : '';
+  let line: string;
+  if (plan.kind === 'departure') line = `${player(0)} leaves ${mention(team.teamRoleId)} and the YSL server.${replacement}`;
+  else if (plan.kind === 'self-drop') line = `${player(0)} self-drops from ${mention(team.teamRoleId)}.${replacement}`;
+  else if (plan.kind === 'drop' && plan.playerIds[1]) {
+    line = `${mention(team.teamRoleId)} drops ${player(0)} into free agency and picks up ${player(1)}.`;
+  } else if (plan.kind === 'drop') line = `${player(0)} leaves ${mention(team.teamRoleId)} and enters free agency.`;
+  else line = `${player(0)} leaves free agency to join ${mention(team.teamRoleId)}.`;
   return {
-    content: mention(team.teamRoleId),
+    content: content([team.teamRoleId]),
     allowedRoleIds: [team.teamRoleId],
     title: 'Word Travels the Branches',
     description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${line}`,
     footer: `Posted by ${actorName}`,
   };
+}
+
+// ponytail: best-effort, no durable retry; the Transaction History column M / yellow row is the record.
+async function notifyDraftPickMoves(
+  discord: LeagueDiscordPort, plan: LeagueMutationPlan, reference: string, moves: DraftPickMove[] | void,
+): Promise<void> {
+  if (!moves?.length || !discord.notifyStaff) return;
+  const lines = moves.map((move) => `**${move.player}** (${draftPickLabel(move)})`);
+  try {
+    await discord.notifyStaff([`Top-4 draft pick moved (${plan.kind} · ${reference}):`, ...lines].join('\n'));
+  } catch (error) {
+    console.error(`Top-4 draft pick staff note failed for ${reference}`, error);
+  }
 }
 
 async function rollbackDiscord(
@@ -477,7 +475,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       }
     }
     try {
-      await input.sheets.appendTransactionHistory(plan, record);
+      await notifyDraftPickMoves(input.discord, plan, reference, await input.sheets.appendTransactionHistory(plan, record));
     } catch (error) {
       throw errorWithReference(new Error(`Roster transaction completed, but its history row is pending recovery: ${String(error)}`), reference);
     }
@@ -551,7 +549,7 @@ export async function reconcilePendingLeagueTransactions(input: {
         record.announcementId = announcementId;
         transitionLeagueTransaction(input.db, transaction.reference, 'announcement_pending', 'announcement_pending', { announcementId });
       } else if (announcementId) record.announcementId = announcementId;
-      await input.sheets.appendTransactionHistory(plan, record);
+      await notifyDraftPickMoves(input.discord, plan, transaction.reference, await input.sheets.appendTransactionHistory(plan, record));
       transitionLeagueTransaction(input.db, transaction.reference, 'announcement_pending', 'completed', { announcementId });
     } catch (error) {
       console.error(`League transaction recovery remains pending for ${transaction.reference}`, error);

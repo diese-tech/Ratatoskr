@@ -32,6 +32,7 @@ import { checkLeagueMember, scheduleDirtyLeagueCheck, startLeaguePanelHeartbeat 
 import { refreshLeagueOpsPanel, runLeagueAudit, type LeagueAuditCardPort } from './leagueAudit.js';
 import { createLeagueAuditCardPort } from './leagueAuditDiscord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
+import { getValidatedStaffChannel } from './operationalErrors.js';
 import type { LeagueSheetsService } from './leagueSheets.js';
 import { registerLeagueRepairRecovery, reconcileLeagueRepairRecord } from './leagueRepairRecovery.js';
 export type LeagueRepairIntent = {
@@ -60,7 +61,8 @@ export function createLeagueOpsRuntime(input: {
 }): { worker: LeagueJobWorker; stop(): void } {
   const { db, operationScope, guild, sheets, freeAgentRoleId } = input;
   const guildId = guild.id;
-  const discord = input.discord ?? new DiscordLeagueGateway(guild, input.transactionsChannelId);
+  const discord = input.discord ?? new DiscordLeagueGateway(guild, input.transactionsChannelId, {},
+    () => getValidatedStaffChannel(input.client, db, guildId));
   const cards = input.cards ?? createLeagueAuditCardPort(input.client, db, guildId);
   registerLeagueRepairRecovery({ db, operationScope, guildId, sheets, members: discord, freeAgentRoleId });
   let worker: LeagueJobWorker;

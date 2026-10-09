@@ -55,7 +55,7 @@ Trade notices use the locked public structure:
 >
 > Posted by [admin]
 
-The message content pings the two configured team roles. The public card contains no emoji, database reference, raw audit detail, or service-account information.
+The message content pings the two configured team roles and also lists present players' user mentions, unpinged (`allowedMentions` names only the roles), so Discord delivers their user data and clients can render the embed mentions. Player references in the card read `**League Name** (@mention)` so a name is visible even where a client shows a raw ID. The public card contains no emoji, database reference, raw audit detail, or service-account information.
 
 Departure notices use the stored league name because the departed player is no longer a selectable Discord member:
 
