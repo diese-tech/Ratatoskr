@@ -65,7 +65,7 @@ async function main() {
 
   const picks = resolveDraftPicks(
     DRAFT_DIVISIONS.flatMap((division, index) => parseDraftTab(division, draftTabs[index]!)),
-    { vetting: vetting!, memberDirectory: memberDirectory!, nameHistory: nameHistory!, rosters: rosters! },
+    { vetting: vetting!, memberDirectory: memberDirectory!, nameHistory: nameHistory!, rosters: rosters!, history: history!, since },
     existing ?? [],
   );
   const byId = new Map(picks.filter((pick) => pick.discordId).map((pick) => [pick.discordId, pick]));

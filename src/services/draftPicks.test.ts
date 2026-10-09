@@ -80,3 +80,29 @@ test('a division-suffixed draft header still counts as the drafted team', () => 
   );
   assert.equal(pick?.status, 'On drafted team');
 });
+
+test('moves stay recorded after a return: kept statuses and qualifying history both win over the roster', () => {
+  const picks = [
+    { division: 'Alfheim', team: 'The Sewer', round: 1, pick: '4', draftName: 'Back' },
+    { division: 'Alfheim', team: 'The Sewer', round: 2, pick: '13', draftName: 'Returned' },
+  ];
+  const resolved = resolveDraftPicks(picks, {
+    vetting: [], memberDirectory: [],
+    nameHistory: [['id-back', 'Back', 'Back'], ['id-ret', 'Returned', 'Returned']],
+    rosters: [
+      ['Alfheim', 'The Sewer', 'r', 'The Sewer AD', 'id-back', 'Back'],
+      ['Alfheim', 'The Sewer', 'r', 'The Sewer AD', 'id-ret', 'Returned'],
+    ],
+    history: [
+      ['YSL-OLD', 'drop', '2026-09-01', 'Alfheim', 'The Sewer', 'Free Agents', 'id-ret', 'Returned'],
+      ['YSL-REN', 'rename', '2026-10-06', 'Alfheim', '', '', 'id-ret', 'Returned'],
+      ['YSL-1', 'drop', '2026-10-06', 'Alfheim', 'The Sewer', 'Free Agents', 'id-ret', 'Returned'],
+      ['YSL-2', 'pickup', '2026-10-07', 'Alfheim', 'Free Agents', 'The Sewer', 'id-ret', 'Returned'],
+    ],
+    since: '2026-10-01',
+  }, [['Alfheim', 'The Sewer', '1', '4', 'Back', 'id-back', 'Back', 'Player Name History', 'Moved · before tracking · now not rostered']]);
+  assert.deepEqual(resolved.map((pick) => pick.status), [
+    'Moved · before tracking · now not rostered',
+    'Moved · pickup · YSL-2',
+  ]);
+});

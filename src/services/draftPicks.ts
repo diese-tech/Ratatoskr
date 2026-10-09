@@ -42,6 +42,8 @@ export type NameSources = {
   memberDirectory: Rows;  // Member Directory!A6:D  (Discord ID, Username, Profile Name, Server Display Name)
   nameHistory: Rows;      // Player Name History!A6:C (Discord ID, Current League Name, Known Name)
   rosters: Rows;          // Current Rosters!A6:F   (Division, Franchise, Team Role ID, Team, Discord ID, Player)
+  history?: Rows;         // Transaction History!A6:M (Reference, Move, Effective Date, ..., Discord ID in G)
+  since?: string;         // ignore history before this YYYY-MM-DD (the draft)
 };
 
 function uniqueIndex(entries: Array<[string, string]>): Map<string, string> {
@@ -75,6 +77,11 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
     division: String(row[0] ?? '').trim(), franchise: String(row[1] ?? '').trim(), teamRole: String(row[3] ?? '').trim(),
   }]));
 
+  const historyMoves = new Map<string, string>();
+  for (const row of sources.history ?? []) {
+    const [reference, move, date, discordId] = [row[0], row[1], row[2], row[6]].map((cell) => String(cell ?? '').trim());
+    if (discordId && move && move !== 'rename' && date >= (sources.since ?? '')) historyMoves.set(discordId, `Moved · ${move} · ${reference}`);
+  }
   return picks.map((pick) => {
     const key = normalizeName(pick.draftName);
     const username = vettingDiscordName.get(key);
@@ -91,7 +98,9 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
       ? [String(kept?.[7] ?? '').trim() === 'UNRESOLVED' ? 'Manual' : String(kept?.[7] ?? '').trim() || 'Manual', keptId]
       : found;
     const current = discordId ? rostered.get(discordId) : undefined;
-    const status = keptStatus.startsWith('Moved ·') && !keptStatus.includes('before tracking') ? keptStatus
+    // Once moved, always moved: a later return to the drafted team must not erase the record.
+    const status = keptStatus.startsWith('Moved ·') ? keptStatus
+      : discordId && historyMoves.has(discordId) ? historyMoves.get(discordId)!
       : !discordId ? 'Unknown'
       // Draft headers name the franchise today; accept the division-suffixed team role too.
       : current?.division === pick.division && [current.franchise, current.teamRole].includes(pick.team) ? 'On drafted team'
