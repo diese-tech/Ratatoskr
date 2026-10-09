@@ -20,6 +20,9 @@ const allowPartial = process.argv.includes('--allow-partial');
 const fresh = process.argv.includes('--fresh');
 const since = process.argv.find((arg) => arg.startsWith('--since='))?.slice('--since='.length) ?? '';
 const EXPECTED_PICKS = DRAFT_DIVISIONS.length * 8 * 4;
+if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new Error(`--since must be YYYY-MM-DD, got "${since}".`);
+// A new season without a cutoff would relabel last season's history against this draft.
+if (fresh && write && !since) throw new Error('--fresh --write requires --since=<draft date>.');
 const adminId = process.env.YSL_ADMIN_SPREADSHEET_ID!;
 const publicId = process.env.YSL_PUBLIC_SPREADSHEET_ID!;
 const auth = new GoogleAuth({
