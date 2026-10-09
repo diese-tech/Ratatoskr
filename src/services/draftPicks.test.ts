@@ -178,3 +178,12 @@ test('parse validation counts a franchise and its team-role alias as one team', 
     }))).flat());
   assert.deepEqual(draftParseProblems(picks, rosters), ['Alfheim: 7 teams parsed, expected 8', 'Alfheim T0: rounds 1,2,3,4,1,2,3,4']);
 });
+
+test('a team-role alias header keeps the existing franchise row', () => {
+  const [pick] = resolveDraftPicks(
+    [{ division: 'Svartalfheim', team: 'The Sewer SD', round: 2, pick: '16', draftName: 'Nomatch' }],
+    { vetting: [], memberDirectory: [], nameHistory: [], rosters: [['Svartalfheim', 'The Sewer', 'r', 'The Sewer SD', 'id-cap', 'Cap']] },
+    [['Svartalfheim', 'The Sewer', '2', '16', 'Nomatch', 'id-typed', '', 'Manual', 'Moved · drop · YSL-1', 'id-typed']],
+  );
+  assert.deepEqual([pick?.team, pick?.discordId, pick?.status], ['The Sewer', 'id-typed', 'Moved · drop · YSL-1']);
+});

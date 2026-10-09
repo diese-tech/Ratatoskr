@@ -64,7 +64,12 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
   // Keyed by draft name too, so reusing the draft tabs next season never carries a slot's old player over.
   const slotKey = (division: unknown, team: unknown, round: unknown, draftName: unknown) =>
     `${division}|${team}|${round}|${normalizeName(String(draftName ?? ''))}`;
-  const previous = new Map(existing.map((row) => [slotKey(row[0], row[1], row[2], row[4]), row]));
+  // Store and match teams by franchise: a "The Sewer SD" header and a "The Sewer" row are one slot.
+  const franchiseOf = new Map(sources.rosters.flatMap((row) => [String(row[1] ?? '').trim(), String(row[3] ?? '').trim()]
+    .map((name) => [`${String(row[0] ?? '').trim()}|${name}`, String(row[1] ?? '').trim()] as [string, string])));
+  const franchise = (division: unknown, team: unknown) =>
+    franchiseOf.get(`${String(division ?? '').trim()}|${String(team ?? '').trim()}`) ?? String(team ?? '').trim();
+  const previous = new Map(existing.map((row) => [slotKey(row[0], franchise(row[0], row[1]), row[2], row[4]), row]));
   const byUsername = uniqueIndex(sources.memberDirectory.map((row) => [String(row[1] ?? '').trim().toLowerCase(), String(row[0] ?? '').trim()]));
   const vettingDiscordName = uniqueIndex(sources.vetting.map((row) => [normalizeName(String(row[2] ?? '')), String(row[3] ?? '').trim().toLowerCase()]));
   const byLeagueName = uniqueIndex(sources.nameHistory.flatMap((row) => [
@@ -85,7 +90,8 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
     const [reference, move, date, discordId] = [row[0], row[1], row[2], row[6]].map((cell) => String(cell ?? '').trim());
     if (discordId && move && move !== 'rename' && date >= (sources.since ?? '')) historyMoves.set(discordId, `Moved · ${move} · ${reference}`);
   }
-  return picks.map((pick) => {
+  return picks.map((drafted) => {
+    const pick = { ...drafted, team: franchise(drafted.division, drafted.team) };
     const key = normalizeName(pick.draftName);
     const username = vettingDiscordName.get(key);
     const candidates: Array<[string, string | undefined]> = [
