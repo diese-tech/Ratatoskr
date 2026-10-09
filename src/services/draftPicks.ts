@@ -125,15 +125,21 @@ export function draftPickRow(pick: ResolvedDraftPick): Cell[] {
 // must also be that division's franchises (or team roles), so a mistyped header cannot replace one.
 export function draftParseProblems(picks: DraftPick[], rosters: Rows = []): string[] {
   return DRAFT_DIVISIONS.flatMap((division) => {
+    // Team-role aliases ("The Sewer SD") count as their franchise ("The Sewer").
+    const franchiseOf = new Map(rosters.filter((row) => String(row[0] ?? '').trim() === division)
+      .flatMap((row) => [String(row[1] ?? '').trim(), String(row[3] ?? '').trim()]
+        .map((name) => [name, String(row[1] ?? '').trim()] as [string, string])));
     const teams = new Map<string, number[]>();
-    for (const pick of picks.filter((candidate) => candidate.division === division))
-      teams.set(pick.team, [...(teams.get(pick.team) ?? []), pick.round]);
-    const problems = teams.size === 8 ? [] : [`${division}: ${teams.size} teams parsed, expected 8`];
+    const problems: string[] = [];
+    for (const pick of picks.filter((candidate) => candidate.division === division)) {
+      if (franchiseOf.size && pick.team && !franchiseOf.has(pick.team)
+        && !problems.includes(`${division}: "${pick.team}" is not a team in Current Rosters`))
+        problems.push(`${division}: "${pick.team}" is not a team in Current Rosters`);
+      const team = franchiseOf.get(pick.team) ?? pick.team;
+      teams.set(team, [...(teams.get(team) ?? []), pick.round]);
+    }
+    if (teams.size !== 8) problems.unshift(`${division}: ${teams.size} teams parsed, expected 8`);
     if (teams.has('')) problems.push(`${division}: a Cap: block has a blank team header`);
-    const known = new Set(rosters.filter((row) => String(row[0] ?? '').trim() === division)
-      .flatMap((row) => [String(row[1] ?? '').trim(), String(row[3] ?? '').trim()]));
-    if (known.size) for (const team of teams.keys())
-      if (team && !known.has(team)) problems.push(`${division}: "${team}" is not a team in Current Rosters`);
     for (const [team, rounds] of teams)
       if ([...rounds].sort().join() !== '1,2,3,4') problems.push(`${division} ${team || '(blank team)'}: rounds ${rounds.join(',')}`);
     return problems;

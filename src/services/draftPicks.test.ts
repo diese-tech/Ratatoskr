@@ -168,3 +168,13 @@ test('a slot with a different drafted player does not keep the old ID or status'
   );
   assert.deepEqual([pick?.discordId, pick?.matchSource, pick?.status], ['', 'UNRESOLVED', 'Unknown']);
 });
+
+test('parse validation counts a franchise and its team-role alias as one team', () => {
+  const rosters = ['Vanaheim', 'Alfheim', 'Svartalfheim'].flatMap((division) =>
+    Array.from({ length: 8 }, (_, team) => [division, `T${team}`, 'r', `T${team} XD`, `id-${division}-${team}`, 'p']));
+  const picks = ['Vanaheim', 'Alfheim', 'Svartalfheim'].flatMap((division) =>
+    Array.from({ length: 8 }, (_, team) => [1, 2, 3, 4].map((round) => ({
+      division, team: division === 'Alfheim' && team === 7 ? 'T0 XD' : `T${team}`, round, pick: '', draftName: 'x',
+    }))).flat());
+  assert.deepEqual(draftParseProblems(picks, rosters), ['Alfheim: 7 teams parsed, expected 8', 'Alfheim T0: rounds 1,2,3,4,1,2,3,4']);
+});
