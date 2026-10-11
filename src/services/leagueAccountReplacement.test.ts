@@ -100,6 +100,26 @@ test('fresh approval retries a proven pre-write block while duplicate confirmati
   } finally { f.worker.stop(); f.db.close(); }
 });
 
+test('recovery revalidates semantic role mappings and live permission ownership', async () => {
+  for (const change of [
+    (f: ReturnType<typeof fixture>) => { f.gateway.rows('admin', 'League Teams')[5]![3] = 'new-role'; },
+    (f: ReturnType<typeof fixture>) => { f.gateway.rows('admin', 'League Teams')[6]![9] = 'a'; },
+    (f: ReturnType<typeof fixture>) => { f.discord.assertAccountReplacementRoleOwnership = async () => { throw new (class extends Error {})('Role became privileged'); }; },
+  ]) {
+    const f = fixture();
+    try {
+      const preview = await f.service.preview('admin', 'one', 'new');
+      const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+        expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+      f.gateway.failWorkbook = 'admin';
+      assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
+      change(f);
+      await assert.rejects(() => f.service.previewRecovery('admin', job.reference), /role configuration|captain access|privileged/i);
+      assert.equal((await f.service.record('admin', job.reference)).status, 'reconciliation_required');
+    } finally { f.worker.stop(); f.db.close(); }
+  }
+});
+
 test('same-name replacement cannot complete or recover with a missing public assignment', async () => {
   const f = fixture();
   try {

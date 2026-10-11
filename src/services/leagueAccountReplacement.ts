@@ -118,6 +118,7 @@ export class LeagueAccountReplacementService {
   private async verify(preview: Inspection, manuallyReconciled = false) {
     const i = this.input;
     const sheetEvidence = await i.sheets.verifyAccountReplacement(preview.prepared);
+    await i.discord.assertAccountReplacementRoleOwnership(preview.plan.roles);
     const accounts: Array<AccountReplacementMember | null> = [];
     for (const [before, id] of [[preview.oldMember, preview.plan.oldDiscordId], [preview.newMember, preview.plan.newDiscordId]] as const) {
       const fresh = await i.discord.getAccountReplacementMember(id);

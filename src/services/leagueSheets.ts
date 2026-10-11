@@ -562,6 +562,15 @@ export class LeagueSheetsService {
   async verifyAccountReplacement(prepared: PreparedAccountReplacementSheets): Promise<{ draftVerification: PreparedAccountReplacementSheets['draftVerification']; sourceFingerprint: string }> {
     const fresh = await this.load([], prepared.freeAgentRoleId);
     const drafts = await this.accountReplacementDraftRows();
+    if (JSON.stringify(fresh.snapshot.teams) !== JSON.stringify(parseTeams(prepared.before.teams)))
+      throw new LeagueSheetReconciliationRequiredError('Account replacement league role configuration changed. Review League Teams before reconciliation.');
+    const captainRoles = (sources: LeagueSheetSources) => {
+      const active = new Set(parseTeams(sources.teams).filter(team => team.active).map(team => team.teamRoleId));
+      return sources.teams.slice(1).filter(row => active.has(String(row[3] ?? '')))
+        .map(row => [String(row[3] ?? ''), String(row[9] ?? '').trim()]);
+    };
+    if (JSON.stringify(captainRoles(fresh.sources)) !== JSON.stringify(captainRoles(prepared.before)))
+      throw new LeagueSheetReconciliationRequiredError('Configured captain access changed. Review current role ownership before reconciliation.');
     // Recovery proves replacement-owned cells, rather than freezing every other
     // player's notes indefinitely. Fresh sources still bind recovery approval.
     for (const update of [...prepared.adminUpdates, ...prepared.publicUpdates]) {
@@ -921,6 +930,7 @@ export class LeagueSheetsService {
       throw error;
     }
     const picks = new Map<string, DraftPickMove>();
+    const identities = draftPickIdentityIndex(rows);
     rows.forEach((row, index) => {
       const discordId = String(row[5] ?? '').trim();
       if (!discordId) return;
@@ -934,6 +944,10 @@ export class LeagueSheetsService {
         sheetRow: index + 6,
       });
     });
+    for (const [historicalId, currentId] of identities) {
+      const pick = picks.get(currentId);
+      if (pick) picks.set(historicalId, pick);
+    }
     return picks;
   }
 }

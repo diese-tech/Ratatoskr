@@ -351,6 +351,24 @@ test('history marks top-4 draft picks in column M and records the move on Draft 
   ]);
 });
 
+test('pending old-account history retains protected draft attribution after account replacement', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
+    ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'replacement', 'Two New',
+      'Account replacement:' + JSON.stringify({ currentDiscordId: 'replacement', historicalDiscordIds: ['two'] }), 'On drafted team', ''],
+  ]);
+  const loaded = await service.load(members, 'free-agent');
+  const moves = await service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
+    reference: 'YSL-TRX-LEGACY', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin',
+  });
+  assert.equal(moves[0]?.discordId, 'replacement');
+  assert.equal(gateway.appends[0]?.values[1]?.[6], 'two');
+  assert.equal(gateway.appends[0]?.values[1]?.[12], 'Vanaheim The Sewer R2 (#16)');
+  assert.deepEqual(gateway.writes.at(-1)?.updates, [
+    { range: "'Draft Picks'!I6:J6", values: [['Moved · trade · YSL-TRX-LEGACY', 'replacement']] },
+  ]);
+});
+
 test('Draft Picks status is written before the history row so recovery cannot skip it', async () => {
   const { gateway, service } = serviceFixture();
   gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
