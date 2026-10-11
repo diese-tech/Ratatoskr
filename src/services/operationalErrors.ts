@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { getActiveManagedResourceByLogicalKey } from '../db/index.js';
 import { serverChannelLogicalKey, serverRoleLogicalKey } from './serverBootstrap.js';
+import { LEGACY_YSL_VALKYRIE_ROLE_ID } from '../config/staff-role-ids.js';
 
 export type OperationContext = { guildId: string; action: string; setupId?: number; division?: string; next?: string };
 type OperationalDetails = {
@@ -28,13 +29,6 @@ const OperationalErrorsEnvSchema = z.object({
   STAFF_OPS_CHANNEL_ID: z.string().min(1).optional(),
 });
 const operationalErrorsEnv = OperationalErrorsEnvSchema.parse(process.env);
-
-// The live YSL Valkyrie staff role predates Ratatoskr's current permanent-
-// scaffold binding and is intentionally permitted in staff-ops. Keep this
-// stable ID bridge narrow: never infer staff access from the singular name.
-// Issue #67 owns the explicit managed-resource reconciliation that will make
-// this compatibility entry removable.
-const LEGACY_YSL_VALKYRIE_ROLE_ID = '1541186877145485424';
 
 export function redactOperationalText(value: string): string {
   let result = value;
@@ -89,7 +83,8 @@ export async function getValidatedStaffChannel(client: Client, db: Database.Data
     return role?.resourceType === 'role' ? [role.discordResourceId] : [];
   }));
   staffIds.add(LEGACY_YSL_VALKYRIE_ROLE_ID);
-  for (const id of [process.env.ROLE_ALLFATHER_ID, process.env.ROLE_AESIR_ID]) if (id) staffIds.add(id);
+  for (const id of [process.env.ROLE_ALLFATHER_ID, process.env.ROLE_AESIR_ID, process.env.ROLE_VALKYRIE_ID?.trim()])
+    if (id) staffIds.add(id);
   if (channel.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel, false)) throw new Error('staff-ops is public');
   const bot = guild.members.me ?? await guild.members.fetchMe();
   if (!channel.permissionsFor(bot)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {

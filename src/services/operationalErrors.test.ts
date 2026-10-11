@@ -295,6 +295,25 @@ test('staff-ops accepts the explicitly approved legacy Valkyrie role by stable I
   } finally { f.db.close(); }
 });
 
+test('staff-ops recognizes a configured Valkyrie ID without granting access based on its current name', async () => {
+  const f = fixture();
+  const previous = process.env.ROLE_VALKYRIE_ID;
+  delete process.env.ROLE_VALKYRIE_ID;
+  try {
+    const custom = { id: 'configured-valkyrie', name: 'Renamed staff role', permissions: new PermissionsBitField() };
+    f.channel.guild.roles.cache.set(custom.id, custom);
+    const permissionsFor = f.channel.permissionsFor;
+    f.channel.permissionsFor = (target: any) => target.id === custom.id
+      ? new PermissionsBitField(PermissionFlagsBits.ViewChannel) : permissionsFor(target);
+    await assert.rejects(getValidatedStaffChannel(f.client, f.db, 'guild'), /non-staff role/);
+    process.env.ROLE_VALKYRIE_ID = ` ${custom.id} `;
+    assert.equal(await getValidatedStaffChannel(f.client, f.db, 'guild'), f.channel);
+  } finally {
+    if (previous === undefined) delete process.env.ROLE_VALKYRIE_ID; else process.env.ROLE_VALKYRIE_ID = previous;
+    f.db.close();
+  }
+});
+
 test('unsafe staff-ops role diagnostics name the exact role and stable Discord ID', async () => {
   const f = fixture();
   try {
