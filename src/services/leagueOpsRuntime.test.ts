@@ -14,13 +14,15 @@ import type { DiscordLeagueGateway } from './leagueDiscord.js';
 import { cleanLeagueSnapshot } from './leagueOpsFixtures.test-support.js';
 import { getVerifiedLeagueMember, cacheVerifiedLeagueMember } from '../db/repositories/leagueVerifiedState.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
+import { LEGACY_YSL_VALKYRIE_ROLE_ID } from '../config/staff-role-ids.js';
 process.env.ROLE_ALLFATHER_ID = 'admin-role';
 process.env.ROLE_AESIR_ID = 'staff-role';
+delete process.env.ROLE_VALKYRIE_ID;
 process.env.DISCORD_TOKEN = 'test';
 process.env.DISCORD_CLIENT_ID = 'test';
 process.env.DISCORD_GUILD_ID = 'g';
 const { createLeagueOpsRuntime } = await import('./leagueOpsRuntime.js');
-async function fixture() {
+async function fixture(actorRoleId = 'admin-role') {
   const db = openDatabase(':memory:');
   const snapshot = cleanLeagueSnapshot();
   let writes = 0;
@@ -79,7 +81,7 @@ async function fixture() {
   } as unknown as DiscordLeagueGateway;
   const guild = {
     id: 'g',
-    members: { fetch: async () => ({ roles: { cache: new Map(authorized ? [['admin-role', {}]] : []) } }) },
+    members: { fetch: async () => ({ roles: { cache: new Map(authorized ? [[actorRoleId, {}]] : []) } }) },
   } as unknown as Guild;
   const sent: string[] = [];
   const cards = {
@@ -144,6 +146,22 @@ async function settled(f: Awaited<ReturnType<typeof fixture>>, reference: string
   }
   throw Error('job did not settle');
 }
+
+test('the worker accepts Valkyrie-only transaction approvals and denies revoked Valkyrie membership', async () => {
+  const f = await fixture(LEGACY_YSL_VALKYRIE_ROLE_ID);
+  try {
+    const first = f.runtime.worker.enqueue('transaction', f.intent('valk-admin'), 'valk-approved');
+    f.runtime.worker.start();
+    assert.equal((await settled(f, first.reference)).status, 'COMPLETED');
+    assert.equal(f.writes, 1);
+    f.runtime.worker.stop();
+    const next = f.runtime.worker.enqueue('transaction', f.intent('valk-admin'), 'valk-revoked');
+    f.deny();
+    f.runtime.worker.start();
+    assert.equal((await settled(f, next.reference)).status, 'BLOCKED_REVIEW');
+    assert.equal(f.writes, 1);
+  } finally { f.runtime.stop(); f.db.close(); }
+});
 test('queued execution uses fresh sheets, never cached write state; transaction completion queues panel refresh', async () => {
   const f = await fixture();
   try {

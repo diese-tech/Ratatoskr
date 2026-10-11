@@ -1,5 +1,6 @@
 import { MessageFlags, type ChatInputCommandInteraction, type GuildMember } from 'discord.js';
 import { z } from 'zod';
+import { LEGACY_YSL_VALKYRIE_ROLE_ID } from '../config/staff-role-ids.js';
 
 // Validated separately from src/config/env.ts (rather than added to its
 // shared schema) so that only code paths which actually depend on the
@@ -10,6 +11,7 @@ import { z } from 'zod';
 const AuthorizationEnvSchema = z.object({
   ROLE_ALLFATHER_ID: z.string().min(1),
   ROLE_AESIR_ID: z.string().min(1),
+  ROLE_VALKYRIE_ID: z.string().trim().optional(),
 });
 
 const authorizationEnv = AuthorizationEnvSchema.parse(process.env);
@@ -22,7 +24,8 @@ const authorizationEnv = AuthorizationEnvSchema.parse(process.env);
 export type AccessPolicy = 'ADMIN';
 
 const POLICY_ROLE_IDS: Record<AccessPolicy, readonly string[]> = {
-  ADMIN: [authorizationEnv.ROLE_ALLFATHER_ID, authorizationEnv.ROLE_AESIR_ID],
+  ADMIN: [authorizationEnv.ROLE_ALLFATHER_ID, authorizationEnv.ROLE_AESIR_ID,
+    authorizationEnv.ROLE_VALKYRIE_ID || LEGACY_YSL_VALKYRIE_ROLE_ID],
 };
 
 export function hasAccess(member: GuildMember, policy: AccessPolicy): boolean {

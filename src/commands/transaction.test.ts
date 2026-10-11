@@ -2,11 +2,48 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
 import { buildTradePlan, type LeagueRosterRow, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { openDatabase } from '../db/client.js';
+import { saveLeagueTransactionPreview } from '../db/repositories/leagueOperations.js';
+import { leagueJobPriority, listActionableLeagueJobs, type LeagueJobType } from '../db/repositories/leagueJobs.js';
+import { LeagueJobWorker, registerLeagueJobWorker, type LeagueJobHandler } from '../services/leagueJobWorker.js';
+import { LEGACY_YSL_VALKYRIE_ROLE_ID } from '../config/staff-role-ids.js';
 
 process.env.ROLE_ALLFATHER_ID ??= 'allfather-test-role';
 process.env.ROLE_AESIR_ID ??= 'aesir-test-role';
+delete process.env.ROLE_VALKYRIE_ID;
 
-const { buildRosterPlayerAutocompleteChoices, replyToTransactionValidation, transactionCommand } = await import('./transaction.js');
+const { buildRosterPlayerAutocompleteChoices, handleTransactionCommand, replyToTransactionValidation, transactionCommand } = await import('./transaction.js');
+
+test('Valkyrie-only staff can confirm a saved transaction preview into the canonical queue', async () => {
+  const db = openDatabase(':memory:');
+  const handler: LeagueJobHandler = async () => assert.fail('Confirmation must queue, not execute during the command');
+  const handlers = Object.fromEntries(Object.keys(leagueJobPriority).map((type) => [type, handler])) as Record<LeagueJobType, LeagueJobHandler>;
+  const worker = new LeagueJobWorker(db, 'g', handlers, async () => {});
+  worker.stop();
+  registerLeagueJobWorker(db, worker);
+  const replies: string[] = [];
+  const configured = { ROLE_FREE_AGENT_ID: 'fa', YSL_TRANSACTIONS_CHANNEL_ID: 'notices',
+    YSL_ADMIN_SPREADSHEET_ID: 'test-admin', YSL_PUBLIC_SPREADSHEET_ID: 'test-public',
+    GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: 'bot@example.com', private_key: 'synthetic-test-key' }) };
+  const previous = Object.fromEntries(Object.keys(configured).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, configured);
+  try {
+    saveLeagueTransactionPreview(db, { guildId: 'g', actorUserId: 'valk-admin', intentKey: '["trade","one","two"]', planFingerprint: 'reviewed' });
+    await handleTransactionCommand({ guild: { id: 'g', members: { fetch: async () => ({ displayName: 'Staff',
+      roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } }) } }, user: { id: 'valk-admin' },
+      options: { getSubcommand: () => 'trade', getBoolean: () => true,
+        getUser: (name: string) => ({ id: name === 'player_one' ? 'one' : 'two' }) },
+      deferReply: async () => {}, editReply: async (reply: string) => { replies.push(reply); } } as never, db, db);
+    assert.equal(replies.length, 1);
+    assert.match(replies[0]!, /YSL-JOB-/);
+    assert.doesNotMatch(replies[0]!, /permission/i);
+    assert.equal(listActionableLeagueJobs(db, 'g').length, 0);
+    assert.equal((db.prepare("SELECT count(*) n FROM league_jobs WHERE type='transaction' AND status='QUEUED'").get() as { n: number }).n, 1);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    worker.stop(); db.close();
+  }
+});
 
 test('departure and self-drop use roster-backed autocomplete instead of Discord user selection', () => {
   const options = transactionCommand.toJSON().options ?? [];
