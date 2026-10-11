@@ -75,6 +75,8 @@ The sheet updates are limited to the existing roster row's Discord ID/name cells
 
 Only explicitly configured, editable, non-privileged team/division/Free Agent roles are adjusted. Unmapped roles and the configured captain access role are displayed for **manual review**. A roster status of `Captain` does not grant authority to copy Discord administrative roles; unrelated roles are neither copied nor stripped. Fresh full-member proof reads do not fall back to a rate-limited cached snapshot.
 
+Roles with administrative or moderation permissions (including ban, kick and timeout) are rejected. A configured captain access role overlapping any managed league role also blocks the preview rather than treating that access as automatically transferable.
+
 If a Draft Picks row belongs to the old ID, the replacement updates its current identity/name and status-owner join while preserving the original draft slot/name and move status. Its Match Source retains a current-ID-bound projection of historical account IDs so subsequent moves, re-seeding and historical highlight backfill preserve protected pick attribution. It never generates a roster move or rewrites past Transaction History IDs. Malformed, conflicting or manually re-bound linkage fails closed. A missing Draft Picks tab is explicitly reported as `skipped:missing-tab`; no draft data is created or claimed verified. Inspect/seed tracking separately before relying on top-four detection.
 
 ### Interrupted account replacement
@@ -85,6 +87,8 @@ Use the recorded plan to inspect both IDs, Current Rosters, Player Name History,
 
 - `previewRecovery(actorUserId, reference)` verifies the recorded after-values and fresh account roles. It returns a new actor/guild-bound fingerprint of the current evidence; unresolved values refuse a recovery preview.
 - `confirmRecovery({ actorUserId, reference, expectedFingerprint, historyReviewed: true })` queues an explicit acknowledgement through the same worker. Execution rechecks authorization and the same fresh evidence before recording who reconciled the operation. It never replays Sheets/Discord writes or invents transaction history. Changed manual access or membership is visible in the fresh fingerprint; only explicitly inspected convergence may close the record.
+
+Recovery verifies the replacement-owned after-values, active identity invariants, draft attribution/slot and managed roles. Unrelated staff-note edits do not prevent convergence; the current source fingerprint still invalidates a recovery approval if any source changes after its preview.
 
 The original related `BLOCKED_REVIEW` repair jobs remain preserved and actionable evidence through subsequent clean audits. Their later disposition requires an explicit operator workflow; replacement does not replay or silently dismiss them.
 

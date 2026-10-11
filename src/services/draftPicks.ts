@@ -51,6 +51,9 @@ export function draftPickIdentityIndex(rows: Rows): Map<string, string> {
 export function planDraftPickAccountReplacement(rows: Rows, oldId: string, newId: string, currentName: string) {
   if (!oldId.trim() || !newId.trim() || oldId === newId) throw new Error('Draft Picks replacement requires distinct account IDs.');
   const text = (row: Rows[number], column: number) => String(row[column] ?? '').trim();
+  const identities = draftPickIdentityIndex(rows);
+  if (identities.has(newId) || (identities.has(oldId) && identities.get(oldId) !== oldId))
+    throw new Error('Draft Picks replacement account conflicts with historical player attribution.');
   if (rows.some((row) => text(row, 5) === newId || text(row, 9) === newId))
     throw new Error('The replacement account already owns a Draft Picks identity.');
   const matched = rows.map((row, index) => ({ row, index })).filter(({ row }) => text(row, 5) === oldId || text(row, 9) === oldId);

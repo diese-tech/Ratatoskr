@@ -1,7 +1,8 @@
 import { GoogleAuth } from 'google-auth-library';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { LeagueAccountReplacementPlan } from '../domain/leagueAccountReplacement.js';
-import { planDraftPickAccountReplacement } from './draftPicks.js';
+import { draftPickIdentityIndex, planDraftPickAccountReplacement } from './draftPicks.js';
 import {
   type DiscordLeagueMember,
   type LeagueDivision,
@@ -558,11 +559,34 @@ export class LeagueSheetsService {
     }
   }
 
-  async verifyAccountReplacement(prepared: PreparedAccountReplacementSheets): Promise<{ draftVerification: PreparedAccountReplacementSheets['draftVerification'] }> {
+  async verifyAccountReplacement(prepared: PreparedAccountReplacementSheets): Promise<{ draftVerification: PreparedAccountReplacementSheets['draftVerification']; sourceFingerprint: string }> {
     const fresh = await this.load([], prepared.freeAgentRoleId);
     const drafts = await this.accountReplacementDraftRows();
-    if (JSON.stringify(fresh.sources) !== JSON.stringify(prepared.after) || JSON.stringify(drafts) !== JSON.stringify(prepared.draftAfter))
-      throw new LeagueSheetReconciliationRequiredError('Account replacement read-back does not match the approved sheet values.');
+    // Recovery proves replacement-owned cells, rather than freezing every other
+    // player's notes indefinitely. Fresh sources still bind recovery approval.
+    for (const update of [...prepared.adminUpdates, ...prepared.publicUpdates]) {
+      const address = /^'([^']+)'!([A-Z]+)(\d+)/.exec(update.range);
+      if (!address) throw new LeagueSheetReconciliationRequiredError('Account replacement has an invalid owned-cell range.');
+      const [, tab, letters, row] = address;
+      const column = [...letters!].reduce((n, letter) => n * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+      const rows = tab === 'Current Rosters' ? fresh.sources.rosters : tab === 'Player Name History' ? fresh.sources.names
+        : tab === 'Draft Picks' ? drafts : fresh.sources.publicByDivision[tab!.replace(/ Roster$/, '') as LeagueDivision];
+      const offset = tab === 'Draft Picks' ? 6 : tab!.endsWith(' Roster') ? 1 : 5;
+      if (!rows || update.values.some((values, index) => values.some((value, cell) =>
+        rows[Number(row) - offset + index]?.[column + cell] !== value)))
+        throw new LeagueSheetReconciliationRequiredError('Account replacement read-back does not match the approved sheet values.');
+    }
+    if ((drafts === null) !== (prepared.draftAfter === null))
+      throw new LeagueSheetReconciliationRequiredError('Draft Picks availability changed during replacement.');
+    if (drafts) {
+      try { draftPickIdentityIndex(drafts); }
+      catch { throw new LeagueSheetReconciliationRequiredError('Draft Picks historical player attribution is ambiguous.'); }
+      for (const [index, row] of (prepared.draftAfter ?? []).entries()) {
+        if (JSON.stringify(row) !== JSON.stringify(prepared.draftBefore?.[index])
+          && JSON.stringify(drafts[index]) !== JSON.stringify(row))
+          throw new LeagueSheetReconciliationRequiredError('The replacement draft slot or move status changed.');
+      }
+    }
     const plan = prepared.plan;
     const roster = fresh.snapshot.rosters.filter((row) => row.discordId === plan.newDiscordId);
     const currentNames = fresh.snapshot.names.filter((row) => row.discordId === plan.newDiscordId && row.nameStatus === 'Current Discord Name');
@@ -572,7 +596,8 @@ export class LeagueSheetsService {
       || fresh.snapshot.rosters.some((row) => row.discordId === plan.oldDiscordId)
       || fresh.snapshot.names.some((row) => row.discordId === plan.oldDiscordId && row.nameStatus === 'Current Discord Name'))
       throw new LeagueSheetReconciliationRequiredError('Account replacement active identity invariants do not match the approved plan.');
-    return { draftVerification: prepared.draftVerification };
+    return { draftVerification: prepared.draftVerification,
+      sourceFingerprint: createHash('sha256').update(JSON.stringify({ sources: fresh.sources, drafts })).digest('hex') };
   }
 
   async listRosterPlayers(): Promise<LeagueRosterRow[]> {

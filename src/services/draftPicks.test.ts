@@ -34,6 +34,15 @@ test('account replacement keeps legacy pick attribution across re-seeding withou
   assert.throws(() => draftPickHistoricalIds(manuallyChanged), /current account/i);
 });
 
+test('replacement rejects historical account joins owned by another draft player', () => {
+  const old = ['Alfheim', 'Dream Walkers', 1, 1, 'One', 'old', 'One', 'Manual', 'On drafted team', ''];
+  for (const id of ['old', 'new']) {
+    const competing = ['Alfheim', 'The Sewer', 1, 2, 'Other', 'other', 'Other',
+      'Account replacement:' + JSON.stringify({ currentDiscordId: 'other', historicalDiscordIds: [id] }), 'On drafted team', ''];
+    assert.throws(() => planDraftPickAccountReplacement([old, competing], 'old', 'new', 'One New'), /competing|historical/i);
+  }
+});
+
 test('draft parser takes rounds 1-4 under each Cap: line from every team block', () => {
   const picks = parseDraftTab('Svartalfheim', draftTab());
   assert.equal(picks.length, 8);

@@ -56,6 +56,41 @@ test('read-only account preview and duplicate explicit confirmations execute onc
   } finally { f.worker.stop(); f.db.close(); }
 });
 
+test('captain access overlapping managed roles blocks replacement before any writes', async () => {
+  for (const role of ['a', 'division', 'fa']) {
+    const f = fixture();
+    try {
+      f.gateway.rows('admin', 'League Teams')[5]![9] = role;
+      await assert.rejects(() => f.service.preview('admin', 'one', 'new'), /captain access overlaps/i);
+      assert.equal(f.gateway.writes.length, 0);
+      assert.equal(f.roleWrites, 0);
+    } finally { f.worker.stop(); f.db.close(); }
+  }
+});
+
+test('recovery allows unrelated notes while requiring fresh approval and exact replacement cells', async () => {
+  const f = fixture();
+  try {
+    const preview = await f.service.preview('admin', 'one', 'new');
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    f.gateway.failWorkbook = 'admin';
+    assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
+    f.gateway.rows('admin', 'Current Rosters')[6]![8] = 'unrelated staff note';
+    const recovery = await f.service.previewRecovery('admin', job.reference);
+    f.gateway.rows('admin', 'Current Rosters')[6]![8] = 'another staff note';
+    const stale = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: recovery.fingerprint, historyReviewed: true });
+    assert.equal((await settle(f, stale.reference)).status, 'BLOCKED_REVIEW');
+    f.gateway.rows('admin', 'Current Rosters')[5]![5] = 'wrong identity';
+    await assert.rejects(() => f.service.previewRecovery('admin', job.reference), /read-back/i);
+    f.gateway.rows('admin', 'Current Rosters')[5]![5] = 'One';
+    const fresh = await f.service.previewRecovery('admin', job.reference);
+    const ack = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: fresh.fingerprint, historyReviewed: true });
+    assert.equal((await settle(f, ack.reference)).status, 'COMPLETED');
+    assert.equal(f.gateway.writes.length, 1);
+    assert.equal(f.gateway.rows('admin', 'Current Rosters')[6]![8], 'another staff note');
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
 test('an unclaimed queue intent cannot bypass the canonical worker through the execution interface', async () => {
   const f = fixture();
   try {

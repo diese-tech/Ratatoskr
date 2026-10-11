@@ -128,7 +128,8 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
       const role = roles.get(id);
       if (!role || role.guild.id !== this.guild.id || role.id === this.guild.id || role.managed || !role.editable
         || [PermissionFlagsBits.Administrator, PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles,
-          PermissionFlagsBits.ManageChannels].some((permission) => role.permissions.has(permission)))
+          PermissionFlagsBits.ManageChannels, PermissionFlagsBits.BanMembers, PermissionFlagsBits.KickMembers,
+          PermissionFlagsBits.ModerateMembers].some((permission) => role.permissions.has(permission)))
         throw new LeagueMutationValidationError('A configured league role is missing, privileged, integration-owned or not editable by Ratatoskr. Review role ownership first.');
     }
     for (const change of changes) {

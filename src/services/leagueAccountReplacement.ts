@@ -62,6 +62,8 @@ export class LeagueAccountReplacementService {
       oldMember, newMember, newNameSheetRow: loaded.sources.names.length + 5 });
     const teamRow = loaded.sources.teams.slice(1).find((row) => String(row[3] ?? '') === plan.rosterBefore.teamRoleId);
     const captainRoleId = String(teamRow?.[9] ?? '').trim();
+    if (captainRoleId && plan.roles.some((role) => role.managedRoleIds.includes(captainRoleId)))
+      throw new LeagueMutationValidationError('Configured captain access overlaps a managed league role. Review role ownership before account replacement.');
     if (captainRoleId) plan.manualReview.push(`Configured captain access role ${captainRoleId} requires manual review; it is not automatically transferred.`);
     await i.discord.assertAccountReplacementRoleOwnership(plan.roles);
     const prepared = await i.sheets.prepareAccountReplacement(loaded, plan);
