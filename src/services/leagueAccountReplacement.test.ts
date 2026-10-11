@@ -100,6 +100,33 @@ test('fresh approval retries a proven pre-write block while duplicate confirmati
   } finally { f.worker.stop(); f.db.close(); }
 });
 
+test('a fresh recovery approval can close the original after a safely blocked acknowledgement', async () => {
+  const f = fixture();
+  try {
+    const preview = await f.service.preview('admin', 'one', 'new');
+    const original = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    f.gateway.failWorkbook = 'admin';
+    assert.equal((await settle(f, original.reference)).status, 'RECONCILIATION_REQUIRED');
+    const recovery = await f.service.previewRecovery('admin', original.reference);
+    const blocked = await f.service.confirmRecovery({ actorUserId: 'admin', reference: original.reference,
+      expectedFingerprint: recovery.fingerprint, approvalReference: recovery.approvalReference, historyReviewed: true });
+    f.deny();
+    assert.equal((await settle(f, blocked.reference)).status, 'BLOCKED_REVIEW');
+    f.allow();
+    const fresh = await f.service.previewRecovery('admin', original.reference);
+    assert.equal(fresh.fingerprint, recovery.fingerprint);
+    const intent = { actorUserId: 'admin', reference: original.reference, expectedFingerprint: fresh.fingerprint,
+      approvalReference: fresh.approvalReference, historyReviewed: true as const };
+    const retry = await f.service.confirmRecovery(intent);
+    assert.notEqual(retry.reference, blocked.reference);
+    assert.equal((await f.service.confirmRecovery(intent)).reference, retry.reference);
+    assert.equal((await settle(f, retry.reference)).status, 'COMPLETED');
+    assert.equal((await f.service.record('admin', original.reference)).status, 'completed');
+    assert.equal(f.gateway.writes.length, 1);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
 test('recovery revalidates semantic role mappings and live permission ownership', async () => {
   for (const change of [
     (f: ReturnType<typeof fixture>) => { f.gateway.rows('admin', 'League Teams')[5]![3] = 'new-role'; },
@@ -149,13 +176,13 @@ test('recovery allows unrelated notes while requiring fresh approval and exact r
     f.gateway.rows('admin', 'Current Rosters')[6]![8] = 'unrelated staff note';
     const recovery = await f.service.previewRecovery('admin', job.reference);
     f.gateway.rows('admin', 'Current Rosters')[6]![8] = 'another staff note';
-    const stale = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: recovery.fingerprint, historyReviewed: true });
+    const stale = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: recovery.fingerprint, approvalReference: recovery.approvalReference, historyReviewed: true });
     assert.equal((await settle(f, stale.reference)).status, 'BLOCKED_REVIEW');
     f.gateway.rows('admin', 'Current Rosters')[5]![5] = 'wrong identity';
     await assert.rejects(() => f.service.previewRecovery('admin', job.reference), /read-back/i);
     f.gateway.rows('admin', 'Current Rosters')[5]![5] = 'One';
     const fresh = await f.service.previewRecovery('admin', job.reference);
-    const ack = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: fresh.fingerprint, historyReviewed: true });
+    const ack = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: fresh.fingerprint, approvalReference: fresh.approvalReference, historyReviewed: true });
     assert.equal((await settle(f, ack.reference)).status, 'COMPLETED');
     assert.equal(f.gateway.writes.length, 1);
     assert.equal(f.gateway.rows('admin', 'Current Rosters')[6]![8], 'another staff note');
@@ -203,15 +230,15 @@ test('partial Discord failure is never replayed, and recovery requires fresh mat
     assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
     const recovery = await f.service.previewRecovery('admin', job.reference);
     await assert.rejects(() => f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference,
-      expectedFingerprint: recovery.fingerprint, historyReviewed: false as never }), /history/i);
+      expectedFingerprint: recovery.fingerprint, approvalReference: recovery.approvalReference, historyReviewed: false as never }), /history/i);
     f.members.get('new')!.roleIds.push('new-manual-access');
     const stale = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference,
-      expectedFingerprint: recovery.fingerprint, historyReviewed: true });
+      expectedFingerprint: recovery.fingerprint, approvalReference: recovery.approvalReference, historyReviewed: true });
     assert.equal((await settle(f, stale.reference)).status, 'BLOCKED_REVIEW');
     assert.equal((await f.service.record('admin', job.reference)).status, 'reconciliation_required');
     const current = await f.service.previewRecovery('admin', job.reference);
     const ack = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference,
-      expectedFingerprint: current.fingerprint, historyReviewed: true });
+      expectedFingerprint: current.fingerprint, approvalReference: current.approvalReference, historyReviewed: true });
     assert.equal((await settle(f, ack.reference)).status, 'COMPLETED');
     assert.equal(f.gateway.writes.length, 1);
   } finally { f.worker.stop(); f.db.close(); }
@@ -283,7 +310,7 @@ test('ambiguous Admin writes retain evidence, stop automatic replay and require 
     assert.equal(f.gateway.writes.length, writes);
     const recovery = await f.service.previewRecovery('admin', job.reference);
     const acknowledgement = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference,
-      expectedFingerprint: recovery.fingerprint, historyReviewed: true });
+      expectedFingerprint: recovery.fingerprint, approvalReference: recovery.approvalReference, historyReviewed: true });
     assert.equal((await settle(f, acknowledgement.reference)).status, 'COMPLETED');
     assert.equal((await f.service.record('admin', job.reference)).status, 'completed');
     assert.equal(getLeagueJob(f.db, job.reference)?.status, 'COMPLETED');
@@ -334,7 +361,7 @@ test('SQLite reopen resumes pre-write intent and quarantines a hard interruption
     await new Promise((r) => setImmediate(r));
     assert.equal(f.gateway.writes.length, 1);
     const recovery = await f.service.previewRecovery('admin', job.reference);
-    const ack = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: recovery.fingerprint, historyReviewed: true });
+    const ack = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: recovery.fingerprint, approvalReference: recovery.approvalReference, historyReviewed: true });
     assert.equal((await settle(f, ack.reference)).status, 'COMPLETED');
   } finally {
     f.worker.stop(); f.db.close();
@@ -383,7 +410,7 @@ test('a halfway two-workbook failure remains partial until an explicit recovery 
     // An operator repairs the exact owned cell in this isolated test environment.
     f.gateway.rows('public', 'Vanaheim Roster')[4]![2] = 'One New';
     const recovery = await f.service.previewRecovery('admin', job.reference);
-    const ack = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: recovery.fingerprint, historyReviewed: true });
+    const ack = await f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference, expectedFingerprint: recovery.fingerprint, approvalReference: recovery.approvalReference, historyReviewed: true });
     assert.equal((await settle(f, ack.reference)).status, 'COMPLETED');
     assert.equal(f.gateway.writes.length, 1, 'recovery must not replay either workbook write');
   } finally { f.worker.stop(); f.db.close(); }

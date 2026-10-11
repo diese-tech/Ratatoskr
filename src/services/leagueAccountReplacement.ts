@@ -16,14 +16,14 @@ export type AccountReplacementIntent = {
   actorUserId: string; oldDiscordId: string; newDiscordId: string; expectedFingerprint: string; approvalReference: string; samePlayerConfirmed: true;
 };
 export type AccountReplacementRecoveryIntent = {
-  mode: 'reconcile'; actorUserId: string; reference: string; expectedFingerprint: string; historyReviewed: true;
+  mode: 'reconcile'; actorUserId: string; reference: string; expectedFingerprint: string; approvalReference: string; historyReviewed: true;
 };
 export type AccountReplacementPreview = {
   approvalReference: string;
   plan: LeagueAccountReplacementPlan; fingerprint: string; draftVerification: PreparedAccountReplacementSheets['draftVerification'];
   preservedJobReferences: string[];
 };
-type Inspection = AccountReplacementPreview & {
+type Inspection = Omit<AccountReplacementPreview, 'approvalReference'> & {
   prepared: PreparedAccountReplacementSheets; oldMember: AccountReplacementMember | null; newMember: AccountReplacementMember;
   afterFingerprint: string;
 };
@@ -76,7 +76,7 @@ export class LeagueAccountReplacementService {
       && job.status === 'BLOCKED_REVIEW' && findings.includes((job.payload as { expectedFinding: string }).expectedFinding))
       .map((job) => job.reference).sort();
     const fingerprint = hash({ guildId: i.guildId, actorUserId, prepared, oldMember: normalizedMember(oldMember), newMember: normalizedMember(newMember) });
-    return { approvalReference: randomUUID(), plan, prepared, fingerprint, oldMember, newMember: newMember!, preservedJobReferences,
+    return { plan, prepared, fingerprint, oldMember, newMember: newMember!, preservedJobReferences,
       draftVerification: prepared.draftVerification,
       afterFingerprint: hash({ sources: prepared.after, drafts: prepared.draftAfter, roles: plan.roles.map((role) => [role.discordId, role.after]) }) };
   }
@@ -84,8 +84,8 @@ export class LeagueAccountReplacementService {
   async preview(actorUserId: string, oldDiscordId: string, newDiscordId: string): Promise<AccountReplacementPreview> {
     const release = await acquireLeagueTransaction(this.input.operationScope, this.input.guildId);
     try {
-      const { approvalReference, plan, fingerprint, draftVerification, preservedJobReferences } = await this.inspect(actorUserId, oldDiscordId, newDiscordId);
-      return { approvalReference, plan, fingerprint, draftVerification, preservedJobReferences };
+      const { plan, fingerprint, draftVerification, preservedJobReferences } = await this.inspect(actorUserId, oldDiscordId, newDiscordId);
+      return { approvalReference: randomUUID(), plan, fingerprint, draftVerification, preservedJobReferences };
     } finally { release(); }
   }
 
@@ -160,16 +160,16 @@ export class LeagueAccountReplacementService {
     const release = await acquireLeagueTransaction(this.input.operationScope, this.input.guildId);
     try {
       const { evidence: _evidence, ...preview } = await this.inspectRecovery(actorUserId, reference);
-      return preview;
+      return { ...preview, approvalReference: randomUUID() };
     } finally { release(); }
   }
 
   async confirmRecovery(intent: Omit<AccountReplacementRecoveryIntent, 'mode'>): Promise<LeagueJob> {
     await this.input.authorize(intent.actorUserId);
-    if (intent.historyReviewed !== true || !intent.expectedFingerprint)
+    if (intent.historyReviewed !== true || !intent.expectedFingerprint || !/^[0-9a-f-]{36}$/.test(intent.approvalReference ?? ''))
       throw new LeagueMutationValidationError('Review the original plan, linkage and preserved history before acknowledging reconciliation.');
     const record = await this.record(intent.actorUserId, intent.reference);
-    const key = `account-replacement-recovery:${intent.reference}:${intent.actorUserId}:${intent.expectedFingerprint}`;
+    const key = `account-replacement-recovery:${intent.reference}:${intent.actorUserId}:${intent.expectedFingerprint}:${intent.approvalReference}`;
     const existing = getLeagueJobByDedupe(this.input.db, this.input.guildId, key);
     if (existing) return existing;
     if (record.status !== 'reconciliation_required') throw new LeagueMutationValidationError('This replacement no longer needs reconciliation.');
