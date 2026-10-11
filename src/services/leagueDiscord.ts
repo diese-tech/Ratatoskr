@@ -148,8 +148,10 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     if (member.guild.id !== this.guild.id || member.user.bot || JSON.stringify(managed(member)) !== JSON.stringify(change.before))
       throw new LeagueMutationValidationError('The account replacement member or managed roles changed before writing.');
     try {
-      if (change.remove.length) await member.roles.remove(change.remove, 'Ratatoskr approved account replacement');
-      if (change.add.length) await member.roles.add(change.add, 'Ratatoskr approved account replacement');
+      // Singular endpoints are idempotent deltas. Array operations PATCH a
+      // cached whole role set and can restore removals before gateway events arrive.
+      for (const roleId of change.remove) await member.roles.remove(roleId, 'Ratatoskr approved account replacement');
+      for (const roleId of change.add) await member.roles.add(roleId, 'Ratatoskr approved account replacement');
       if (JSON.stringify(managed(await fetchFreshMember(this.guild, change.discordId))) !== JSON.stringify(change.after))
         throw new Error('Managed account replacement roles did not converge.');
     } catch (error) {
