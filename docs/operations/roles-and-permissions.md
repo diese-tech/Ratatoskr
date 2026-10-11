@@ -11,10 +11,10 @@ hand in Discord (Server Settings → Roles, or right-click a member → Roles):
 
 | Role | Purpose |
 | --- | --- |
-| `Allfather`, `Aesir` | Full admin access to every Ratatoskr command (`ADMIN` policy). IDs are pinned in `.env` (`ROLE_ALLFATHER_ID`, `ROLE_AESIR_ID`) so this doesn't depend on the role's current name. |
+| `Allfather`, `Aesir`, `Valkyrie` / `Valkyries` | Full admin access through Ratatoskr's `ADMIN` policy, including `/transaction`, confirmations and queued execution. Allfather/Aesir IDs are pinned in `.env`; Valkyrie uses the existing stable YSL staff role ID unless `ROLE_VALKYRIE_ID` overrides it. Names alone never grant access. |
 | `Org Owner` | League ownership role, not currently wired to a Ratatoskr access policy. |
 | `Franchise Representative` | Built-in Scout management access across **every** division (see `docs/operations/scout-workflow.md`). |
-| `Valkyries`, `Production` | Staff roles; `Valkyries` is treated as staff for legacy channel permission checks. |
+| `Production` | Staff role for channel visibility; it does not grant the `ADMIN` command policy. |
 | `Captain` | **Not division-specific.** This is the server-wide flag that marks someone as captain-eligible. It does nothing by itself — see [Division Captain access](#division-captain-access-read-this-part) below. |
 | `Player`, `Free Agent` | General membership roles. |
 

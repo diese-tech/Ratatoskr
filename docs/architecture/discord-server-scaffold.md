@@ -94,7 +94,7 @@ After an admin binds `#scout-ops` with `/scout config operations_channel:#scout-
 
 Archive and delete refuse while that division has an open or roster-ready scout setup. Published and cancelled setups preserve history but do not block the lifecycle.
 
-Division commands are gated by the ADMIN policy in `src/services/authorization.ts`: only members holding the role configured as `ROLE_ALLFATHER_ID` or `ROLE_AESIR_ID` may manage divisions. This is a runtime role-ID check, not Discord's native Administrator permission -- holding Administrator alone does not grant access.
+Division commands are gated by the ADMIN policy in `src/services/authorization.ts`: members holding the Allfather, Aesir or authorized Valkyrie role may manage divisions. Allfather/Aesir use `ROLE_ALLFATHER_ID` / `ROLE_AESIR_ID`; Valkyrie uses the existing stable YSL staff role ID or optional `ROLE_VALKYRIE_ID` override. This is a runtime role-ID check, not a name match or Discord's native Administrator permission -- holding Administrator alone does not grant access.
 
 ## Base category layout
 
