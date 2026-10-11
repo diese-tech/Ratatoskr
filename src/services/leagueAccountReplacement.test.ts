@@ -23,7 +23,7 @@ function fixture(db = openDatabase(':memory:'), sources = accountReplacementSour
     'account-replacement': (job, phase) => service.execute(job, phase) };
   worker = new LeagueJobWorker(db, 'g', handlers, (job) => service.recover(job));
   worker.stop();
-  return { ...sources, sources, db, service, worker, deny: () => { allowed = false; } };
+  return { ...sources, sources, db, service, worker, deny: () => { allowed = false; }, allow: () => { allowed = true; } };
 }
 
 async function settle(f: ReturnType<typeof fixture>, reference: string) {
@@ -44,7 +44,7 @@ test('read-only account preview and duplicate explicit confirmations execute onc
     assert.equal(preview.plan.rosterAfter.rosterStatus, 'Captain');
     assert.ok(preview.plan.manualReview.some((item) => item.includes('captain-access')));
     const intent = { actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
-      expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true as const };
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true as const };
     const job = await f.service.confirm(intent);
     assert.equal((await f.service.confirm(intent)).reference, job.reference);
     assert.equal((await settle(f, job.reference)).status, 'COMPLETED');
@@ -68,11 +68,62 @@ test('captain access overlapping managed roles blocks replacement before any wri
   }
 });
 
+test('another active teams captain access cannot overlap replacement-managed roles', async () => {
+  const f = fixture();
+  try {
+    f.gateway.rows('admin', 'League Teams')[6]![9] = 'a';
+    await assert.rejects(() => f.service.preview('admin', 'one', 'new'), /captain access overlaps/i);
+    assert.equal(f.gateway.writes.length, 0);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('fresh approval retries a proven pre-write block while duplicate confirmation keeps one job', async () => {
+  const f = fixture();
+  try {
+    const preview = await f.service.preview('admin', 'one', 'new');
+    const intent = { actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint,
+      approvalReference: preview.approvalReference, samePlayerConfirmed: true as const };
+    const first = await f.service.confirm(intent);
+    f.deny();
+    assert.equal((await settle(f, first.reference)).status, 'BLOCKED_REVIEW');
+    f.allow();
+    const fresh = await f.service.preview('admin', 'one', 'new');
+    assert.equal(fresh.fingerprint, preview.fingerprint);
+    assert.notEqual(fresh.approvalReference, preview.approvalReference);
+    const newIntent = { ...intent, approvalReference: fresh.approvalReference };
+    const retry = await f.service.confirm(newIntent);
+    assert.notEqual(retry.reference, first.reference);
+    assert.equal((await f.service.confirm(newIntent)).reference, retry.reference);
+    assert.equal((await settle(f, retry.reference)).status, 'COMPLETED');
+    assert.equal(getLeagueJob(f.db, first.reference)?.status, 'BLOCKED_REVIEW');
+    assert.equal(f.gateway.writes.length, 1);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('same-name replacement cannot complete or recover with a missing public assignment', async () => {
+  const f = fixture();
+  try {
+    const preview = await f.service.preview('admin', 'one', 'new');
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    const write = f.gateway.batchUpdate.bind(f.gateway);
+    f.gateway.batchUpdate = async (workbook, updates) => {
+      await write(workbook, updates);
+      f.gateway.rows('public', 'Vanaheim Roster')[4]![2] = '';
+    };
+    assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
+    await assert.rejects(() => f.service.previewRecovery('admin', job.reference), /public roster assignment/i);
+    f.gateway.rows('public', 'Vanaheim Roster')[4]![2] = 'One';
+    const recovery = await f.service.previewRecovery('admin', job.reference);
+    assert.ok(recovery.fingerprint);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
 test('recovery allows unrelated notes while requiring fresh approval and exact replacement cells', async () => {
   const f = fixture();
   try {
     const preview = await f.service.preview('admin', 'one', 'new');
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     f.gateway.failWorkbook = 'admin';
     assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
     f.gateway.rows('admin', 'Current Rosters')[6]![8] = 'unrelated staff note';
@@ -95,7 +146,7 @@ test('an unclaimed queue intent cannot bypass the canonical worker through the e
   const f = fixture();
   try {
     const preview = await f.service.preview('admin', 'one', 'new');
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     await assert.rejects(() => f.service.execute(job, () => {}), /claimed.*worker/i);
     assert.equal(f.gateway.writes.length, 0);
     assert.equal((await settle(f, job.reference)).status, 'COMPLETED');
@@ -114,7 +165,7 @@ test('original blocked repair jobs remain actionable evidence after successful r
     });
     const preview = await f.service.preview('admin', 'one', 'new');
     assert.deepEqual(preview.preservedJobReferences, [...originals].sort());
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     assert.equal((await settle(f, job.reference)).status, 'COMPLETED');
     dismissResolvedRepairReviews(f.db, 'g', []);
     assert.deepEqual(listActionableLeagueJobs(f.db, 'g').map((job) => job.reference).sort(), [...originals].sort());
@@ -128,7 +179,7 @@ test('partial Discord failure is never replayed, and recovery requires fresh mat
     const apply = f.discord.reconcileAccountReplacementRoles;
     f.discord.reconcileAccountReplacementRoles = async (change) => { await apply(change); throw Error('Discord response lost'); };
     const preview = await f.service.preview('admin', 'one', 'new');
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
     const recovery = await f.service.previewRecovery('admin', job.reference);
     await assert.rejects(() => f.service.confirmRecovery({ actorUserId: 'admin', reference: job.reference,
@@ -158,7 +209,7 @@ test('changed previews, target membership and revoked authorization stop queued 
     try {
       const preview = await f.service.preview('admin', 'one', 'new');
       const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
-        expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+        expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
       change(f);
       assert.equal((await settle(f, job.reference)).status, 'BLOCKED_REVIEW');
       assert.equal(f.gateway.writes.length, 0);
@@ -174,7 +225,7 @@ test('authorization and Discord identity are rechecked after the final sheet pro
     const f = fixture();
     try {
       const preview = await f.service.preview('admin', 'one', 'new');
-      const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+      const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
       let rosterReads = 0;
       f.gateway.beforeRead = (workbook, range) => {
         if (workbook === 'admin' && range.includes('Current Rosters') && ++rosterReads === 3) change(f);
@@ -190,8 +241,8 @@ test('competing actors cannot queue different approvals for the same replacement
   try {
     const one = await f.service.preview('admin', 'one', 'new');
     const two = await f.service.preview('other-admin', 'one', 'new');
-    await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: one.fingerprint, samePlayerConfirmed: true });
-    await assert.rejects(() => f.service.confirm({ actorUserId: 'other-admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: two.fingerprint, samePlayerConfirmed: true }), /competing/i);
+    await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: one.fingerprint, approvalReference: one.approvalReference, samePlayerConfirmed: true });
+    await assert.rejects(() => f.service.confirm({ actorUserId: 'other-admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: two.fingerprint, approvalReference: two.approvalReference, samePlayerConfirmed: true }), /competing/i);
     assert.equal(f.gateway.writes.length, 0);
   } finally { f.worker.stop(); f.db.close(); }
 });
@@ -200,7 +251,7 @@ test('ambiguous Admin writes retain evidence, stop automatic replay and require 
   const f = fixture();
   try {
     const preview = await f.service.preview('admin', 'one', 'new');
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     f.gateway.failWorkbook = 'admin';
     assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
     assert.equal((await f.service.record('admin', job.reference)).status, 'reconciliation_required');
@@ -224,7 +275,7 @@ test('a possibly partial replacement blocks further canonical mutations even whe
   const f = fixture();
   try {
     const preview = await f.service.preview('admin', 'one', 'new');
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     f.gateway.failWorkbook = 'admin';
     assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
     await assert.rejects(() => executeLeagueTransaction({ db: f.db, operationScope: f.db, guildId: 'g', actorUserId: 'admin',
@@ -242,7 +293,7 @@ test('SQLite reopen resumes pre-write intent and quarantines a hard interruption
   let f = fixture(openDatabase(path));
   try {
     const preview = await f.service.preview('admin', 'one', 'new');
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     transitionLeagueJob(f.db, job.reference, 'VALIDATING');
     const sources = f.sources;
     f.worker.stop(); f.db.close();
@@ -278,12 +329,12 @@ test('present old account retains privileged roles while the same player can rep
     f.members.set('one', { guildId: 'g', bot: false, discordId: 'one', displayName: 'One', roleIds: ['a', 'division', 'captain-access'] });
     const preview = await f.service.preview('admin', 'one', 'new');
     assert.ok(preview.plan.manualReview.some((item) => item.includes('captain-access')));
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     assert.equal((await settle(f, job.reference)).status, 'COMPLETED');
     assert.deepEqual(f.members.get('one')!.roleIds, ['captain-access']);
     f.members.set('third', { guildId: 'g', bot: false, discordId: 'third', displayName: 'One Third', roleIds: ['other-access'] });
     const second = await f.service.preview('admin', 'new', 'third');
-    const next = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'new', newDiscordId: 'third', expectedFingerprint: second.fingerprint, samePlayerConfirmed: true });
+    const next = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'new', newDiscordId: 'third', expectedFingerprint: second.fingerprint, approvalReference: second.approvalReference, samePlayerConfirmed: true });
     assert.equal((await settle(f, next.reference)).status, 'COMPLETED');
     assert.equal(f.gateway.rows('admin', 'Current Rosters')[5]![4], 'third');
     assert.equal(f.gateway.rows('admin', 'Current Rosters')[5]![6], 'Captain');
@@ -304,7 +355,7 @@ test('a halfway two-workbook failure remains partial until an explicit recovery 
       return write(workbook, updates);
     };
     const preview = await f.service.preview('admin', 'one', 'new');
-    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
     assert.equal(f.gateway.rows('admin', 'Current Rosters')[5]![4], 'new');
     assert.equal(f.gateway.rows('public', 'Vanaheim Roster')[4]![2], 'One');

@@ -26,7 +26,7 @@ export function draftPickHistoricalIds(row: Rows[number]): string[] {
   catch { throw new Error('Draft Picks account replacement linkage is malformed.'); }
   if (!linkage || typeof linkage !== 'object' || Array.isArray(linkage)
     || !('currentDiscordId' in linkage) || !('historicalDiscordIds' in linkage)
-    || linkage.currentDiscordId !== String(row[5] ?? '').trim())
+    || !String(row[5] ?? '').trim() || linkage.currentDiscordId !== String(row[5] ?? '').trim())
     throw new Error('Draft Picks account replacement linkage no longer matches its current account.');
   const ids = linkage.historicalDiscordIds;
   if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || !id.trim() || id === String(row[5] ?? '').trim())
@@ -38,8 +38,9 @@ export function draftPickIdentityIndex(rows: Rows): Map<string, string> {
   const ids = new Map<string, string>();
   for (const row of rows) {
     const current = String(row[5] ?? '').trim();
+    const historical = draftPickHistoricalIds(row);
     if (!current) continue;
-    for (const id of [current, ...draftPickHistoricalIds(row)]) {
+    for (const id of [current, ...historical]) {
       if (ids.has(id) && ids.get(id) !== current) throw new Error('Draft Picks links one account to competing players.');
       ids.set(id, current);
     }

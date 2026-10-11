@@ -596,6 +596,14 @@ export class LeagueSheetsService {
       || fresh.snapshot.rosters.some((row) => row.discordId === plan.oldDiscordId)
       || fresh.snapshot.names.some((row) => row.discordId === plan.oldDiscordId && row.nameStatus === 'Current Discord Name'))
       throw new LeagueSheetReconciliationRequiredError('Account replacement active identity invariants do not match the approved plan.');
+    const block = publicTeamCells[plan.rosterAfter.franchise];
+    const expectedBlock = prepared.after.publicByDivision[plan.rosterAfter.division];
+    const currentBlock = fresh.sources.publicByDivision[plan.rosterAfter.division];
+    const ownedRows = block && Array.from({ length: block.endRow - block.startRow + 1 }, (_, index) => index + block.startRow - 1);
+    const identityRows = ownedRows?.filter(row => value(expectedBlock, row, block!.column) === plan.rosterAfter.player);
+    if (identityRows?.length !== 1 || value(currentBlock, identityRows[0]!, block!.column) !== plan.rosterAfter.player
+      || ownedRows!.filter(row => value(currentBlock, row, block!.column) === plan.rosterAfter.player).length !== 1)
+      throw new LeagueSheetReconciliationRequiredError('The replacement public roster assignment is missing, moved or duplicated.');
     return { draftVerification: prepared.draftVerification,
       sourceFingerprint: createHash('sha256').update(JSON.stringify({ sources: fresh.sources, drafts })).digest('hex') };
   }

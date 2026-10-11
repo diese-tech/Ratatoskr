@@ -32,6 +32,8 @@ test('account replacement keeps legacy pick attribution across re-seeding withou
   const manuallyChanged = [...replacement.after];
   manuallyChanged[5] = 'different-person';
   assert.throws(() => draftPickHistoricalIds(manuallyChanged), /current account/i);
+  manuallyChanged[5] = '';
+  assert.throws(() => resolveDraftPicks([], { vetting: [], memberDirectory: [], nameHistory: [], rosters: [] }, [manuallyChanged]), /current account/i);
 });
 
 test('replacement rejects historical account joins owned by another draft player', () => {

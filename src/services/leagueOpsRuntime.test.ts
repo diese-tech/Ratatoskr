@@ -34,7 +34,7 @@ test('runtime exposes the replacement capability with current ADMIN authorizatio
     cards: { send: async () => 'panel', edit: async () => {}, delete: async () => {}, findByReference: async () => undefined } });
   try {
     const preview = await runtime.accountReplacement.preview('admin', 'one', 'new');
-    const job = await runtime.accountReplacement.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, samePlayerConfirmed: true });
+    const job = await runtime.accountReplacement.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
     assert.equal(job.type, 'account-replacement');
     runtime.worker.start();
     for (let i = 0; i < 100 && getLeagueJob(db, job.reference)?.status !== 'COMPLETED'; i++) await new Promise((r) => setImmediate(r));

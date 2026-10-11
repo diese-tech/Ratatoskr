@@ -47,7 +47,11 @@ test('account role reconciliation rejects privileged/integration roles and chang
   await assert.rejects(() => gateway.reconcileAccountReplacementRoles(change), /ownership/i);
   assert.deepEqual([...member.roles.cache.keys()], ['fa', 'captain-access']);
   roles.get('team')!.permissions.remove(PermissionFlagsBits.Administrator);
-  for (const permission of [PermissionFlagsBits.BanMembers, PermissionFlagsBits.KickMembers, PermissionFlagsBits.ModerateMembers]) {
+  for (const permission of [PermissionFlagsBits.BanMembers, PermissionFlagsBits.KickMembers, PermissionFlagsBits.ModerateMembers,
+    PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageWebhooks, PermissionFlagsBits.ManageThreads,
+    PermissionFlagsBits.ManageEvents, PermissionFlagsBits.ManageNicknames, PermissionFlagsBits.MuteMembers,
+    PermissionFlagsBits.DeafenMembers, PermissionFlagsBits.MoveMembers, PermissionFlagsBits.ViewAuditLog,
+    PermissionFlagsBits.ManageGuildExpressions]) {
     roles.get('team')!.permissions.add(permission);
     await assert.rejects(() => gateway.reconcileAccountReplacementRoles(change), /ownership/i);
     assert.deepEqual([...member.roles.cache.keys()], ['fa', 'captain-access']);

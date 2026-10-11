@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { auditLeagueRoster, LeagueMutationValidationError } from '../domain/leagueOperations.js';
 import { buildLeagueAccountReplacementPlan, type AccountReplacementMember, type AccountReplacementRoleChange,
@@ -13,12 +13,13 @@ import { LeagueJobBlockedError } from './leagueJobWorker.js';
 import { LeagueSheetDriftError, LeagueSheetReconciliationRequiredError, type LeagueSheetsService, type PreparedAccountReplacementSheets } from './leagueSheets.js';
 
 export type AccountReplacementIntent = {
-  actorUserId: string; oldDiscordId: string; newDiscordId: string; expectedFingerprint: string; samePlayerConfirmed: true;
+  actorUserId: string; oldDiscordId: string; newDiscordId: string; expectedFingerprint: string; approvalReference: string; samePlayerConfirmed: true;
 };
 export type AccountReplacementRecoveryIntent = {
   mode: 'reconcile'; actorUserId: string; reference: string; expectedFingerprint: string; historyReviewed: true;
 };
 export type AccountReplacementPreview = {
+  approvalReference: string;
   plan: LeagueAccountReplacementPlan; fingerprint: string; draftVerification: PreparedAccountReplacementSheets['draftVerification'];
   preservedJobReferences: string[];
 };
@@ -62,7 +63,9 @@ export class LeagueAccountReplacementService {
       oldMember, newMember, newNameSheetRow: loaded.sources.names.length + 5 });
     const teamRow = loaded.sources.teams.slice(1).find((row) => String(row[3] ?? '') === plan.rosterBefore.teamRoleId);
     const captainRoleId = String(teamRow?.[9] ?? '').trim();
-    if (captainRoleId && plan.roles.some((role) => role.managedRoleIds.includes(captainRoleId)))
+    const captainRoleIds = loaded.sources.teams.slice(1).filter(row => loaded.snapshot.teams.some(team => team.active && team.teamRoleId === String(row[3] ?? '')))
+      .map(row => String(row[9] ?? '').trim()).filter(Boolean);
+    if (captainRoleIds.some(id => plan.roles.some(role => role.managedRoleIds.includes(id))))
       throw new LeagueMutationValidationError('Configured captain access overlaps a managed league role. Review role ownership before account replacement.');
     if (captainRoleId) plan.manualReview.push(`Configured captain access role ${captainRoleId} requires manual review; it is not automatically transferred.`);
     await i.discord.assertAccountReplacementRoleOwnership(plan.roles);
@@ -73,7 +76,7 @@ export class LeagueAccountReplacementService {
       && job.status === 'BLOCKED_REVIEW' && findings.includes((job.payload as { expectedFinding: string }).expectedFinding))
       .map((job) => job.reference).sort();
     const fingerprint = hash({ guildId: i.guildId, actorUserId, prepared, oldMember: normalizedMember(oldMember), newMember: normalizedMember(newMember) });
-    return { plan, prepared, fingerprint, oldMember, newMember: newMember!, preservedJobReferences,
+    return { approvalReference: randomUUID(), plan, prepared, fingerprint, oldMember, newMember: newMember!, preservedJobReferences,
       draftVerification: prepared.draftVerification,
       afterFingerprint: hash({ sources: prepared.after, drafts: prepared.draftAfter, roles: plan.roles.map((role) => [role.discordId, role.after]) }) };
   }
@@ -81,17 +84,17 @@ export class LeagueAccountReplacementService {
   async preview(actorUserId: string, oldDiscordId: string, newDiscordId: string): Promise<AccountReplacementPreview> {
     const release = await acquireLeagueTransaction(this.input.operationScope, this.input.guildId);
     try {
-      const { plan, fingerprint, draftVerification, preservedJobReferences } = await this.inspect(actorUserId, oldDiscordId, newDiscordId);
-      return { plan, fingerprint, draftVerification, preservedJobReferences };
+      const { approvalReference, plan, fingerprint, draftVerification, preservedJobReferences } = await this.inspect(actorUserId, oldDiscordId, newDiscordId);
+      return { approvalReference, plan, fingerprint, draftVerification, preservedJobReferences };
     } finally { release(); }
   }
 
   async confirm(intent: AccountReplacementIntent): Promise<LeagueJob> {
     const i = this.input;
     await i.authorize(intent.actorUserId);
-    if (intent.samePlayerConfirmed !== true || !intent.expectedFingerprint)
+    if (intent.samePlayerConfirmed !== true || !intent.expectedFingerprint || !/^[0-9a-f-]{36}$/.test(intent.approvalReference ?? ''))
       throw new LeagueMutationValidationError('Confirm the exact account replacement and attest that both accounts belong to the same player.');
-    const key = `account-replacement:${intent.oldDiscordId}:${intent.newDiscordId}:${intent.expectedFingerprint}`;
+    const key = `account-replacement:${intent.oldDiscordId}:${intent.newDiscordId}:${intent.expectedFingerprint}:${intent.approvalReference}`;
     return i.db.transaction(() => {
       const existing = getLeagueJobByDedupe(i.db, i.guildId, key);
       if (existing) return existing;
