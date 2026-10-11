@@ -278,7 +278,9 @@ export function listOpenLeagueReconciliationTickets(db: Database.Database, guild
 }
 
 export function listLeagueMutationProblems(db: Database.Database, guildId: string): string[] {
-  const rows = db.prepare(`SELECT reference FROM league_transactions WHERE guild_id=? AND status='reconciliation_required' UNION SELECT reference FROM league_audit_repairs WHERE guild_id=? AND status='reconciliation_required'`).all(guildId,guildId) as Array<{reference:string}>;
+  const rows = db.prepare(`SELECT reference FROM league_transactions WHERE guild_id=? AND status='reconciliation_required'
+    UNION SELECT reference FROM league_audit_repairs WHERE guild_id=? AND status='reconciliation_required'
+    UNION SELECT reference FROM league_account_replacements WHERE guild_id=? AND status NOT IN ('prepared','completed','failed')`).all(guildId,guildId,guildId) as Array<{reference:string}>;
   return rows.map(row=>row.reference);
 }
 

@@ -59,6 +59,39 @@ League rules protect each captain's first four draft picks (rounds 1–4; the `C
 
 People Directory and People History ownership remains separate under #128. No additional people-history system, external queue, parallel resource locks, or debug Discord channel is introduced.
 
+## Discord account replacement (#154)
+
+Account replacement continues one existing league player under a different Discord account. It is a **League Ops reconciliation operation**, not departure, self-drop, pickup, rename or trade. It preserves the existing Current Rosters row, franchise, division, team and `Captain`/`Player` status. No new slash command is registered; the private Fluxcord surface is a separate delivery.
+
+The domain capability is `LeagueAccountReplacementService`, exposed as `createLeagueOpsRuntime(...).accountReplacement`. Its caller must use the runtime's bound guild and fresh ADMIN authorization:
+
+1. `preview(actorUserId, oldDiscordId, newDiscordId)` reads fresh guild membership, both account identities, the owned Admin/public sheet values, configured roles and Draft Picks. It performs no external or database writes. Review the returned old/new IDs, roster row/position, old name retirement, new current name, any public-name change, managed role deltas, preserved aliases/history and manual access review items.
+2. `confirm({ actorUserId, oldDiscordId, newDiscordId, expectedFingerprint, samePlayerConfirmed: true })` records the explicit intent in the existing per-guild queue. The fingerprint binds the actor, guild, both accounts, sheet before-values, intended changes and role state. Repeated confirmations return the same durable job; competing account intents fail closed. Current authorization, membership, role ownership and sheet values are checked again before external writes.
+3. `record(actorUserId, reference)` privately inspects the durable linkage and phase evidence. Do not publish this record or its full payload in a public Discord channel or GitHub issue.
+
+Migration **34** adds `league_account_replacements` and links original blocked repair jobs through `league_account_replacement_evidence`. It preserves existing jobs, approvals, transactions and historical IDs. The lifecycle is `prepared` → `applying_admin` → optional `applying_public` → `applying_discord` → `verifying` → `completed`; safe pre-write failures are `failed`, while partial or ambiguous writes become `reconciliation_required`.
+
+The sheet updates are limited to the existing roster row's Discord ID/name cells, the old authoritative name row's status, and a new current-name row. Old aliases, notes, unrelated columns and historical transaction IDs remain intact. A changed public name updates only its owned roster cell; the same name causes no public write. Post-write reads must prove exactly one new-ID current-name/roster assignment and no falsely current old-ID assignment before completion.
+
+Only explicitly configured, editable, non-privileged team/division/Free Agent roles are adjusted. Unmapped roles and the configured captain access role are displayed for **manual review**. A roster status of `Captain` does not grant authority to copy Discord administrative roles; unrelated roles are neither copied nor stripped. Fresh full-member proof reads do not fall back to a rate-limited cached snapshot.
+
+If a Draft Picks row belongs to the old ID, the replacement updates its current identity/name and status-owner join while preserving the original draft slot/name and move status. Its Match Source retains a current-ID-bound projection of historical account IDs so subsequent moves, re-seeding and historical highlight backfill preserve protected pick attribution. It never generates a roster move or rewrites past Transaction History IDs. Malformed, conflicting or manually re-bound linkage fails closed. A missing Draft Picks tab is explicitly reported as `skipped:missing-tab`; no draft data is created or claimed verified. Inspect/seed tracking separately before relying on top-four detection.
+
+### Interrupted account replacement
+
+Do not retry an interrupted external mutation, roll back by guessing, or dismiss the original blocked repairs. A restarted worker resumes only known pre-write intent; external phases are quarantined for explicit reconciliation. Other canonical league mutations remain blocked while a replacement has unresolved external-write evidence, even if the visible roster happens to look clean.
+
+Use the recorded plan to inspect both IDs, Current Rosters, Player Name History, the exact public roster cell, Draft Picks joins/status and managed Discord roles. Check the durable linkage and preserved historical attribution. An operator must repair any missing or conflicting surface explicitly; the recovery capability itself performs no external writes:
+
+- `previewRecovery(actorUserId, reference)` verifies the recorded after-values and fresh account roles. It returns a new actor/guild-bound fingerprint of the current evidence; unresolved values refuse a recovery preview.
+- `confirmRecovery({ actorUserId, reference, expectedFingerprint, historyReviewed: true })` queues an explicit acknowledgement through the same worker. Execution rechecks authorization and the same fresh evidence before recording who reconciled the operation. It never replays Sheets/Discord writes or invents transaction history. Changed manual access or membership is visible in the fresh fingerprint; only explicitly inspected convergence may close the record.
+
+The original related `BLOCKED_REVIEW` repair jobs remain preserved and actionable evidence through subsequent clean audits. Their later disposition requires an explicit operator workflow; replacement does not replay or silently dismiss them.
+
+### Production approval gate for account replacement
+
+Issue #154 authorizes source implementation only. Before one live execution, a human operator must privately review the exact old/new IDs and attest that they belong to the same continuing player, verify backups of Railway SQLite and **both workbooks**, inspect the current preview and role deltas, approve once, then observe a fresh audit and verify the captain's actual access. Do not publish the private IDs or raw operational records. No deployment, production reconciliation, role/Sheet change, retry/dismissal of the original jobs, restart or automatic merge is authorized by this implementation issue.
+
 ## Required Railway variables
 
 ```text

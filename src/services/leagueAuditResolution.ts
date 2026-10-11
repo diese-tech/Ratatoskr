@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { assertNoUnresolvedAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
 import {
   auditLeagueRoster,
   buildRenamePlan,
@@ -367,6 +368,7 @@ export async function executeLeagueAuditRepair(input: {
 }): Promise<{ reference: string }> {
   const release = await acquireLeagueTransaction(input.operationScope, input.guildId);
   try {
+    assertNoUnresolvedAccountReplacement(input.db, input.guildId);
     const members = await input.members.getMembers();
     const loaded = await input.sheets.load(members, input.freeAgentRoleId);
     const diagnostic = auditLeagueRoster(loaded.snapshot).find((candidate) =>

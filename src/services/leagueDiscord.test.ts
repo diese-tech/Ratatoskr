@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ChannelType, Collection, RESTJSONErrorCodes, type Guild } from 'discord.js';
+import { ChannelType, Collection, PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes, type Guild } from 'discord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
 
 function leagueMember(id: string, roleIds: string[]) {
@@ -11,6 +11,45 @@ function leagueMember(id: string, roleIds: string[]) {
     roles: { cache: new Collection(roleIds.map((roleId) => [roleId, {}])) },
   };
 }
+
+test('account replacement proof rejects cached member fallback and preserves explicit bot/guild identity', async () => {
+  const member = { ...leagueMember('new', ['team']), guild: { id: 'g' } };
+  const cache = new Collection([['new', member]]);
+  let limited = false;
+  const guild = { id: 'g', members: { cache, fetch: async (options?: unknown) => {
+    if (options) return member;
+    if (limited) throw Object.assign(Error('full member rate limit'), { data: { opcode: 8, retry_after: 1 } });
+    return cache;
+  } } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'notices');
+  await gateway.getMembers();
+  limited = true;
+  await assert.rejects(() => gateway.getAccountReplacementMembers(), /rate limit/);
+  member.user.bot = true;
+  assert.equal((await gateway.getAccountReplacementMember('new'))?.bot, true);
+  assert.equal((await gateway.getAccountReplacementMember('new'))?.guildId, 'g');
+});
+
+test('account role reconciliation rejects privileged/integration roles and changes only exact managed deltas', async () => {
+  const member = { ...leagueMember('new', ['fa', 'captain-access']), guild: { id: 'g' },
+    roles: { cache: new Collection<string, unknown>([['fa', {}], ['captain-access', {}]]),
+      remove: async (ids: string[]) => { ids.forEach((id) => member.roles.cache.delete(id)); },
+      add: async (ids: string[]) => { ids.forEach((id) => member.roles.cache.set(id, {})); } } };
+  const roles = new Collection(['team', 'division', 'fa'].map((id) => [id,
+    { id, guild: { id: 'g' }, managed: false, editable: true, permissions: new PermissionsBitField() }]));
+  const guild = { id: 'g', members: { fetch: async () => member }, roles: { fetch: async () => roles } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'notices');
+  const change = { discordId: 'new', managedRoleIds: ['team', 'division', 'fa'], before: ['fa'], after: ['division', 'team'], remove: ['fa'], add: ['division', 'team'] };
+  roles.get('team')!.managed = true;
+  await assert.rejects(() => gateway.reconcileAccountReplacementRoles(change), /ownership/i);
+  roles.get('team')!.managed = false;
+  roles.get('team')!.permissions.add(PermissionFlagsBits.Administrator);
+  await assert.rejects(() => gateway.reconcileAccountReplacementRoles(change), /ownership/i);
+  assert.deepEqual([...member.roles.cache.keys()], ['fa', 'captain-access']);
+  roles.get('team')!.permissions.remove(PermissionFlagsBits.Administrator);
+  await gateway.reconcileAccountReplacementRoles(change);
+  assert.deepEqual([...member.roles.cache.keys()].sort(), ['captain-access', 'division', 'team']);
+});
 
 test('repeated roster reads reuse the complete live Discord cache instead of requesting every member again', async () => {
   const member = leagueMember('one', ['team-a']);

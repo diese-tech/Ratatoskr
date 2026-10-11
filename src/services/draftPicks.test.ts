@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { draftParseProblems, normalizeName, parseDraftTab, resolveDraftPicks } from './draftPicks.js';
+import { draftParseProblems, draftPickHistoricalIds, draftPickRow, normalizeName, parseDraftTab, planDraftPickAccountReplacement, resolveDraftPicks } from './draftPicks.js';
 
 // Mirrors the live draft grid: header row, Pick/Name row, Cap: row, then one row per round.
 function draftTab() {
@@ -15,6 +15,24 @@ function draftTab() {
   block(14, 5, 'Something Spicy', ['A', 'B', 'C', 'D']);
   return rows;
 }
+
+test('account replacement keeps legacy pick attribution across re-seeding without rewriting old transaction IDs', () => {
+  const before = ['Alfheim', 'Dream Walkers', 1, 1, 'One', 'old', 'One', 'Manual', 'On drafted team', ''];
+  const replacement = planDraftPickAccountReplacement([before], 'old', 'new', 'One New')[0]!;
+  assert.deepEqual(draftPickHistoricalIds(replacement.after), ['old']);
+  const history = [['legacy', 'trade', '2026-10-01', 'Alfheim', 'The Sewer', 'Dream Walkers', 'old', 'One']];
+  const resolved = resolveDraftPicks([{ division: 'Alfheim', team: 'Dream Walkers', round: 1, pick: '1', draftName: 'One' }], {
+    vetting: [], memberDirectory: [], nameHistory: [['old', 'One', 'One'], ['new', 'One New', 'One New']],
+    rosters: [['Alfheim', 'Dream Walkers', 'team', 'Dream Walkers AD', 'new', 'One New']], history,
+  }, [replacement.after]);
+  assert.equal(resolved[0]?.discordId, 'new');
+  assert.equal(resolved[0]?.status, 'Moved · trade · legacy');
+  assert.deepEqual(draftPickHistoricalIds(draftPickRow(resolved[0]!)), ['old']);
+  assert.equal(history[0]![6], 'old');
+  const manuallyChanged = [...replacement.after];
+  manuallyChanged[5] = 'different-person';
+  assert.throws(() => draftPickHistoricalIds(manuallyChanged), /current account/i);
+});
 
 test('draft parser takes rounds 1-4 under each Cap: line from every team block', () => {
   const picks = parseDraftTab('Svartalfheim', draftTab());

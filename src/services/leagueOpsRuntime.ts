@@ -35,6 +35,7 @@ import { DiscordLeagueGateway } from './leagueDiscord.js';
 import { getValidatedStaffChannel } from './operationalErrors.js';
 import type { LeagueSheetsService } from './leagueSheets.js';
 import { registerLeagueRepairRecovery, reconcileLeagueRepairRecord } from './leagueRepairRecovery.js';
+import { LeagueAccountReplacementService } from './leagueAccountReplacement.js';
 export type LeagueRepairIntent = {
   actorUserId: string;
   actorName: string;
@@ -47,7 +48,8 @@ export type LeagueRepairIntent = {
 type LeagueOpsSheets = Pick<
   LeagueSheetsService,
   'load' | 'loadMember' | 'assertUnchanged' | 'prepare' | 'apply' | 'appendTransactionHistory'
->;
+> & Partial<Pick<LeagueSheetsService, 'prepareAccountReplacement' | 'assertAccountReplacementUnchanged'
+  | 'applyAccountReplacement' | 'verifyAccountReplacement'>>;
 export function createLeagueOpsRuntime(input: {
   db: Database.Database;
   operationScope: object;
@@ -58,7 +60,7 @@ export function createLeagueOpsRuntime(input: {
   transactionsChannelId: string;
   discord?: DiscordLeagueGateway;
   cards?: LeagueAuditCardPort;
-}): { worker: LeagueJobWorker; stop(): void } {
+}): { worker: LeagueJobWorker; accountReplacement: LeagueAccountReplacementService; stop(): void } {
   const { db, operationScope, guild, sheets, freeAgentRoleId } = input;
   const guildId = guild.id;
   const discord = input.discord ?? new DiscordLeagueGateway(guild, input.transactionsChannelId, {},
@@ -78,6 +80,18 @@ export function createLeagueOpsRuntime(input: {
         'The approving administrator no longer has access. Ask a league administrator to review this operation.',
       );
   };
+  const requireReplacementSheets = <K extends 'prepareAccountReplacement' | 'assertAccountReplacementUnchanged' | 'applyAccountReplacement' | 'verifyAccountReplacement'>(key: K): NonNullable<LeagueOpsSheets[K]> => {
+    const method = sheets[key];
+    if (!method) throw new LeagueJobBlockedError('BLOCKED_REVIEW', 'The account replacement sheet adapter is unavailable. No changes were made.');
+    return method.bind(sheets) as NonNullable<LeagueOpsSheets[K]>;
+  };
+  const accountReplacement = new LeagueAccountReplacementService({ db, operationScope, guildId, freeAgentRoleId, discord, authorize,
+    sheets: { load: sheets.load.bind(sheets),
+      prepareAccountReplacement: (...args) => requireReplacementSheets('prepareAccountReplacement')(...args),
+      assertAccountReplacementUnchanged: (...args) => requireReplacementSheets('assertAccountReplacementUnchanged')(...args),
+      applyAccountReplacement: (...args) => requireReplacementSheets('applyAccountReplacement')(...args),
+      verifyAccountReplacement: (...args) => requireReplacementSheets('verifyAccountReplacement')(...args) },
+    enqueue: (intent, key) => worker.enqueue('account-replacement', intent, key) });
   const audit = async (trigger: 'startup' | 'scheduled') => {
     const result = await runLeagueAudit({
       db,
@@ -112,6 +126,14 @@ export function createLeagueOpsRuntime(input: {
     db,
     guildId,
     {
+      'account-replacement': async (job, phase) => {
+        try {
+          const result = await accountReplacement.execute(job, phase);
+          // Presentation/finding refresh does not change the durable replacement result.
+          worker.enqueue('audit', { trigger: 'scheduled' }, `replacement-audit:${job.reference}`);
+          return result;
+        } finally { refresh(); }
+      },
       transaction: async (job, phase) => {
         const intent = job.payload as LeagueTransactionIntent;
         try {
@@ -267,6 +289,7 @@ export function createLeagueOpsRuntime(input: {
       heartbeat: async (job) => refreshLeagueOpsPanel({ db, guildId, cards, now: new Date(), repost: true, repostQueuedAt: job.createdAt }),
     },
     async (job) => {
+      if (job.type === 'account-replacement') { await accountReplacement.recover(job); return; }
       const transaction = getLeagueTransaction(db, job.reference);
       const repair = getLeagueAuditRepair(db, job.reference);
       if (transaction?.status === 'completed' || repair?.status === 'completed') {
@@ -299,6 +322,7 @@ export function createLeagueOpsRuntime(input: {
   const stopHeartbeat = startLeaguePanelHeartbeat(db, worker);
   return {
     worker,
+    accountReplacement,
     stop: () => {
       stopHeartbeat();
       worker.stop();

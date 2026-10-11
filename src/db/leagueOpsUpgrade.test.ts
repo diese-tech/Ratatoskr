@@ -59,3 +59,23 @@ test('migration 32 preserves interrupted repairs and prior alert cleanup without
     assert.equal((db.prepare('SELECT count(*) n FROM league_alert_cleanup').get() as { n: number }).n, 1);
   } finally { db.close(); }
 });
+
+test('migration 34 adds replacement linkage without changing prior jobs, previews or historical transactions', () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec('CREATE TABLE schema_migrations(id INTEGER PRIMARY KEY,name TEXT NOT NULL)');
+    for (const migration of migrations.filter((m) => m.id < 34)) {
+      db.exec(migration.sql);
+      db.prepare('INSERT INTO schema_migrations VALUES(?,?)').run(migration.id, migration.name);
+    }
+    db.prepare("INSERT INTO league_jobs(reference,guild_id,type,priority,payload_json,status,dedupe_key,created_at,available_at,last_error) VALUES('old-job','g','repair',1,'{}','BLOCKED_REVIEW','old','date','date','Missing name')").run();
+    db.prepare("INSERT INTO league_transactions(reference,guild_id,kind,actor_user_id,payload_json,status) VALUES('historical','g','trade','admin','{\"oldDiscordId\":\"old\"}','completed')").run();
+    db.prepare("INSERT INTO league_transaction_previews(guild_id,actor_user_id,intent_key,plan_fingerprint) VALUES('g','admin','intent','approved')").run();
+    runMigrations(db); runMigrations(db);
+    assert.deepEqual(db.prepare("SELECT status,last_error,dismissed_at FROM league_jobs WHERE reference='old-job'").get(), { status: 'BLOCKED_REVIEW', last_error: 'Missing name', dismissed_at: null });
+    assert.equal((db.prepare("SELECT payload_json FROM league_transactions WHERE reference='historical'").get() as { payload_json: string }).payload_json, '{"oldDiscordId":"old"}');
+    assert.equal(getLeagueTransactionPreviewFingerprint(db, 'g', 'admin', 'intent'), 'approved');
+    assert.equal((db.prepare('SELECT count(*) n FROM league_account_replacements').get() as { n: number }).n, 0);
+    assert.equal((db.prepare('SELECT count(*) n FROM schema_migrations WHERE id=34').get() as { n: number }).n, 1);
+  } finally { db.close(); }
+});

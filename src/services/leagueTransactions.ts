@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { assertNoUnresolvedAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
 import { auditLeagueRoster, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
@@ -329,6 +330,7 @@ async function rollbackDiscord(
 export async function executeLeagueTransaction(input: ExecuteLeagueTransactionInput): Promise<{ reference: string; announcementId?: string }> {
   const release = await acquireLeagueTransaction(input.operationScope, input.guildId);
   try {
+    assertNoUnresolvedAccountReplacement(input.db, input.guildId);
     const members = input.discord.getMembers ? await input.discord.getMembers() : [];
     const auditDate = dateInLeagueTimezone(input.now);
     let loaded: LoadedLeagueSnapshot;

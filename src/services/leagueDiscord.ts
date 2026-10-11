@@ -2,11 +2,13 @@ import {
   ChannelType,
   EmbedBuilder,
   RESTJSONErrorCodes,
+  PermissionFlagsBits,
   type Guild,
   type GuildMember,
   type GuildTextBasedChannel,
 } from 'discord.js';
 import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange } from '../domain/leagueOperations.js';
+import type { AccountReplacementMember, AccountReplacementRoleChange } from '../domain/leagueAccountReplacement.js';
 import type { LeagueAnnouncement, LeagueDiscordPort, LeagueRoleState } from './leagueTransactions.js';
 
 export class DiscordRoleReconciliationRequiredError extends Error {
@@ -100,6 +102,54 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     catch (error) {
       if (error && typeof error === 'object' && 'code' in error && error.code === RESTJSONErrorCodes.UnknownMember) return null;
       throw error;
+    }
+  }
+
+  async getAccountReplacementMembers(): Promise<AccountReplacementMember[]> {
+    // Mutation proof never falls back to the complete-member presentation cache.
+    const fresh = await this.guild.members.fetch();
+    return fresh.filter((member) => !member.user.bot).map((member) => ({ ...roleSnapshot(member), guildId: member.guild.id, bot: member.user.bot }));
+  }
+
+  async getAccountReplacementMember(discordId: string): Promise<AccountReplacementMember | null> {
+    try {
+      const member = await fetchFreshMember(this.guild, discordId);
+      return { ...roleSnapshot(member), guildId: member.guild.id, bot: member.user.bot };
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === RESTJSONErrorCodes.UnknownMember) return null;
+      throw error;
+    }
+  }
+
+  async assertAccountReplacementRoleOwnership(changes: AccountReplacementRoleChange[]): Promise<void> {
+    const roles = await this.guild.roles.fetch();
+    const ids = new Set(changes.flatMap((change) => change.managedRoleIds));
+    for (const id of ids) {
+      const role = roles.get(id);
+      if (!role || role.guild.id !== this.guild.id || role.id === this.guild.id || role.managed || !role.editable
+        || [PermissionFlagsBits.Administrator, PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles,
+          PermissionFlagsBits.ManageChannels].some((permission) => role.permissions.has(permission)))
+        throw new LeagueMutationValidationError('A configured league role is missing, privileged, integration-owned or not editable by Ratatoskr. Review role ownership first.');
+    }
+    for (const change of changes) {
+      if ([...change.before, ...change.after, ...change.add, ...change.remove].some((id) => !change.managedRoleIds.includes(id)))
+        throw new LeagueMutationValidationError('Account replacement attempted an unmanaged Discord role change.');
+    }
+  }
+
+  async reconcileAccountReplacementRoles(change: AccountReplacementRoleChange): Promise<void> {
+    await this.assertAccountReplacementRoleOwnership([change]);
+    const member = await fetchFreshMember(this.guild, change.discordId);
+    const managed = (value: GuildMember) => [...value.roles.cache.keys()].filter((id) => change.managedRoleIds.includes(id)).sort();
+    if (member.guild.id !== this.guild.id || member.user.bot || JSON.stringify(managed(member)) !== JSON.stringify(change.before))
+      throw new LeagueMutationValidationError('The account replacement member or managed roles changed before writing.');
+    try {
+      if (change.remove.length) await member.roles.remove(change.remove, 'Ratatoskr approved account replacement');
+      if (change.add.length) await member.roles.add(change.add, 'Ratatoskr approved account replacement');
+      if (JSON.stringify(managed(await fetchFreshMember(this.guild, change.discordId))) !== JSON.stringify(change.after))
+        throw new Error('Managed account replacement roles did not converge.');
+    } catch (error) {
+      throw new DiscordRoleReconciliationRequiredError(`Account replacement role write may be partial: ${String(error)}`);
     }
   }
 

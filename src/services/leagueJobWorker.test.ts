@@ -16,6 +16,7 @@ function handlers(handler: LeagueJobHandler): Record<LeagueJobType, LeagueJobHan
   return {
     transaction: handler,
     repair: handler,
+    'account-replacement': handler,
     targeted: handler,
     panel: handler,
     dirty: handler,
