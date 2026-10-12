@@ -68,7 +68,8 @@ export function buildLeagueAccountReplacementPlan(input: AccountReplacementPlanI
   if (!Number.isInteger(input.newNameSheetRow) || input.newNameSheetRow < 6
     || snapshot.names.some((row) => row.sheetRow === input.newNameSheetRow)) reject('The proposed current-name row is occupied.');
   const target = newMember!;
-  if (!target.displayName.trim()) reject('The replacement Discord display name is empty.');
+  const leagueName = target.displayName.trim();
+  if (!leagueName) reject('The replacement Discord display name is empty.');
   const teamRoles = snapshot.teams.filter((entry) => entry.active).map((entry) => entry.teamRoleId);
   for (const member of [target, ...(input.oldMember ? [input.oldMember] : [])]) {
     const assigned = member.roleIds.filter((roleId) => teamRoles.includes(roleId));
@@ -85,14 +86,14 @@ export function buildLeagueAccountReplacementPlan(input: AccountReplacementPlanI
   const plan: LeagueAccountReplacementPlan = {
     oldDiscordId, newDiscordId,
     rosterBefore: { ...rosterBefore },
-    rosterAfter: { ...rosterBefore, discordId: newDiscordId, player: target.displayName },
+    rosterAfter: { ...rosterBefore, discordId: newDiscordId, player: leagueName },
     oldNameBefore: { ...oldNameBefore },
     oldNameAfter: { ...oldNameBefore, nameStatus: 'Previous / Alternate' },
     newName: { ...oldNameBefore, sheetRow: input.newNameSheetRow, discordId: newDiscordId,
-      currentLeagueName: target.displayName, knownName: target.displayName },
-    publicChanges: oldNameBefore.currentLeagueName === target.displayName ? [] : [{
+      currentLeagueName: leagueName, knownName: leagueName },
+    publicChanges: oldNameBefore.currentLeagueName === leagueName ? [] : [{
       division: team.division, area: 'team', group: team.franchise,
-      from: rosterBefore.player, to: target.displayName,
+      from: rosterBefore.player, to: leagueName,
     }],
     roles: [roleChange(target, [team.teamRoleId, team.divisionRoleId]),
       ...(input.oldMember ? [roleChange(input.oldMember, [])] : [])],

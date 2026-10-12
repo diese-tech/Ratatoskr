@@ -351,6 +351,7 @@ export type PreparedLeagueSheetMutation = {
 };
 
 export class LeagueSheetDriftError extends Error {}
+export class AccountReplacementNoWriteError extends LeagueSheetDriftError {}
 export class LeagueSheetReconciliationRequiredError extends Error {}
 export class LeagueSheetInputError extends Error {
   readonly operationalCode: string;
@@ -543,15 +544,21 @@ export class LeagueSheetsService {
     onWriting: (phase: 'applying_admin' | 'applying_public') => void | Promise<void>): Promise<void> {
     await this.assertAccountReplacementUnchanged(prepared);
     await onWriting('applying_admin');
+    // Authorization/member reads in the callback are asynchronous. Prove the
+    // sheet values again after them, immediately before the first write.
+    try { await this.assertAccountReplacementUnchanged(prepared); }
+    catch (error) {
+      throw new AccountReplacementNoWriteError(`Account replacement sheet proof changed or became unavailable after authorization. No sheet writes were attempted. ${error instanceof Error ? error.message : ''}`);
+    }
     try {
       await this.gateway.batchUpdate(this.config.adminSpreadsheetId, prepared.adminUpdates, 'RAW');
       if (prepared.publicUpdates.length) {
         // Compare this workbook again after the Admin write. Drift now requires reconciliation.
         const ranges = divisions.map((division) => `'${division} Roster'!${PUBLIC_RANGE}`);
+        await onWriting('applying_public');
         const current = await this.readRanges(this.config.publicSpreadsheetId, ranges);
         if (divisions.some((division, index) => JSON.stringify(current[index]) !== JSON.stringify(prepared.before.publicByDivision[division])))
           throw new Error('The public roster changed after the Admin write.');
-        await onWriting('applying_public');
         await this.gateway.batchUpdate(this.config.publicSpreadsheetId, prepared.publicUpdates, 'RAW');
       }
     } catch (error) {
@@ -588,8 +595,16 @@ export class LeagueSheetsService {
     if ((drafts === null) !== (prepared.draftAfter === null))
       throw new LeagueSheetReconciliationRequiredError('Draft Picks availability changed during replacement.');
     if (drafts) {
-      try { draftPickIdentityIndex(drafts); }
+      let identities: Map<string, string>;
+      try { identities = draftPickIdentityIndex(drafts); }
       catch { throw new LeagueSheetReconciliationRequiredError('Draft Picks historical player attribution is ambiguous.'); }
+      const expectedIdentities = draftPickIdentityIndex(prepared.draftAfter ?? []);
+      const ids = new Set([prepared.plan.oldDiscordId, prepared.plan.newDiscordId]);
+      const ownerRows = (rows: CellRows) => rows.flatMap((row, index) =>
+        ids.has(String(row[5] ?? '').trim()) || ids.has(String(row[9] ?? '').trim()) ? [index] : []);
+      if ([...ids].some(id => identities.get(id) !== expectedIdentities.get(id))
+        || JSON.stringify(ownerRows(drafts)) !== JSON.stringify(ownerRows(prepared.draftAfter ?? [])))
+        throw new LeagueSheetReconciliationRequiredError('Replacement Draft Picks identity/status ownership is duplicated or changed.');
       for (const [index, row] of (prepared.draftAfter ?? []).entries()) {
         if (JSON.stringify(row) !== JSON.stringify(prepared.draftBefore?.[index])
           && JSON.stringify(drafts[index]) !== JSON.stringify(row))

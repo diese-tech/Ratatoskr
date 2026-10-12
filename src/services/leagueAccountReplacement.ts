@@ -11,7 +11,7 @@ import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
 import { hasPendingLeagueDeliveries } from '../db/repositories/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import { LeagueJobBlockedError } from './leagueJobWorker.js';
-import { LeagueSheetDriftError, LeagueSheetReconciliationRequiredError, type LeagueSheetsService, type PreparedAccountReplacementSheets } from './leagueSheets.js';
+import { AccountReplacementNoWriteError, LeagueSheetDriftError, LeagueSheetReconciliationRequiredError, type LeagueSheetsService, type PreparedAccountReplacementSheets } from './leagueSheets.js';
 
 export type AccountReplacementIntent = {
   actorUserId: string; oldDiscordId: string; newDiscordId: string; expectedFingerprint: string; approvalReference: string; samePlayerConfirmed: true;
@@ -136,7 +136,7 @@ export class LeagueAccountReplacementService {
       }
       if (!fresh && id === preview.plan.oldDiscordId && manuallyReconciled) continue;
       if (!fresh || fresh.guildId !== i.guildId || fresh.bot
-        || (fresh.displayName !== before.displayName && (!manuallyReconciled || id === preview.plan.newDiscordId)))
+        || (fresh.displayName.trim() !== before.displayName.trim() && (!manuallyReconciled || id === preview.plan.newDiscordId)))
         throw new LeagueMutationValidationError('An account membership or display name changed during replacement.');
       const role = preview.plan.roles.find((change) => change.discordId === id)!;
       const managed = fresh.roleIds.filter((roleId) => role.managedRoleIds.includes(roleId)).sort();
@@ -254,6 +254,7 @@ export class LeagueAccountReplacementService {
       transitionAccountReplacement(i.db, i.guildId, job.reference, 'completed', evidence);
       return { reference: job.reference, draftVerification: evidence.draftVerification };
     } catch (error) {
+      if (error instanceof AccountReplacementNoWriteError) externalWrite = false;
       const record = getAccountReplacement(i.db, i.guildId, job.reference);
       if (error instanceof LeagueJobBlockedError && !externalWrite) {
         if (record?.status === 'prepared') transitionAccountReplacement(i.db, i.guildId, job.reference, 'failed', undefined, error.message);

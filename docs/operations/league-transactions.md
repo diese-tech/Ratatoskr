@@ -92,6 +92,8 @@ Use the recorded plan to inspect both IDs, Current Rosters, Player Name History,
 
 Recovery verifies the replacement-owned after-values, active identity invariants, draft attribution/slot and managed roles. Unrelated staff-note edits do not prevent convergence; the current source fingerprint still invalidates a recovery approval if any source changes after its preview.
 
+The retired account's current nickname is fresh audit evidence, rather than continued league-name authority. Original name/alias rows remain protected. Active league names use the same surrounding-whitespace normalization as Discord-name repairs and the managed name-history reader.
+
 The original related `BLOCKED_REVIEW` repair jobs remain preserved and actionable evidence through subsequent clean audits. Their later disposition requires an explicit operator workflow; replacement does not replay or silently dismiss them.
 
 ### Production approval gate for account replacement

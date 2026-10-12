@@ -100,6 +100,69 @@ test('fresh approval retries a proven pre-write block while duplicate confirmati
   } finally { f.worker.stop(); f.db.close(); }
 });
 
+test('name-row edits during final authority reads stop before any sheet write', async () => {
+  const f = fixture();
+  try {
+    const preview = await f.service.preview('admin', 'one', 'new');
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    let checks = 1;
+    f.discord.assertAccountReplacementRoleOwnership = async () => {
+      if (++checks === 4) f.gateway.rows('admin', 'Player Name History')[8] = ['other', 'Other', 'Other', 'Previous / Alternate', 'Vanaheim', '', 'Inactive'];
+    };
+    assert.equal((await settle(f, job.reference)).status, 'BLOCKED_REVIEW');
+    assert.equal(f.gateway.writes.length, 0);
+    assert.equal(f.gateway.rows('admin', 'Player Name History')[8]![0], 'other');
+    assert.equal((await f.service.record('admin', job.reference)).status, 'failed');
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('public edits during final authority reads are preserved as a partial operation', async () => {
+  const f = fixture();
+  try {
+    f.members.get('new')!.displayName = 'One New';
+    const preview = await f.service.preview('admin', 'one', 'new');
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    let checks = 1;
+    f.discord.assertAccountReplacementRoleOwnership = async () => {
+      if (++checks === 5) f.gateway.rows('public', 'Vanaheim Roster')[4]![2] = 'Staff edit';
+    };
+    assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
+    assert.equal(f.gateway.writes.length, 1);
+    assert.equal(f.gateway.rows('public', 'Vanaheim Roster')[4]![2], 'Staff edit');
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('draft duplicates introduced during manual recovery cannot change protected attribution', async () => {
+  const f = fixture();
+  try {
+    const preview = await f.service.preview('admin', 'one', 'new');
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    f.gateway.failWorkbook = 'admin';
+    assert.equal((await settle(f, job.reference)).status, 'RECONCILIATION_REQUIRED');
+    const duplicate = [...f.gateway.rows('admin', 'Draft Picks')[5]!];
+    duplicate[1] = 'The Sewer'; duplicate[3] = 2;
+    f.gateway.rows('admin', 'Draft Picks').push(duplicate);
+    await assert.rejects(() => f.service.previewRecovery('admin', job.reference), /ownership is duplicated/i);
+    assert.equal(f.gateway.writes.length, 1);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
+test('replacement uses canonical Discord names when nicknames contain surrounding whitespace', async () => {
+  const f = fixture();
+  try {
+    f.members.get('new')!.displayName = '  One  ';
+    const preview = await f.service.preview('admin', 'one', 'new');
+    assert.equal(preview.plan.newName.currentLeagueName, 'One');
+    assert.equal(preview.plan.publicChanges.length, 0);
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    assert.equal((await settle(f, job.reference)).status, 'COMPLETED');
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
 test('replacement waits for older notice/history deliveries before freezing draft ownership and move status', async () => {
   const f = fixture();
   try {
