@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { assertNoUnresolvedAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
 import {
@@ -33,6 +33,19 @@ export type LeagueAuditRepairAction = 'use-discord-name' | 'use-league-name' | '
 export type LeagueAuditResolutionAction = LeagueAuditRepairAction | 'repair-roles';
 
 export class LeagueAuditRepairNoWriteError extends Error {}
+
+export function previewLeagueAuditResolution(loaded: LoadedLeagueSnapshot, finding: string, action: LeagueAuditResolutionAction) {
+  const diagnostic = auditLeagueRoster(loaded.snapshot).find(candidate => humanizeLeagueAuditIssues(loaded.snapshot, [candidate])[0] === finding);
+  if (!diagnostic) throw new LeagueAuditRepairStaleError();
+  const plan = action === 'repair-roles'
+    ? buildManagedRoleRepair(loaded.snapshot, diagnostic.match(/^Discord member (\S+)/)?.[1] ?? '')
+    : buildLeagueAuditSheetRepair(loaded.snapshot, diagnostic, action);
+  const snapshot = { ...loaded.snapshot, discordMembers: [...loaded.snapshot.discordMembers].sort((a, b) => a.discordId.localeCompare(b.discordId))
+    .map(member => ({ ...member, roleIds: [...member.roleIds].sort() })) };
+  return { fingerprint: createHash('sha256').update(JSON.stringify({ finding, action, plan, sources: loaded.sources, snapshot })).digest('hex'),
+    description: 'playerIds' in plan ? `${action}: ${plan.players.join(' / ')}\n${plan.publicChanges.map(c => `${c.division} / ${c.group}: ${c.from || 'empty'} → ${c.to || 'empty'}`).join('\n')}`
+      : `${action}: account ${plan.discordId}; add managed roles ${plan.add.join(', ') || 'none'}; remove ${plan.remove.join(', ') || 'none'}.` };
+}
 
 export class LeagueAuditRepairStaleError extends LeagueAuditRepairNoWriteError {
   constructor() {
@@ -358,6 +371,7 @@ export async function executeLeagueAuditRepair(input: {
   actorName: string;
   now: Date;
   expectedFinding: string;
+  expectedRepairFingerprint?: string;
   action: LeagueAuditResolutionAction;
   freeAgentRoleId: string;
   jobReference?: string;
@@ -374,6 +388,8 @@ export async function executeLeagueAuditRepair(input: {
     const diagnostic = auditLeagueRoster(loaded.snapshot).find((candidate) =>
       humanizeLeagueAuditIssues(loaded.snapshot, [candidate])[0] === input.expectedFinding);
     if (!diagnostic) throw new LeagueAuditRepairStaleError();
+    if (input.expectedRepairFingerprint && previewLeagueAuditResolution(loaded, input.expectedFinding, input.action).fingerprint !== input.expectedRepairFingerprint)
+      throw new LeagueAuditRepairNoWriteError('The repair source changed since this review page opened. Review a fresh preview and explicitly confirm it before trying again.');
     const reference = input.jobReference ?? `YSL-AUD-FIX-${randomUUID().slice(0, 8).toUpperCase()}`;
     if (input.action === 'repair-roles') {
       const match = diagnostic.match(/^Discord member (\S+)/);

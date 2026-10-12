@@ -148,8 +148,15 @@ client.once('clientReady', async () => {
     ? 'Pending league transaction notices reconciled.'
     : 'League transaction recovery failed; continuing existing Scout startup.');
   const runtime = createLeagueOpsRuntime({db,operationScope:storage.operationScope,client,guild:leagueGuild,sheets:leagueSheets,freeAgentRoleId:leagueConfig.freeAgentRoleId,transactionsChannelId:leagueConfig.transactionsChannelId});
+  const { registerLeagueOpsUi } = await import('./services/leagueOpsUi.js');
+  let stopLeagueOpsUi = () => {};
+  try {
+    stopLeagueOpsUi = registerLeagueOpsUi({ scope: storage.operationScope, db, client, guild: leagueGuild,
+      worker: runtime.worker, replacement: runtime.accountReplacement, sheets: leagueSheets, discord: leagueDiscord,
+      freeAgentRoleId: leagueConfig.freeAgentRoleId });
+  } catch { console.error('Private League Ops UI unavailable; read-only legacy review remains available.'); }
   leagueWorker = runtime.worker;
-  stopLeagueOps = runtime.stop;
+  stopLeagueOps = () => { stopLeagueOpsUi(); runtime.stop(); };
   await leagueWorker.recover();
   leagueWorker.enqueue('audit',{trigger:'startup'},'audit:startup');
   leagueWorker.enqueue('panel',{},'panel');

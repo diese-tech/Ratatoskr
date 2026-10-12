@@ -269,6 +269,7 @@ export async function refreshLeagueOpsPanel(
     card.description =
       'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
   if (!issues.length) card.actions = undefined;
+  card.actions = [...(card.actions ?? []), { id: 'league-ops:open', label: 'Review League Ops' }];
   if (recoverableRepairs.length) card.actions = [...(card.actions ?? []), { id: 'league-recovery:list', label: 'Review operations' }];
   card.actions = [...(card.actions ?? []), { id: 'league-recovery:recheck', label: 'Recheck roster' }];
   if (jobs.length)
@@ -278,7 +279,7 @@ export async function refreshLeagueOpsPanel(
         .slice(-8)
         .map(
           (job) =>
-            `${job.reference}: ${job.status === 'BLOCKED_REVIEW' ? 'Review a fresh transaction preview' : job.status === 'RECONCILIATION_REQUIRED' ? (job.result && typeof job.result === 'object' && 'pendingDelivery' in job.result ? 'Roster change complete; public notice/history is being recovered' : 'Check a possibly partial operation before retrying') : 'Check permissions or configuration, then retry'}`,
+            `${job.reference}: ${job.type} · ${job.status === 'BLOCKED_REVIEW' ? (job.type === 'transaction' ? 'Fresh transaction preview required' : 'Inspect the saved repair/account issue privately') : job.status === 'RECONCILIATION_REQUIRED' ? (job.result && typeof job.result === 'object' && 'pendingDelivery' in job.result ? 'Roster change complete; public notice/history is being recovered' : 'Inspect a possibly partial operation; do not replay') : job.status === 'RETRYING' ? 'Automatic retry pending' : 'Inspect configuration and saved error privately'}`,
         )
         .join('\n');
   const additionalProblems = mutationProblems.filter((reference) => !jobs.some((job) => job.reference === reference));
