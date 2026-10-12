@@ -71,6 +71,8 @@ The domain capability is `LeagueAccountReplacementService`, exposed as `createLe
 
 Migration **34** adds `league_account_replacements` and links original blocked repair jobs through `league_account_replacement_evidence`. It preserves existing jobs, approvals, transactions and historical IDs. The lifecycle is `prepared` → `applying_admin` → optional `applying_public` → `applying_discord` → `verifying` → `completed`; safe pre-write failures are `failed`, while partial or ambiguous writes become `reconciliation_required`.
 
+Pending transaction notices/history must finish before a replacement is previewed or approved. This keeps an older delivery from changing the frozen draft move status during replacement recovery. Pre-write blocked transaction attempts do not count as pending deliveries.
+
 The sheet updates are limited to the existing roster row's Discord ID/name cells, the old authoritative name row's status, and a new current-name row. Old aliases, notes, unrelated columns and historical transaction IDs remain intact. A changed public name updates only its owned roster cell; the same name causes no public write. Post-write reads must prove exactly one new-ID current-name/roster assignment and no falsely current old-ID assignment before completion.
 
 Only explicitly configured, editable, non-privileged team/division/Free Agent roles are adjusted. Unmapped roles and the configured captain access role are displayed for **manual review**. A roster status of `Captain` does not grant authority to copy Discord administrative roles; unrelated roles are neither copied nor stripped. Fresh full-member proof reads do not fall back to a rate-limited cached snapshot.

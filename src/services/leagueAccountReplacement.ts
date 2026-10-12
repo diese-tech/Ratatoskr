@@ -8,6 +8,7 @@ import { assertAccountReplacementAvailable, createAccountReplacement, getAccount
 import { getLeagueJob, getLeagueJobByDedupe, listActionableLeagueJobs, transitionLeagueJob,
   type LeagueJob, type LeagueJobStatus } from '../db/repositories/leagueJobs.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
+import { hasPendingLeagueDeliveries } from '../db/repositories/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import { LeagueJobBlockedError } from './leagueJobWorker.js';
 import { LeagueSheetDriftError, LeagueSheetReconciliationRequiredError, type LeagueSheetsService, type PreparedAccountReplacementSheets } from './leagueSheets.js';
@@ -51,6 +52,8 @@ export class LeagueAccountReplacementService {
   private async inspect(actorUserId: string, oldDiscordId: string, newDiscordId: string, reference = ''): Promise<Inspection> {
     const i = this.input;
     await i.authorize(actorUserId);
+    if (hasPendingLeagueDeliveries(i.db, i.guildId))
+      throw new LeagueMutationValidationError('Pending transaction notices/history must finish before account replacement. Let delivery recovery complete, then review a fresh preview.');
     assertAccountReplacementAvailable(i.db, i.guildId, oldDiscordId, newDiscordId, reference);
     const members = await i.discord.getAccountReplacementMembers();
     const oldMember = await i.discord.getAccountReplacementMember(oldDiscordId);
@@ -98,6 +101,8 @@ export class LeagueAccountReplacementService {
     return i.db.transaction(() => {
       const existing = getLeagueJobByDedupe(i.db, i.guildId, key);
       if (existing) return existing;
+      if (hasPendingLeagueDeliveries(i.db, i.guildId))
+        throw new LeagueMutationValidationError('Pending transaction notices/history must finish before account replacement. Review a fresh preview after delivery recovery.');
       assertAccountReplacementAvailable(i.db, i.guildId, intent.oldDiscordId, intent.newDiscordId);
       const pending = i.db.prepare(`SELECT reference FROM league_jobs WHERE guild_id=? AND type='account-replacement'
         AND status IN ('QUEUED','RETRYING','LOADING','VALIDATING','APPLYING','VERIFYING','RECONCILIATION_REQUIRED')

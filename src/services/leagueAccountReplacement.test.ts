@@ -100,6 +100,23 @@ test('fresh approval retries a proven pre-write block while duplicate confirmati
   } finally { f.worker.stop(); f.db.close(); }
 });
 
+test('replacement waits for older notice/history deliveries before freezing draft ownership and move status', async () => {
+  const f = fixture();
+  try {
+    const preview = await f.service.preview('admin', 'one', 'new');
+    f.db.prepare('INSERT INTO league_transactions(reference,guild_id,kind,actor_user_id,payload_json,status) VALUES(?,?,?,?,?,?)')
+      .run('earlier-trade', 'g', 'trade', 'admin', '{}', 'announcement_pending');
+    await assert.rejects(() => f.service.preview('admin', 'one', 'new'), /notices\/history must finish/i);
+    await assert.rejects(() => f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true }), /notices\/history must finish/i);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM league_jobs').get() as { n: number }).n, 0);
+    assert.equal(f.gateway.writes.length, 0);
+    f.db.prepare('UPDATE league_transactions SET status=? WHERE reference=?').run('completed', 'earlier-trade');
+    const fresh = await f.service.preview('admin', 'one', 'new');
+    assert.ok(fresh.fingerprint);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
 test('recovery protects original account and alias attribution while permitting unrelated notes', async () => {
   for (const edit of [
     (f: ReturnType<typeof fixture>) => { f.gateway.rows('admin', 'Player Name History')[5]![0] = 'another-player'; },
