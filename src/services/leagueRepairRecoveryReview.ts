@@ -1,22 +1,17 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, type ButtonInteraction } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
-import {
-  getLeagueTransactionPreviewFingerprint,
-  saveLeagueTransactionPreview,
-} from '../db/repositories/leagueOperations.js';
 import { hasAccess } from './authorization.js';
 import { leagueJobWorkerFor } from './leagueJobWorker.js';
 import { LeagueJobBlockedError } from './leagueJobWorker.js';
 import { previewRegisteredLeagueRepairRecovery } from './leagueRepairRecovery.js';
-import type { LeagueRepairIntent } from './leagueOpsRuntime.js';
 
 export async function handleLeagueRepairRecoveryButton(
   interaction: ButtonInteraction,
   db: Database.Database,
   scope: object,
 ): Promise<boolean> {
-  const [prefix, action, target, approval] = interaction.customId.split(':');
+  const [prefix, action, target] = interaction.customId.split(':');
   if (prefix !== 'league-recovery' || !['list', 'preview', 'confirm', 'recheck'].includes(action ?? '')) return false;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   if (!interaction.guild) {
@@ -64,33 +59,8 @@ export async function handleLeagueRepairRecoveryButton(
     await interaction.editReply('The recovery reference is missing. Open Review operations again.');
     return true;
   }
-  const intentKey = `repair-recovery:${target}`;
   if (action === 'confirm') {
-    const fingerprint = getLeagueTransactionPreviewFingerprint(
-      db,
-      interaction.guild.id,
-      interaction.user.id,
-      intentKey,
-    );
-    if (!fingerprint || approval !== Buffer.from(fingerprint, 'hex').toString('base64url')) {
-      await interaction.editReply(
-        'This recovery approval is missing or out of date. Review this operation again before confirming.',
-      );
-      return true;
-    }
-    const intent: LeagueRepairIntent = {
-      actorUserId: interaction.user.id,
-      actorName: member.displayName,
-      auditReference: '',
-      expectedFinding: '',
-      action: 'use-discord-name',
-      reconcileReference: target,
-      expectedRecoveryFingerprint: fingerprint,
-    };
-    const job = worker.enqueue('repair', intent, `recovery:${target}:${interaction.user.id}:${fingerprint}`);
-    await interaction.editReply(
-      `Reconciliation acknowledgement ${job.status.toLowerCase().replaceAll('_', ' ')}: ${job.reference}. Fresh state will be checked again before closing ${target}.`,
-    );
+    await interaction.editReply('Legacy recovery is read-only. Open Review League Ops to inspect fresh convergence and explicitly acknowledge reconciliation.');
     return true;
   }
   let preview;
@@ -102,12 +72,6 @@ export async function handleLeagueRepairRecoveryButton(
     return true;
   }
   if (preview.findings.length) worker.enqueue('audit', { trigger: 'scheduled' }, 'full-audit');
-  saveLeagueTransactionPreview(db, {
-    guildId: interaction.guild.id,
-    actorUserId: interaction.user.id,
-    intentKey,
-    planFingerprint: preview.fingerprint,
-  });
   await interaction.editReply({
     content: [
       `Operation: ${preview.repair.reference}`,
@@ -128,7 +92,7 @@ export async function handleLeagueRepairRecoveryButton(
             `league-recovery:confirm:${target}:${Buffer.from(preview.fingerprint, 'hex').toString('base64url')}`,
           )
           .setLabel('Confirm reconciled')
-          .setDisabled(Boolean(preview.findings.length))
+          .setDisabled(true)
           .setStyle(ButtonStyle.Primary),
       ),
     ],

@@ -8,7 +8,7 @@ import type { LeagueJobType } from '../db/repositories/leagueJobs.js';
 process.env.ROLE_ALLFATHER_ID = 'admin-role';
 process.env.ROLE_AESIR_ID = 'staff-role';
 const { handleLeagueAuditReviewButton } = await import('./leagueAuditReview.js');
-test('double confirmation acknowledges quickly, reports one durable reference, and cannot mutate twice despite delayed card edits', async () => {
+test('legacy confirmations acknowledge quickly but remain read-only despite duplicate and delayed clicks', async () => {
   const db = openDatabase(':memory:');
   const events: string[] = [];
   let mutations = 0;
@@ -72,15 +72,12 @@ test('double confirmation acknowledges quickly, reports one durable reference, a
     release();
     await Promise.all([first, second]);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(mutations, 1);
+    assert.equal(mutations, 0);
     assert.equal(
       (db.prepare("SELECT count(*) count FROM league_jobs WHERE type='repair'").get() as { count: number }).count,
-      1,
+      0,
     );
-    const reference = (
-      db.prepare("SELECT reference FROM league_jobs WHERE type='repair'").get() as { reference: string }
-    ).reference;
-    assert.ok(replies.every((reply) => reply[1]!.includes(reference)));
+    assert.ok(replies.every(reply => reply[0]!.includes('read-only')));
     beginDirtyLeagueAudit(db, {
       guildId: 'g',
       result: 'dirty',
@@ -90,8 +87,8 @@ test('double confirmation acknowledges quickly, reports one durable reference, a
       trigger: 'scheduled',
     });
     await handleLeagueAuditReviewButton(interaction(0), db, db);
-    assert.equal(mutations, 1);
-    assert.match(replies[0]!.at(-1)!, /completed/);
+    assert.equal(mutations, 0);
+    assert.match(replies[0]!.at(-1)!, /read-only/);
     // No channel/client presentation path is supplied: duplicate/queue states
     // must only respond privately, never attempt a standalone staff alert.
   } finally {
@@ -113,7 +110,7 @@ test('stale component with no matching durable job fails closed before mutation'
       },
     } as unknown as ButtonInteraction;
     await handleLeagueAuditReviewButton(interaction, db, db);
-    assert.match(replies[0]!, /out of date/);
+    assert.match(replies[0]!, /read-only/);
     assert.equal((db.prepare('SELECT count(*) count FROM league_jobs').get() as { count: number }).count, 0);
   } finally {
     db.close();
@@ -150,7 +147,7 @@ test('read failure keeps the current verified finding reviewable without executi
   }
 });
 
-test('recovery confirmation rejects a stale approval and deduplicates repeated current approvals', async () => {
+test('legacy recovery confirmations cannot bypass the private Fluxcord acknowledgement flow', async () => {
   const { handleLeagueRepairRecoveryButton } = await import('./leagueRepairRecoveryReview.js');
   const { saveLeagueTransactionPreview } = await import('../db/repositories/leagueOperations.js');
   const db = openDatabase(':memory:');
@@ -172,14 +169,14 @@ test('recovery confirmation rejects a stale approval and deduplicates repeated c
     saveLeagueTransactionPreview(db, { guildId: 'g', actorUserId: 'admin', intentKey: 'repair-recovery:YSL-AUD-FIX-12345678', planFingerprint: fingerprint });
     await handleLeagueRepairRecoveryButton(interaction('stale'), db, db);
     assert.equal(events[0], 'ack');
-    assert.match(replies.at(-1)!, /out of date/);
+    assert.match(replies.at(-1)!, /read-only/);
     assert.equal(executions, 0);
     await handleLeagueRepairRecoveryButton(interaction(approval, false), db, db);
     assert.match(replies.at(-1)!, /Only league administrators/);
     await handleLeagueRepairRecoveryButton(interaction(approval), db, db);
     await handleLeagueRepairRecoveryButton(interaction(approval), db, db);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(executions, 1);
-    assert.equal((db.prepare("SELECT count(*) n FROM league_jobs WHERE type='repair'").get() as { n: number }).n, 1);
+    assert.equal(executions, 0);
+    assert.equal((db.prepare("SELECT count(*) n FROM league_jobs WHERE type='repair'").get() as { n: number }).n, 0);
   } finally { worker.stop(); db.close(); }
 });

@@ -1,7 +1,4 @@
 import type { LeagueAuditResolutionAction } from './leagueAuditResolution.js';
-import { getLeagueJobByDedupe } from '../db/repositories/leagueJobs.js';
-import { leagueJobWorkerFor } from './leagueJobWorker.js';
-import type { LeagueRepairIntent } from './leagueOpsRuntime.js';
 import { handleLeagueRepairRecoveryButton } from './leagueRepairRecoveryReview.js';
 import {
   ActionRowBuilder,
@@ -28,7 +25,7 @@ function payload(view: LeagueAuditReviewView): InteractionReplyOptions & Interac
     embeds: [
       new EmbedBuilder()
         .setTitle(view.title)
-        .setDescription(view.description)
+        .setDescription(`${view.description}\n\nLegacy review is read-only. Use Review League Ops on the current status card to preview and confirm a resolution.`)
         .setFooter({ text: view.footer })
         .setColor(0xc43c35),
     ],
@@ -39,7 +36,7 @@ function payload(view: LeagueAuditReviewView): InteractionReplyOptions & Interac
             .setCustomId(action.id)
             .setLabel(action.label)
             .setStyle(['Previous', 'Next', 'Back'].includes(action.label) ? ButtonStyle.Secondary : ButtonStyle.Primary)
-            .setDisabled(action.disabled),
+            .setDisabled(action.disabled || action.id.includes(':confirm:') || action.id.includes(':choice:')),
         ),
       ),
     ],
@@ -101,22 +98,14 @@ export async function handleLeagueAuditReviewButton(
   }
   if (parsed.action === 'review') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   else await interaction.deferUpdate();
-  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
   if (!hasAccess(member, 'ADMIN')) {
     await interaction.editReply({ content: 'Only league administrators can review or resolve roster audit issues.' });
     return true;
   }
-  const dedupeKey = `repair:${parsed.reference}:${parsed.page}:${parsed.resolution}`;
   if (parsed.action === 'confirm') {
-    const existing = getLeagueJobByDedupe(db, interaction.guild.id, dedupeKey);
-    if (existing) {
-      await interaction.editReply({
-        content: `Repair ${existing.status.toLowerCase().replaceAll('_', ' ')}. Reference: ${existing.reference}.`,
-        embeds: [],
-        components: [],
-      });
-      return true;
-    }
+    await interaction.editReply({ content: 'Legacy review is read-only. Reopen Review League Ops on the current status card for a fresh preview and explicit confirmation.', embeds: [], components: [] });
+    return true;
   }
   const state = getLeagueAuditState(db, interaction.guild.id);
   if (!state || state.result === 'clean' || state.runReference !== parsed.reference) {
@@ -138,29 +127,6 @@ export async function handleLeagueAuditReviewButton(
     await interaction.editReply(
       payload(buildLeagueAuditConfirmationView(finding, parsed.page, parsed.reference, parsed.resolution!)),
     );
-    return true;
-  }
-  if (parsed.action === 'confirm') {
-    await interaction.editReply({
-      content: 'Queued: Ratatoskr will recheck this issue before making changes.',
-      embeds: [],
-      components: [],
-      allowedMentions: { parse: [] },
-    });
-    const intent: LeagueRepairIntent = {
-      actorUserId: interaction.user.id,
-      actorName: member.displayName || interaction.user.username,
-      auditReference: parsed.reference,
-      expectedFinding: finding,
-      action: parsed.resolution!,
-    };
-    const job = leagueJobWorkerFor(operationScope, interaction.guild.id).enqueue('repair', intent, dedupeKey);
-    await interaction.editReply({
-      content: `Repair ${job.status.toLowerCase().replaceAll('_', ' ')}. Reference: ${job.reference}. Use League Ops Status for the current findings.`,
-      embeds: [],
-      components: [],
-      allowedMentions: { parse: [] },
-    });
     return true;
   }
   const view = buildLeagueAuditReviewView(state.findings, parsed.page, parsed.reference);

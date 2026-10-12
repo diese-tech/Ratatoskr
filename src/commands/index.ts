@@ -33,6 +33,8 @@ export async function handleInteraction(
   scoutSignupDependencies: ScoutSignupDependencies,
 ) {
   const db = storage.legacyDatabase;
+  const { handleLeagueOpsUi } = await import('../services/leagueOpsUi.js');
+  if (await handleLeagueOpsUi(interaction, storage.operationScope)) return;
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === 'scout') await handleScoutAutocomplete(interaction);
     else if (interaction.commandName === 'transaction') await handleTransactionAutocomplete(interaction);

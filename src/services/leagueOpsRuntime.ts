@@ -41,6 +41,7 @@ export type LeagueRepairIntent = {
   actorName: string;
   auditReference: string;
   expectedFinding: string;
+  expectedRepairFingerprint?: string;
   action: LeagueAuditResolutionAction;
   reconcileReference?: string;
   expectedRecoveryFingerprint?: string;
