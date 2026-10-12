@@ -855,4 +855,33 @@ export const migrations: Migration[] = [
     name: 'league_clean_full_audit_evidence',
     sql: 'ALTER TABLE league_audit_cards ADD COLUMN last_clean_full_at TEXT;',
   },
+  {
+    id: 34,
+    name: 'league_account_replacements',
+    sql: `
+      CREATE TABLE league_account_replacements (
+        reference TEXT PRIMARY KEY REFERENCES league_jobs(reference),
+        guild_id TEXT NOT NULL,
+        old_discord_id TEXT NOT NULL,
+        new_discord_id TEXT NOT NULL,
+        actor_user_id TEXT NOT NULL,
+        before_fingerprint TEXT NOT NULL,
+        after_fingerprint TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('prepared','applying_admin','applying_public','applying_discord','verifying','completed','failed','reconciliation_required')),
+        verification_json TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        CHECK(old_discord_id <> new_discord_id)
+      );
+      CREATE UNIQUE INDEX league_replacement_old ON league_account_replacements(guild_id,old_discord_id) WHERE status <> 'failed';
+      CREATE UNIQUE INDEX league_replacement_new ON league_account_replacements(guild_id,new_discord_id) WHERE status <> 'failed';
+      CREATE TABLE league_account_replacement_evidence (
+        reference TEXT NOT NULL REFERENCES league_account_replacements(reference),
+        job_reference TEXT NOT NULL REFERENCES league_jobs(reference),
+        PRIMARY KEY(reference,job_reference)
+      );
+    `,
+  },
 ];

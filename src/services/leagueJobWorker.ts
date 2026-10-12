@@ -4,6 +4,7 @@ import {
   dismissResolvedBackgroundFailures,
   enqueueLeagueJob,
   getLeagueJob,
+  isLeagueMutationJob,
   recoverLeagueJobs,
   releaseBackgroundDedupe,
   transitionLeagueJob,
@@ -46,7 +47,7 @@ export class LeagueJobWorker {
   }
   async recover(): Promise<void> {
     for (const job of recoverLeagueJobs(this.db, this.guildId)) {
-      if (job.type === 'transaction' || job.type === 'repair') await this.recoverMutation(job);
+      if (isLeagueMutationJob(job.type)) await this.recoverMutation(job);
       else transitionLeagueJob(this.db, job.reference, 'QUEUED');
     }
   }
@@ -86,7 +87,7 @@ export class LeagueJobWorker {
             transitionLeagueJob(this.db, job.reference, error.status, { error: error.message, result: error.result });
           } else {
             const current = getLeagueJob(this.db, job.reference)!;
-            const mutation = job.type === 'transaction' || job.type === 'repair';
+            const mutation = isLeagueMutationJob(job.type);
             const ambiguous = mutation && ['APPLYING', 'VERIFYING'].includes(current.status);
             const status = ambiguous ? 'RECONCILIATION_REQUIRED' : job.attemptCount >= 5 ? 'FAILED' : 'RETRYING';
             transitionLeagueJob(this.db, job.reference, status, {

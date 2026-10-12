@@ -15,6 +15,64 @@ export type ResolvedDraftPick = DraftPick & {
   discordId: string; currentName: string; matchSource: string; status: string;
 };
 
+const ACCOUNT_REPLACEMENT_SOURCE = 'Account replacement:';
+// This narrowly scoped projection retains pick attribution for re-seeding/backfill.
+// The canonical approving actor, plan and lifecycle remain in SQLite.
+export function draftPickHistoricalIds(row: Rows[number]): string[] {
+  const source = String(row[7] ?? '');
+  if (!source.startsWith(ACCOUNT_REPLACEMENT_SOURCE)) return [];
+  let linkage: unknown;
+  try { linkage = JSON.parse(source.slice(ACCOUNT_REPLACEMENT_SOURCE.length)); }
+  catch { throw new Error('Draft Picks account replacement linkage is malformed.'); }
+  if (!linkage || typeof linkage !== 'object' || Array.isArray(linkage)
+    || !('currentDiscordId' in linkage) || !('historicalDiscordIds' in linkage)
+    || !String(row[5] ?? '').trim() || linkage.currentDiscordId !== String(row[5] ?? '').trim())
+    throw new Error('Draft Picks account replacement linkage no longer matches its current account.');
+  const ids = linkage.historicalDiscordIds;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || !id.trim() || id === String(row[5] ?? '').trim())
+    || new Set(ids).size !== ids.length) throw new Error('Draft Picks account replacement linkage is ambiguous.');
+  return ids;
+}
+
+export function draftPickIdentityIndex(rows: Rows): Map<string, string> {
+  const ids = new Map<string, string>();
+  for (const row of rows) {
+    const current = String(row[5] ?? '').trim();
+    const historical = draftPickHistoricalIds(row);
+    if (!current) continue;
+    for (const id of [current, ...historical]) {
+      if (ids.has(id) && ids.get(id) !== current) throw new Error('Draft Picks links one account to competing players.');
+      ids.set(id, current);
+    }
+  }
+  return ids;
+}
+
+// Account replacement changes identity joins, never the draft slot or move status.
+export function planDraftPickAccountReplacement(rows: Rows, oldId: string, newId: string, currentName: string) {
+  if (!oldId.trim() || !newId.trim() || oldId === newId) throw new Error('Draft Picks replacement requires distinct account IDs.');
+  const text = (row: Rows[number], column: number) => String(row[column] ?? '').trim();
+  const identities = draftPickIdentityIndex(rows);
+  if (identities.has(newId) || (identities.has(oldId) && identities.get(oldId) !== oldId))
+    throw new Error('Draft Picks replacement account conflicts with historical player attribution.');
+  if (rows.some((row) => text(row, 5) === newId || text(row, 9) === newId))
+    throw new Error('The replacement account already owns a Draft Picks identity.');
+  const matched = rows.map((row, index) => ({ row, index })).filter(({ row }) => text(row, 5) === oldId || text(row, 9) === oldId);
+  if (matched.length > 1) throw new Error('The old account has ambiguous Draft Picks rows.');
+  return matched.map(({ row, index }) => {
+    if (text(row, 5) !== oldId || (text(row, 9) && text(row, 9) !== oldId))
+      throw new Error('Draft Picks identity and status ownership disagree.');
+    const after = [...row];
+    const previousIds = draftPickHistoricalIds(row);
+    if (previousIds.includes(newId)) throw new Error('Draft Picks account replacement would reuse a historical account.');
+    after[5] = newId;
+    after[6] = currentName;
+    after[7] = ACCOUNT_REPLACEMENT_SOURCE + JSON.stringify({ currentDiscordId: newId, historicalDiscordIds: [...previousIds, oldId] });
+    if (text(row, 9) === oldId) after[9] = newId;
+    return { sheetRow: index + 6, before: [...row], after };
+  });
+}
+
 const text = (rows: Rows, row: number, column: number) => String(rows[row]?.[column] ?? '').trim();
 
 // Draft tabs repeat the roster grid: team header two rows above 'Cap:' in the Pick column,
@@ -86,9 +144,11 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
   }]));
 
   const historyMoves = new Map<string, string>();
+  const pickIdentities = draftPickIdentityIndex(existing);
   for (const row of sources.history ?? []) {
     const [reference, move, date, discordId] = [row[0], row[1], row[2], row[6]].map((cell) => String(cell ?? '').trim());
-    if (discordId && move && move !== 'rename' && date >= (sources.since ?? '')) historyMoves.set(discordId, `Moved · ${move} · ${reference}`);
+    if (discordId && move && move !== 'rename' && date >= (sources.since ?? ''))
+      historyMoves.set(pickIdentities.get(discordId) ?? discordId, `Moved · ${move} · ${reference}`);
   }
   return picks.map((drafted) => {
     const pick = { ...drafted, team: franchise(drafted.division, drafted.team) };
@@ -104,7 +164,7 @@ export function resolveDraftPicks(picks: DraftPick[], sources: NameSources, exis
     const keptStatus = String(kept?.[8] ?? '').trim();
     const keptStatusId = String(kept?.[9] ?? '').trim();
     const found = candidates.find(([, id]) => id) ?? ['UNRESOLVED', ''];
-    const [matchSource, discordId] = keptId && keptId !== found[1]
+    const [matchSource, discordId] = keptId && (keptId !== found[1] || (kept && draftPickHistoricalIds(kept).length))
       ? [String(kept?.[7] ?? '').trim() === 'UNRESOLVED' ? 'Manual' : String(kept?.[7] ?? '').trim() || 'Manual', keptId]
       : found;
     const current = discordId ? rostered.get(discordId) : undefined;

@@ -33,6 +33,7 @@ const handlers: Record<LeagueJobType, LeagueJobHandler> = {
   dirty: noWork,
   audit: noWork,
   heartbeat: noWork,
+  'account-replacement': noWork,
 };
 function setup() {
   const db = openDatabase(':memory:');

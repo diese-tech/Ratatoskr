@@ -1,5 +1,8 @@
 import { GoogleAuth } from 'google-auth-library';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import type { LeagueAccountReplacementPlan } from '../domain/leagueAccountReplacement.js';
+import { draftPickIdentityIndex, planDraftPickAccountReplacement } from './draftPicks.js';
 import {
   type DiscordLeagueMember,
   type LeagueDivision,
@@ -302,6 +305,18 @@ export type LeagueSheetSources = {
 
 export type LoadedLeagueSnapshot = { snapshot: LeagueSnapshot; sources: LeagueSheetSources };
 
+export type PreparedAccountReplacementSheets = {
+  plan: LeagueAccountReplacementPlan;
+  freeAgentRoleId: string;
+  before: LeagueSheetSources;
+  after: LeagueSheetSources;
+  adminUpdates: SheetValueUpdate[];
+  publicUpdates: SheetValueUpdate[];
+  draftBefore: CellRows | null;
+  draftAfter: CellRows | null;
+  draftVerification: 'verified' | 'skipped:missing-tab';
+};
+
 // A captain's first four draft picks (rounds 1-4, not the Cap: line). Seeded by
 // scripts/seed-draft-picks.ts into the Admin 'Draft Picks' tab; moves of these players are
 // marked so staff can review trades for competitive balance.
@@ -336,6 +351,7 @@ export type PreparedLeagueSheetMutation = {
 };
 
 export class LeagueSheetDriftError extends Error {}
+export class AccountReplacementNoWriteError extends LeagueSheetDriftError {}
 export class LeagueSheetReconciliationRequiredError extends Error {}
 export class LeagueSheetInputError extends Error {
   readonly operationalCode: string;
@@ -472,6 +488,151 @@ export class LeagueSheetsService {
     return this.gateway.getValuesBatch
       ? this.gateway.getValuesBatch(spreadsheetId, ranges)
       : Promise.all(ranges.map((range) => this.gateway.getValues(spreadsheetId, range)));
+  }
+
+  private async accountReplacementDraftRows(): Promise<CellRows | null> {
+    try { return await this.gateway.getValues(this.config.adminSpreadsheetId, DRAFT_PICKS_RANGE, { purpose: 'fresh' }); }
+    catch (error) {
+      if (error && typeof error === 'object' && 'status' in error && error.status === 400) return null;
+      throw error;
+    }
+  }
+
+  async prepareAccountReplacement(loaded: LoadedLeagueSnapshot, plan: LeagueAccountReplacementPlan): Promise<PreparedAccountReplacementSheets> {
+    if (plan.newName.sheetRow !== loaded.sources.names.length + 5)
+      throw new LeagueSheetDriftError('The new account name row must be the next unoccupied sheet row.');
+    const after = structuredClone(loaded.sources);
+    const nextName = [plan.newName.discordId, plan.newName.currentLeagueName, plan.newName.knownName,
+      plan.newName.nameStatus, plan.newName.division, plan.newName.franchise, plan.newName.leagueStatus];
+    const rosterRow = plan.rosterBefore.sheetRow;
+    const nameRow = plan.oldNameBefore.sheetRow;
+    const adminUpdates: SheetValueUpdate[] = [
+      { range: `'Current Rosters'!E${rosterRow}:F${rosterRow}`, values: [[plan.newDiscordId, plan.rosterAfter.player]] },
+      { range: `'Player Name History'!D${nameRow}`, values: [[plan.oldNameAfter.nameStatus]] },
+      { range: `'Player Name History'!A${plan.newName.sheetRow}:G${plan.newName.sheetRow}`, values: [nextName] },
+    ];
+    after.rosters[rosterRow - 5]![4] = plan.newDiscordId;
+    after.rosters[rosterRow - 5]![5] = plan.rosterAfter.player;
+    after.names[nameRow - 5]![3] = plan.oldNameAfter.nameStatus;
+    after.names[plan.newName.sheetRow - 5] = nextName;
+    const publicUpdates = this.resolvePublicChanges(loaded, plan.publicChanges);
+    for (const update of publicUpdates) {
+      const match = /^'(.+) Roster'!([A-O])(\d+)$/.exec(update.range)!;
+      after.publicByDivision[match[1] as LeagueDivision][Number(match[3]) - 1]![match[2]!.charCodeAt(0) - 65] = update.values[0]![0]!;
+    }
+    const draftBefore = await this.accountReplacementDraftRows();
+    const draftAfter = structuredClone(draftBefore);
+    if (draftBefore) {
+      for (const pick of planDraftPickAccountReplacement(draftBefore, plan.oldDiscordId, plan.newDiscordId, plan.rosterAfter.player)) {
+        adminUpdates.push({ range: `'Draft Picks'!F${pick.sheetRow}:H${pick.sheetRow}`, values: [pick.after.slice(5, 8)] });
+        if (pick.before[9] !== pick.after[9]) adminUpdates.push({ range: `'Draft Picks'!J${pick.sheetRow}`, values: [[pick.after[9]!]] });
+        draftAfter![pick.sheetRow - 6] = pick.after;
+      }
+    }
+    return { plan, freeAgentRoleId: loaded.snapshot.freeAgentRoleId, before: structuredClone(loaded.sources), after,
+      adminUpdates, publicUpdates, draftBefore, draftAfter, draftVerification: draftBefore ? 'verified' : 'skipped:missing-tab' };
+  }
+
+  async assertAccountReplacementUnchanged(prepared: PreparedAccountReplacementSheets): Promise<void> {
+    const fresh = await this.load([], prepared.freeAgentRoleId);
+    const drafts = await this.accountReplacementDraftRows();
+    if (JSON.stringify(fresh.sources) !== JSON.stringify(prepared.before) || JSON.stringify(drafts) !== JSON.stringify(prepared.draftBefore))
+      throw new LeagueSheetDriftError('Account replacement sheet before-values changed. Review a fresh preview; nothing was written.');
+  }
+
+  async applyAccountReplacement(prepared: PreparedAccountReplacementSheets,
+    onWriting: (phase: 'applying_admin' | 'applying_public') => void | Promise<void>): Promise<void> {
+    await this.assertAccountReplacementUnchanged(prepared);
+    await onWriting('applying_admin');
+    // Authorization/member reads in the callback are asynchronous. Prove the
+    // sheet values again after them, immediately before the first write.
+    try { await this.assertAccountReplacementUnchanged(prepared); }
+    catch (error) {
+      throw new AccountReplacementNoWriteError(`Account replacement sheet proof changed or became unavailable after authorization. No sheet writes were attempted. ${error instanceof Error ? error.message : ''}`);
+    }
+    try {
+      await this.gateway.batchUpdate(this.config.adminSpreadsheetId, prepared.adminUpdates, 'RAW');
+      if (prepared.publicUpdates.length) {
+        // Compare this workbook again after the Admin write. Drift now requires reconciliation.
+        const ranges = divisions.map((division) => `'${division} Roster'!${PUBLIC_RANGE}`);
+        await onWriting('applying_public');
+        const current = await this.readRanges(this.config.publicSpreadsheetId, ranges);
+        if (divisions.some((division, index) => JSON.stringify(current[index]) !== JSON.stringify(prepared.before.publicByDivision[division])))
+          throw new Error('The public roster changed after the Admin write.');
+        await this.gateway.batchUpdate(this.config.publicSpreadsheetId, prepared.publicUpdates, 'RAW');
+      }
+    } catch (error) {
+      throw new LeagueSheetReconciliationRequiredError(`Account replacement sheet write may be partial: ${String(error)}`);
+    }
+  }
+
+  async verifyAccountReplacement(prepared: PreparedAccountReplacementSheets): Promise<{ draftVerification: PreparedAccountReplacementSheets['draftVerification']; sourceFingerprint: string }> {
+    const fresh = await this.load([], prepared.freeAgentRoleId);
+    const drafts = await this.accountReplacementDraftRows();
+    if (JSON.stringify(fresh.snapshot.teams) !== JSON.stringify(parseTeams(prepared.before.teams)))
+      throw new LeagueSheetReconciliationRequiredError('Account replacement league role configuration changed. Review League Teams before reconciliation.');
+    const captainRoles = (sources: LeagueSheetSources) => {
+      const active = new Set(parseTeams(sources.teams).filter(team => team.active).map(team => team.teamRoleId));
+      return sources.teams.slice(1).filter(row => active.has(String(row[3] ?? '')))
+        .map(row => [String(row[3] ?? ''), String(row[9] ?? '').trim()]);
+    };
+    if (JSON.stringify(captainRoles(fresh.sources)) !== JSON.stringify(captainRoles(prepared.before)))
+      throw new LeagueSheetReconciliationRequiredError('Configured captain access changed. Review current role ownership before reconciliation.');
+    // Recovery proves replacement-owned cells, rather than freezing every other
+    // player's notes indefinitely. Fresh sources still bind recovery approval.
+    for (const update of [...prepared.adminUpdates, ...prepared.publicUpdates]) {
+      const address = /^'([^']+)'!([A-Z]+)(\d+)/.exec(update.range);
+      if (!address) throw new LeagueSheetReconciliationRequiredError('Account replacement has an invalid owned-cell range.');
+      const [, tab, letters, row] = address;
+      const column = [...letters!].reduce((n, letter) => n * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+      const rows = tab === 'Current Rosters' ? fresh.sources.rosters : tab === 'Player Name History' ? fresh.sources.names
+        : tab === 'Draft Picks' ? drafts : fresh.sources.publicByDivision[tab!.replace(/ Roster$/, '') as LeagueDivision];
+      const offset = tab === 'Draft Picks' ? 6 : tab!.endsWith(' Roster') ? 1 : 5;
+      if (!rows || update.values.some((values, index) => values.some((value, cell) =>
+        rows[Number(row) - offset + index]?.[column + cell] !== value)))
+        throw new LeagueSheetReconciliationRequiredError('Account replacement read-back does not match the approved sheet values.');
+    }
+    if ((drafts === null) !== (prepared.draftAfter === null))
+      throw new LeagueSheetReconciliationRequiredError('Draft Picks availability changed during replacement.');
+    if (drafts) {
+      let identities: Map<string, string>;
+      try { identities = draftPickIdentityIndex(drafts); }
+      catch { throw new LeagueSheetReconciliationRequiredError('Draft Picks historical player attribution is ambiguous.'); }
+      const expectedIdentities = draftPickIdentityIndex(prepared.draftAfter ?? []);
+      const ids = new Set([prepared.plan.oldDiscordId, prepared.plan.newDiscordId]);
+      const ownerRows = (rows: CellRows) => rows.flatMap((row, index) =>
+        ids.has(String(row[5] ?? '').trim()) || ids.has(String(row[9] ?? '').trim()) ? [index] : []);
+      if ([...ids].some(id => identities.get(id) !== expectedIdentities.get(id))
+        || JSON.stringify(ownerRows(drafts)) !== JSON.stringify(ownerRows(prepared.draftAfter ?? [])))
+        throw new LeagueSheetReconciliationRequiredError('Replacement Draft Picks identity/status ownership is duplicated or changed.');
+      for (const [index, row] of (prepared.draftAfter ?? []).entries()) {
+        if (JSON.stringify(row) !== JSON.stringify(prepared.draftBefore?.[index])
+          && JSON.stringify(drafts[index]) !== JSON.stringify(row))
+          throw new LeagueSheetReconciliationRequiredError('The replacement draft slot or move status changed.');
+      }
+    }
+    const plan = prepared.plan;
+    const roster = fresh.snapshot.rosters.filter((row) => row.discordId === plan.newDiscordId);
+    const currentNames = fresh.snapshot.names.filter((row) => row.discordId === plan.newDiscordId && row.nameStatus === 'Current Discord Name');
+    const equal = <T extends object>(expected: T, actual: T | undefined) => actual
+      && (Object.keys(expected) as Array<keyof T>).every((key) => expected[key] === actual[key]);
+    if (roster.length !== 1 || currentNames.length !== 1 || !equal(plan.rosterAfter, roster[0]) || !equal(plan.newName, currentNames[0])
+      || fresh.snapshot.rosters.some((row) => row.discordId === plan.oldDiscordId)
+      || fresh.snapshot.names.some((row) => row.discordId === plan.oldDiscordId && row.nameStatus === 'Current Discord Name'))
+      throw new LeagueSheetReconciliationRequiredError('Account replacement active identity invariants do not match the approved plan.');
+    for (const expected of [plan.oldNameAfter, ...plan.preservedHistory.nameRows])
+      if (!equal(expected, fresh.snapshot.names.find(row => row.sheetRow === expected.sheetRow)))
+        throw new LeagueSheetReconciliationRequiredError('The original account name/alias history changed. Review preserved attribution before reconciliation.');
+    const block = publicTeamCells[plan.rosterAfter.franchise];
+    const expectedBlock = prepared.after.publicByDivision[plan.rosterAfter.division];
+    const currentBlock = fresh.sources.publicByDivision[plan.rosterAfter.division];
+    const ownedRows = block && Array.from({ length: block.endRow - block.startRow + 1 }, (_, index) => index + block.startRow - 1);
+    const identityRows = ownedRows?.filter(row => value(expectedBlock, row, block!.column) === plan.rosterAfter.player);
+    if (identityRows?.length !== 1 || value(currentBlock, identityRows[0]!, block!.column) !== plan.rosterAfter.player
+      || ownedRows!.filter(row => value(currentBlock, row, block!.column) === plan.rosterAfter.player).length !== 1)
+      throw new LeagueSheetReconciliationRequiredError('The replacement public roster assignment is missing, moved or duplicated.');
+    return { draftVerification: prepared.draftVerification,
+      sourceFingerprint: createHash('sha256').update(JSON.stringify({ sources: fresh.sources, drafts })).digest('hex') };
   }
 
   async listRosterPlayers(): Promise<LeagueRosterRow[]> {
@@ -787,6 +948,7 @@ export class LeagueSheetsService {
       throw error;
     }
     const picks = new Map<string, DraftPickMove>();
+    const identities = draftPickIdentityIndex(rows);
     rows.forEach((row, index) => {
       const discordId = String(row[5] ?? '').trim();
       if (!discordId) return;
@@ -800,6 +962,10 @@ export class LeagueSheetsService {
         sheetRow: index + 6,
       });
     });
+    for (const [historicalId, currentId] of identities) {
+      const pick = picks.get(currentId);
+      if (pick) picks.set(historicalId, pick);
+    }
     return picks;
   }
 }

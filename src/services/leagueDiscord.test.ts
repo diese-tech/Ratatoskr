@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ChannelType, Collection, RESTJSONErrorCodes, type Guild } from 'discord.js';
+import { ChannelType, Client, Collection, PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes, type ClientUser, type Guild, type GuildMember } from 'discord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
 
 function leagueMember(id: string, roleIds: string[]) {
@@ -11,6 +11,81 @@ function leagueMember(id: string, roleIds: string[]) {
     roles: { cache: new Collection(roleIds.map((roleId) => [roleId, {}])) },
   };
 }
+
+test('account replacement proof rejects cached member fallback and preserves explicit bot/guild identity', async () => {
+  const member = { ...leagueMember('new', ['team']), guild: { id: 'g' } };
+  const cache = new Collection([['new', member]]);
+  let limited = false;
+  const guild = { id: 'g', members: { cache, fetch: async (options?: unknown) => {
+    if (options) return member;
+    if (limited) throw Object.assign(Error('full member rate limit'), { data: { opcode: 8, retry_after: 1 } });
+    return cache;
+  } } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'notices');
+  await gateway.getMembers();
+  limited = true;
+  await assert.rejects(() => gateway.getAccountReplacementMembers(), /rate limit/);
+  member.user.bot = true;
+  assert.equal((await gateway.getAccountReplacementMember('new'))?.bot, true);
+  assert.equal((await gateway.getAccountReplacementMember('new'))?.guildId, 'g');
+});
+
+test('account role reconciliation rejects privileged/integration roles and changes only exact managed deltas', async () => {
+  const member = { ...leagueMember('new', ['fa', 'captain-access']), guild: { id: 'g' },
+    roles: { cache: new Collection<string, unknown>([['fa', {}], ['captain-access', {}]]),
+      remove: async (id: string) => { member.roles.cache.delete(id); },
+      add: async (id: string) => { member.roles.cache.set(id, {}); } } };
+  const roles = new Collection(['team', 'division', 'fa'].map((id) => [id,
+    { id, guild: { id: 'g' }, managed: false, editable: true, permissions: new PermissionsBitField() }]));
+  const guild = { id: 'g', members: { fetch: async () => member }, roles: { fetch: async () => roles } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'notices');
+  const change = { discordId: 'new', managedRoleIds: ['team', 'division', 'fa'], before: ['fa'], after: ['division', 'team'], remove: ['fa'], add: ['division', 'team'] };
+  roles.get('team')!.managed = true;
+  await assert.rejects(() => gateway.reconcileAccountReplacementRoles(change), /ownership/i);
+  roles.get('team')!.managed = false;
+  roles.get('team')!.permissions.add(PermissionFlagsBits.Administrator);
+  await assert.rejects(() => gateway.reconcileAccountReplacementRoles(change), /ownership/i);
+  assert.deepEqual([...member.roles.cache.keys()], ['fa', 'captain-access']);
+  roles.get('team')!.permissions.remove(PermissionFlagsBits.Administrator);
+  for (const permission of [PermissionFlagsBits.BanMembers, PermissionFlagsBits.KickMembers, PermissionFlagsBits.ModerateMembers,
+    PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageWebhooks, PermissionFlagsBits.ManageThreads,
+    PermissionFlagsBits.ManageEvents, PermissionFlagsBits.ManageNicknames, PermissionFlagsBits.MuteMembers,
+    PermissionFlagsBits.DeafenMembers, PermissionFlagsBits.MoveMembers, PermissionFlagsBits.ViewAuditLog,
+    PermissionFlagsBits.ManageGuildExpressions]) {
+    roles.get('team')!.permissions.add(permission);
+    await assert.rejects(() => gateway.reconcileAccountReplacementRoles(change), /ownership/i);
+    assert.deepEqual([...member.roles.cache.keys()], ['fa', 'captain-access']);
+    roles.get('team')!.permissions.remove(permission);
+  }
+  await gateway.reconcileAccountReplacementRoles(change);
+  assert.deepEqual([...member.roles.cache.keys()].sort(), ['captain-access', 'division', 'team']);
+});
+
+test('installed discord.js role deltas converge without any gateway cache updates', async () => {
+  const client = new Client({ intents: [] });
+  const users = client.users as unknown as { _add(data: object): ClientUser };
+  const guilds = client.guilds as unknown as { _add(data: object): Guild };
+  client.user = users._add({ id: 'bot', username: 'Bot', discriminator: '0', bot: true });
+  const guild = guilds._add({ id: '100', name: 'Fixture', roles: ['100', 'fa', 'team', 'division', 'unmanaged']
+    .map((id, position) => ({ id, name: id, position, permissions: '0' })) });
+  const manager = guild.members as unknown as { _add(data: object): GuildMember };
+  const serverRoles = new Set(['fa', 'unmanaged']);
+  const rawMember = () => ({ user: { id: '200', username: 'New', discriminator: '0', bot: false }, roles: [...serverRoles], joined_at: '2026-10-01T00:00:00Z' });
+  guild.members.fetch = (async () => manager._add(rawMember())) as unknown as typeof guild.members.fetch;
+  const routes: string[] = [];
+  client.rest.patch = async () => assert.fail('A stale whole-role PATCH must never be used');
+  client.rest.put = async route => { routes.push(`PUT ${route}`); serverRoles.add(String(route).split('/').at(-1)!); };
+  client.rest.delete = async route => { routes.push(`DELETE ${route}`); serverRoles.delete(String(route).split('/').at(-1)!); };
+  const gateway = new DiscordLeagueGateway(guild, 'notices');
+  gateway.assertAccountReplacementRoleOwnership = async () => {};
+  try {
+    await gateway.reconcileAccountReplacementRoles({ discordId: '200', managedRoleIds: ['team', 'division', 'fa'],
+      before: ['fa'], after: ['division', 'team'], remove: ['fa'], add: ['division', 'team'] });
+    assert.deepEqual([...serverRoles].sort(), ['division', 'team', 'unmanaged']);
+    assert.equal(routes.length, 3);
+    assert.match(routes[0]!, /^DELETE .*\/fa$/);
+  } finally { client.destroy(); }
+});
 
 test('repeated roster reads reuse the complete live Discord cache instead of requesting every member again', async () => {
   const member = leagueMember('one', ['team-a']);

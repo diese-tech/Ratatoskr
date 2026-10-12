@@ -14,6 +14,7 @@ import type { DiscordLeagueGateway } from './leagueDiscord.js';
 import { cleanLeagueSnapshot } from './leagueOpsFixtures.test-support.js';
 import { getVerifiedLeagueMember, cacheVerifiedLeagueMember } from '../db/repositories/leagueVerifiedState.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
+import { accountReplacementSources } from './accountReplacement.test-support.js';
 import { LEGACY_YSL_VALKYRIE_ROLE_ID } from '../config/staff-role-ids.js';
 process.env.ROLE_ALLFATHER_ID = 'admin-role';
 process.env.ROLE_AESIR_ID = 'staff-role';
@@ -22,6 +23,26 @@ process.env.DISCORD_TOKEN = 'test';
 process.env.DISCORD_CLIENT_ID = 'test';
 process.env.DISCORD_GUILD_ID = 'g';
 const { createLeagueOpsRuntime } = await import('./leagueOpsRuntime.js');
+
+test('runtime exposes the replacement capability with current ADMIN authorization and the shared worker', async () => {
+  const db = openDatabase(':memory:');
+  const f = accountReplacementSources();
+  const guild = { id: 'g', members: { fetch: async () => ({ roles: { cache: new Map([['admin-role', {}]]) } }) } } as unknown as Guild;
+  const discord = { ...f.discord, getMembers: async () => [...f.members.values()] } as unknown as DiscordLeagueGateway;
+  const runtime = createLeagueOpsRuntime({ db, operationScope: db, client: {} as Client, guild, sheets: f.sheets, discord,
+    freeAgentRoleId: 'fa', transactionsChannelId: 'notices',
+    cards: { send: async () => 'panel', edit: async () => {}, delete: async () => {}, findByReference: async () => undefined } });
+  try {
+    const preview = await runtime.accountReplacement.preview('admin', 'one', 'new');
+    const job = await runtime.accountReplacement.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    assert.equal(job.type, 'account-replacement');
+    runtime.worker.start();
+    for (let i = 0; i < 100 && getLeagueJob(db, job.reference)?.status !== 'COMPLETED'; i++) await new Promise((r) => setImmediate(r));
+    assert.equal(getLeagueJob(db, job.reference)?.status, 'COMPLETED');
+    assert.equal((await runtime.accountReplacement.record('admin', job.reference)).status, 'completed');
+    assert.equal(f.gateway.writes.length, 1);
+  } finally { runtime.stop(); await new Promise((r) => setImmediate(r)); db.close(); }
+});
 async function fixture(actorRoleId = 'admin-role') {
   const db = openDatabase(':memory:');
   const snapshot = cleanLeagueSnapshot();

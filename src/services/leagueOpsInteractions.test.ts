@@ -22,6 +22,7 @@ test('double confirmation acknowledges quickly, reports one durable reference, a
   const handlers: Record<LeagueJobType, LeagueJobHandler> = {
     transaction: handler,
     repair: handler,
+    'account-replacement': handler,
     targeted: async () => {},
     panel: async () => {},
     dirty: async () => {},
@@ -158,7 +159,7 @@ test('recovery confirmation rejects a stale approval and deduplicates repeated c
   let executions = 0;
   const handler: LeagueJobHandler = async () => { executions++; };
   const worker = new LeagueJobWorker(db, 'g', { transaction: handler, repair: handler, targeted: handler, panel: handler,
-    dirty: handler, audit: handler, heartbeat: handler }, async () => {});
+    dirty: handler, audit: handler, heartbeat: handler, 'account-replacement': handler }, async () => {});
   registerLeagueJobWorker(db, worker);
   const fingerprint = 'a'.repeat(64);
   const approval = Buffer.from(fingerprint, 'hex').toString('base64url');

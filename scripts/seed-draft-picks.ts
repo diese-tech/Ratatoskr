@@ -8,7 +8,7 @@
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import {
-  DRAFT_DIVISIONS, DRAFT_PICK_HEADERS, draftParseProblems, draftPickRow, parseDraftTab, resolveDraftPicks,
+  DRAFT_DIVISIONS, DRAFT_PICK_HEADERS, draftParseProblems, draftPickIdentityIndex, draftPickRow, parseDraftTab, resolveDraftPicks,
 } from '../src/services/draftPicks.js';
 import { draftPickLabel } from '../src/services/leagueSheets.js';
 
@@ -80,6 +80,10 @@ async function main() {
     newSeason ? [] : existing ?? [],
   );
   const byId = new Map(picks.filter((pick) => pick.discordId).map((pick) => [pick.discordId, pick]));
+  for (const [legacyId, currentId] of draftPickIdentityIndex(newSeason ? [] : existing ?? [])) {
+    const pick = byId.get(currentId);
+    if (pick) byId.set(legacyId, pick);
+  }
   // Recompute column M for every in-season row so ID corrections also clear stale marks.
   // Renames are not roster moves (the runtime skips them too).
   const historyMarks = history!.flatMap((row, index) => {

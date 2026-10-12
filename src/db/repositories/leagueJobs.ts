@@ -12,10 +12,14 @@ export type LeagueJobStatus =
   | 'RETRYING'
   | 'RECONCILIATION_REQUIRED'
   | 'FAILED';
-export type LeagueJobType = 'transaction' | 'repair' | 'targeted' | 'panel' | 'dirty' | 'audit' | 'heartbeat';
+export type LeagueJobType = 'transaction' | 'repair' | 'account-replacement' | 'targeted' | 'panel' | 'dirty' | 'audit' | 'heartbeat';
+export function isLeagueMutationJob(type: LeagueJobType): boolean {
+  return type === 'transaction' || type === 'repair' || type === 'account-replacement';
+}
 export const leagueJobPriority: Record<LeagueJobType, number> = {
   transaction: 1,
   repair: 1,
+  'account-replacement': 1,
   targeted: 2,
   panel: 3,
   dirty: 4,
@@ -86,7 +90,7 @@ export function enqueueLeagueJob(
       ? (db.prepare('SELECT * FROM league_jobs WHERE reference=?').get(existingJob.reference) as Row)
       : undefined;
     if (existing) {
-      const background = !['transaction', 'repair'].includes(input.type);
+      const background = !isLeagueMutationJob(input.type);
       if (background && ['LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING'].includes(existing.status)) {
         releaseBackgroundDedupe(db, existing.reference);
       } else {
@@ -186,7 +190,7 @@ export function listActionableLeagueJobs(db: Database.Database, guildId: string)
 // Background work can be scheduled again after completion; mutation keys are never recycled.
 export function releaseBackgroundDedupe(db: Database.Database, reference: string): void {
   db.prepare(
-    `UPDATE league_jobs SET dedupe_key=reference WHERE reference=? AND type NOT IN ('transaction','repair')`,
+    `UPDATE league_jobs SET dedupe_key=reference WHERE reference=? AND type NOT IN ('transaction','repair','account-replacement')`,
   ).run(reference);
 }
 
@@ -206,7 +210,7 @@ export function stopCleanLeagueRetries(db: Database.Database, guildId: string): 
 }
 
 export function dismissResolvedBackgroundFailures(db: Database.Database, job: LeagueJob): void {
-  if (job.type === 'transaction' || job.type === 'repair') return;
+  if (isLeagueMutationJob(job.type)) return;
   const types = job.type === 'panel' || job.type === 'heartbeat' ? ['panel', 'heartbeat'] : [job.type];
   for (const type of types)
     db.prepare(
@@ -215,7 +219,8 @@ export function dismissResolvedBackgroundFailures(db: Database.Database, job: Le
 }
 export function dismissResolvedRepairReviews(db: Database.Database, guildId: string, findings: string[]): void {
   const jobs = listActionableLeagueJobs(db, guildId).filter(
-    (job) => job.type === 'repair' && job.status === 'BLOCKED_REVIEW',
+    (job) => job.type === 'repair' && job.status === 'BLOCKED_REVIEW'
+      && !db.prepare('SELECT 1 FROM league_account_replacement_evidence WHERE job_reference=?').get(job.reference),
   );
   for (const job of jobs)
     if (!findings.includes((job.payload as { expectedFinding: string }).expectedFinding)) {
