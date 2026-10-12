@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MessageFlags, type ButtonInteraction, type Interaction } from 'discord.js';
+import { MessageFlags, TextDisplayBuilder, type ButtonInteraction, type Interaction } from 'discord.js';
 import { buildFlowCatalog, createUiRuntime, EventKind, type V2MessagePayload, type V2ModalPayload } from 'fluxcord';
 import { accountReplacementSources } from './accountReplacement.test-support.js';
 import { buildLeagueIntentPlan } from './leagueTransactionIntent.js';
@@ -42,15 +42,24 @@ async function harness() {
   } as unknown as LeagueOpsReviewService;
   const flow = createLeagueOpsFlow(service);
   const edits: V2MessagePayload[] = [];
+  const validatePayload = (payload: V2MessagePayload) => {
+    const visit = (value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      const entry = value as Record<string, unknown>;
+      if (entry.type === 10) new TextDisplayBuilder().setContent(String(entry.content)).toJSON();
+      Object.values(entry).forEach(visit);
+    };
+    visit(payload);
+  };
   const copies: string[] = [];
   const modals: V2ModalPayload[] = [];
   let now = 1_000_000;
   const runtime = createUiRuntime({ flows: buildFlowCatalog([{ module: 'league-ops', flow }]), sweeper: false, now: () => now,
-    platform: { editMessage: async (_ref, payload) => { edits.push(payload); }, replyToActor: async value => { copies.push(value); },
+    platform: { editMessage: async (_ref, payload) => { validatePayload(payload); edits.push(payload); }, replyToActor: async value => { copies.push(value); },
       showModal: async value => { modals.push(value); }, ack: async () => {} },
     sendToChannel: async () => assert.fail('Private League Ops must never post to a public channel'),
     policy: { authorize: async request => ({ allowed: await authorizeLeagueOpsUi(request, 'g', actor => service.authorize(actor)) }) } });
-  const handle = await runtime.mount(flow, { ownerId: 'admin', to: { reply: { send: async payload => { edits.push(payload); return { channelId: 'c', messageId: 'm' }; }, ceilingMs: 15 * 60_000 } } });
+  const handle = await runtime.mount(flow, { ownerId: 'admin', to: { reply: { send: async payload => { validatePayload(payload); edits.push(payload); return { channelId: 'c', messageId: 'm' }; }, ceilingMs: 15 * 60_000 } } });
   const snapshot: LeagueOpsSnapshot = { issues: [], operations: [{ reference: 'original', type: 'transaction', status: 'BLOCKED_REVIEW',
     action: 'trade', targets: ['One', 'Two'], actor: 'Dolo', createdAt: '2026-10-11', attempts: 1, error: 'No changes were made.', next: 'Fresh preview', canRepreview: true, canRecover: false }] };
   await handle.redraw(data => { data.snapshot = snapshot; });

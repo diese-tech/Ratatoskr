@@ -90,6 +90,22 @@ test('fresh transaction previews retain selections, dedupe confirmation and neve
   } finally { f.close(); }
 });
 
+test('a retry completed by another administrator supersedes the original trade preview', async () => {
+  const f = await leagueOpsReviewFixture();
+  try {
+    const selections = JSON.stringify(['trade', 'one', 'two']);
+    const original = enqueueLeagueJob(f.db, { guildId: 'g', type: 'transaction', dedupeKey: 'original-other-admin',
+      payload: { selections, actorUserId: 'original-admin', expectedPlanFingerprint: 'old' } });
+    transitionLeagueJob(f.db, original.reference, 'BLOCKED_REVIEW');
+    const preview = await f.service.previewTransaction('current-admin', original.reference);
+    const retry = await f.service.confirmTransaction('current-admin', preview);
+    transitionLeagueJob(f.db, retry.reference, 'COMPLETED');
+    await assert.rejects(() => f.service.previewTransaction('current-admin', original.reference), /pre-write/);
+    assert.equal((await f.service.confirmTransaction('current-admin', preview)).reference, retry.reference);
+    assert.equal(f.gateway.writes.length, 0);
+  } finally { f.close(); }
+});
+
 test('account replacement requires a current absent-account issue and exact explicit attestation', async () => {
   const f = await leagueOpsReviewFixture();
   try {

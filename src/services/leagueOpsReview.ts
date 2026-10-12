@@ -46,7 +46,14 @@ export class LeagueOpsReviewService {
   }
   private prewrite(job: LeagueJob) {
     const { db, guildId } = this.input;
+    const selections = (job.payload as { selections?: unknown })?.selections;
+    const superseding = db.prepare(`SELECT 1 FROM league_jobs later WHERE later.guild_id=? AND later.type='transaction'
+      AND later.sequence>(SELECT sequence FROM league_jobs WHERE reference=?)
+      AND (json_extract(later.payload_json,'$.originalBlockedReference')=? OR json_extract(later.payload_json,'$.selections')=?)
+      AND (later.status NOT IN ('BLOCKED_REVIEW','FAILED') OR EXISTS(SELECT 1 FROM league_transactions t WHERE t.reference=later.reference)) LIMIT 1`)
+      .get(guildId, job.reference, job.reference, typeof selections === 'string' ? selections : '') as unknown;
     return job.type === 'transaction' && job.status === 'BLOCKED_REVIEW'
+      && !superseding
       && !(db.prepare('SELECT dismissed_at FROM league_jobs WHERE reference=?').get(job.reference) as { dismissed_at: string | null }).dismissed_at
       && !getLeagueTransaction(db, job.reference) && !getLeagueAuditRepair(db, job.reference)
       && !getAccountReplacement(db, guildId, job.reference);

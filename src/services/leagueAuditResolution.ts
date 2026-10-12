@@ -389,7 +389,7 @@ export async function executeLeagueAuditRepair(input: {
       humanizeLeagueAuditIssues(loaded.snapshot, [candidate])[0] === input.expectedFinding);
     if (!diagnostic) throw new LeagueAuditRepairStaleError();
     if (input.expectedRepairFingerprint && previewLeagueAuditResolution(loaded, input.expectedFinding, input.action).fingerprint !== input.expectedRepairFingerprint)
-      throw new LeagueAuditRepairStaleError();
+      throw new LeagueAuditRepairNoWriteError('The repair source changed since this review page opened. Review a fresh preview and explicitly confirm it before trying again.');
     const reference = input.jobReference ?? `YSL-AUD-FIX-${randomUUID().slice(0, 8).toUpperCase()}`;
     if (input.action === 'repair-roles') {
       const match = diagnostic.match(/^Discord member (\S+)/);

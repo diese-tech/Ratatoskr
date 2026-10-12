@@ -150,7 +150,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
       ...issues.flatMap(issue => [text(leagueOpsText(issue.finding, 450)), row({}, kit.Button({ label: 'Inspect issue', disabled: data.busy, onClick: event => {
         event.mutate(d => { d.selectedIssue = issue; d.notice = ''; }); event.ui.go('issue');
       } }))]),
-      text(data.notice), row({}, kit.Button({ label: 'Previous', secondary: true, disabled: page === 0, onClick: e => e.mutate(d => { d.page = Math.max(0, d.page - 1); }) }),
+      text(data.notice || 'Review is read-only until explicit confirmation.'), row({}, kit.Button({ label: 'Previous', secondary: true, disabled: page === 0, onClick: e => e.mutate(d => { d.page = Math.max(0, d.page - 1); }) }),
         kit.Button({ label: 'Next', secondary: true, disabled: (page + 1) * PAGE_SIZE >= data.snapshot.issues.length, onClick: e => e.mutate(d => { d.page++; }) })), navigation(kit)));
   });
   const operations = screen<LeagueOpsPanelData>()((data, kit) => {
@@ -159,7 +159,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     return view({}, container({ color: 0x2f6844 }, text({ title: 'League Ops · Operations' }, `${data.snapshot.operations.length} operations needing attention. Historical attempts remain preserved.`),
       ...items.flatMap(operation => [text(`${operation.reference} · ${operation.type} · ${operation.status}`), row({}, kit.Button({ label: 'Inspect operation', disabled: data.busy, onClick: e => {
         e.mutate(d => { d.selectedOperation = { ...operation, targets: [...operation.targets] }; d.notice = ''; }); e.ui.go('operation');
-      } }))]), text(data.notice), row({}, kit.Button({ label: 'Previous', secondary: true, disabled: page === 0, onClick: e => e.mutate(d => { d.page = Math.max(0, d.page - 1); }) }),
+      } }))]), text(data.notice || 'Review is read-only until explicit confirmation.'), row({}, kit.Button({ label: 'Previous', secondary: true, disabled: page === 0, onClick: e => e.mutate(d => { d.page = Math.max(0, d.page - 1); }) }),
         kit.Button({ label: 'Next', secondary: true, disabled: (page + 1) * PAGE_SIZE >= data.snapshot.operations.length, onClick: e => e.mutate(d => { d.page++; }) })),
       row({}, kit.Button({ label: 'Find operation reference', disabled: data.busy, secondary: true, onClick: findOperation })), navigation(kit)));
   });
@@ -168,7 +168,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     text(data.selectedIssue?.oldDiscordId ? 'Choose the event that actually happened. Account replacement continues one player; departure and self-drop use the existing transaction previews.' : 'Resolve this finding through the managed sheet/audit workflow. Refresh after correcting its source.'),
     row({}, kit.Button({ label: 'Player changed Discord account', disabled: !data.selectedIssue?.oldDiscordId, onClick: replacement })),
     row({}, kit.Button({ label: 'Preview managed repair', disabled: !!data.selectedIssue?.oldDiscordId || !leagueOpsRepairAction(data.selectedIssue?.finding ?? ''), onClick: repairPreview })),
-    text('Left league: /transaction departure. Self-dropped: /transaction self-drop. Both require a separate preview and explicit confirmation.'), text(data.notice), navigation(kit))));
+    text('Left league: /transaction departure. Self-dropped: /transaction self-drop. Both require a separate preview and explicit confirmation.'), text(data.notice || 'Review is read-only until explicit confirmation.'), navigation(kit))));
   const operation = screen<LeagueOpsPanelData>()((data, kit) => {
     const op = data.selectedOperation;
     return view({}, container({ color: 0x2f6844 }, text({ title: 'League Ops · Operation detail' }, op ?
@@ -176,18 +176,18 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
         `Created: ${op.createdAt}; actor: ${op.actor}`, `Targets: ${op.targets.join('; ') || 'See saved finding'}`,
         `Saved error: ${op.error}`, `Next: ${op.next}`].map(line => leagueOpsText(line, 1700)).join('\n') : 'Select an operation.'),
       row({}, kit.Button({ label: 'Fresh transaction preview', disabled: !op?.canRepreview, onClick: repreview }),
-        kit.Button({ label: 'Inspect reconciliation', disabled: !op?.canRecover, secondary: true, onClick: recoveryPreview })), text(data.notice), navigation(kit)));
+        kit.Button({ label: 'Inspect reconciliation', disabled: !op?.canRecover, secondary: true, onClick: recoveryPreview })), text(data.notice || 'Review is read-only until explicit confirmation.'), navigation(kit)));
   });
   const preview = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
-    text({ title: 'League Ops · Resolution preview' }, leagueOpsText(leagueOpsPreviewText(data), 3400)), text(data.notice),
+    text({ title: 'League Ops · Resolution preview' }, leagueOpsText(leagueOpsPreviewText(data), 3400)), text(data.notice || 'Review is read-only until explicit confirmation.'),
     row({}, kit.Button({ label: 'Review confirmation', disabled: data.busy || (data.recovery && !data.recovery.canConfirm) || (!data.replacement && !data.transaction && !data.repair && !data.recovery), onClick: e => e.ui.go('confirmation') }),
       kit.Button({ label: 'Cancel and close', secondary: true, onClick: e => e.ui.exit() })))));
   const confirmation = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
     text({ title: 'League Ops · Explicit confirmation' }, leagueOpsText(leagueOpsPreviewText(data), 3400)),
-    text(data.notice), row({}, kit.Button({ label: 'Confirm this reviewed operation', success: true, disabled: data.busy || !!data.queued, onClick: confirm }),
+    text(data.notice || 'Review is read-only until explicit confirmation.'), row({}, kit.Button({ label: 'Confirm this reviewed operation', success: true, disabled: data.busy || !!data.queued, onClick: confirm }),
       kit.Button({ label: 'Close', secondary: true, onClick: e => e.ui.exit() })))));
   return flow<LeagueOpsPanelData>('review', { screens: { issues: issueScreen, operations, issue, operation, preview, confirmation },
-    first: 'issues', initialData: { snapshot: { issues: [], operations: [] }, page: 0, busy: false, notice: '' }, ttlMs: 10 * 60_000,
+    first: 'issues', initialData: { snapshot: { issues: [], operations: [] }, page: 0, busy: false, notice: 'Choose a private read-only issue or operation view.' }, ttlMs: 10 * 60_000,
     parting: { note: 'Reopen Review League Ops on the current staff-ops status card. No expired approval is resumed.' } },
     { policy: policy.all(policy.owner(), policy.privilege('ADMIN')), onSessionEnd: event => ended(event.sessionId) });
 }

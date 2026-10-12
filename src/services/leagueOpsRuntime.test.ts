@@ -8,7 +8,9 @@ import {
   getLeagueTransaction,
   transitionLeagueTransaction,
 } from '../db/repositories/leagueOperations.js';
-import { buildTradePlan, type LeagueMutationPlan } from '../domain/leagueOperations.js';
+import { auditLeagueRoster, buildTradePlan, type LeagueMutationPlan } from '../domain/leagueOperations.js';
+import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
+import { previewLeagueAuditResolution } from './leagueAuditResolution.js';
 import { leagueTransactionPlanFingerprint } from './leagueTransactions.js';
 import type { DiscordLeagueGateway } from './leagueDiscord.js';
 import { cleanLeagueSnapshot } from './leagueOpsFixtures.test-support.js';
@@ -167,6 +169,34 @@ async function settled(f: Awaited<ReturnType<typeof fixture>>, reference: string
   }
   throw Error('job did not settle');
 }
+
+test('a changed repair source remains blocked for fresh approval rather than falsely completed', async () => {
+  const f = await fixture();
+  try {
+    f.snapshot.discordMembers[0]!.displayName = 'One New';
+    let note = 'Reviewed staff note';
+    const load = f.sheets.load;
+    f.sheets.load = async () => ({ ...await load(), sources: { note } as never });
+    const reviewed = await f.sheets.load();
+    const finding = humanizeLeagueAuditIssues(reviewed.snapshot, auditLeagueRoster(reviewed.snapshot))
+      .find(value => value.includes('One New'))!;
+    assert.ok(finding);
+    const preview = previewLeagueAuditResolution(reviewed, finding, 'use-discord-name');
+    const job = f.runtime.worker.enqueue('repair', {
+      actorUserId: 'admin', actorName: 'Admin', auditReference: 'reviewed-audit', expectedFinding: finding,
+      action: 'use-discord-name', expectedRepairFingerprint: preview.fingerprint,
+    }, 'changed-repair-proof');
+    note = 'Changed while queued';
+    f.runtime.worker.start();
+    const result = await settled(f, job.reference);
+    assert.equal(result.status, 'BLOCKED_REVIEW');
+    assert.match(result.lastError!, /fresh preview/i);
+    assert.equal(f.writes, 0);
+    assert.ok(humanizeLeagueAuditIssues(f.snapshot, auditLeagueRoster(f.snapshot)).includes(finding));
+    const { getLeagueAuditRepair } = await import('../db/repositories/leagueAuditRepairs.js');
+    assert.equal(getLeagueAuditRepair(f.db, job.reference), undefined);
+  } finally { f.runtime.stop(); f.db.close(); }
+});
 
 test('the worker accepts Valkyrie-only transaction approvals and denies revoked Valkyrie membership', async () => {
   const f = await fixture(LEGACY_YSL_VALKYRIE_ROLE_ID);
