@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenamePlan, buildStaffRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
@@ -79,6 +79,84 @@ function fixture(sheetFailure?: Error, prepareFailure?: Error) {
   };
   return { db, events, announcementReferences, current, sheets, discord };
 }
+
+test('staff rename stores the nickname before writing Discord and then syncs sheets and history', async () => {
+  const f = fixture();
+  try {
+    const member = f.current.discordMembers[0]!;
+    member.nickname = null;
+    const plan = buildStaffRenamePlan(f.current, 'one', 'One Prime');
+    const reference = 'YSL-TRX-NICKNAME';
+    const discord = { ...f.discord,
+      validateNicknameChange: async () => { f.events.push('nickname-preflight'); },
+      applyNicknameChange: async () => {
+        const record = getLeagueTransaction(f.db, reference)!;
+        assert.equal(record.status, 'applying_discord');
+        assert.deepEqual((record.payload as { plan: typeof plan }).plan.discordNicknameChange, plan.discordNicknameChange);
+        member.nickname = 'One Prime'; member.displayName = 'One Prime'; f.events.push('nickname-write');
+      },
+      verifyNicknameChange: async () => { assert.equal(member.nickname, 'One Prime'); f.events.push('nickname-verified'); },
+      rollbackNicknameChange: async () => assert.fail('Successful rename must not roll back'),
+    };
+    const result = await executeLeagueTransaction({ db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'valk', actorName: 'Valkyrie',
+      freeAgentRoleId: 'free-agent', now: new Date(), sheets: f.sheets, discord, buildPlan: () => plan,
+      expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan), jobReference: reference });
+    assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
+    assert.equal(member.nickname, 'One Prime');
+    assert.ok(f.events.indexOf('nickname-write') < f.events.indexOf('sheet-apply'));
+    assert.ok(f.events.indexOf('sheet-apply') < f.events.indexOf('nickname-verified'));
+    assert.ok(f.events.indexOf('nickname-verified') < f.events.indexOf('history'));
+  } finally { f.db.close(); }
+});
+
+test('nickname transactions restore proven unwritten sheets but quarantine ambiguous writes and interrupted recovery', async () => {
+  for (const failure of ['sheet-drift', 'sheet-response', 'nickname-response', 'verification'] as const) {
+    const f = fixture(failure === 'sheet-drift' ? new LeagueSheetDriftError('Changed before write')
+      : failure === 'sheet-response' ? new LeagueSheetReconciliationRequiredError('Sheets response lost') : undefined);
+    try {
+      const member = f.current.discordMembers[0]!; member.nickname = null;
+      const plan = buildStaffRenamePlan(f.current, 'one', 'One Prime');
+      const reference = `YSL-TRX-NICK-${failure}`;
+      let rollbackCount = 0;
+      const discord = { ...f.discord, validateNicknameChange: async () => {},
+        applyNicknameChange: async () => {
+          member.nickname = 'One Prime'; member.displayName = 'One Prime';
+          if (failure === 'nickname-response') throw Object.assign(Error('Nickname response lost'), { reconciliationRequired: true });
+        },
+        verifyNicknameChange: async () => { if (failure === 'verification') throw Error('Changed again after sheets'); },
+        rollbackNicknameChange: async () => { rollbackCount++; member.nickname = null; member.displayName = 'One'; },
+      };
+      await assert.rejects(() => executeLeagueTransaction({ db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'valk', actorName: 'Valkyrie',
+        freeAgentRoleId: 'free-agent', now: new Date(), sheets: f.sheets, discord, buildPlan: () => plan, jobReference: reference }));
+      assert.equal(getLeagueTransaction(f.db, reference)?.status, failure === 'sheet-drift' ? 'failed' : 'reconciliation_required');
+      assert.equal(rollbackCount, failure === 'sheet-drift' ? 1 : 0);
+      assert.equal(member.nickname, failure === 'sheet-drift' ? null : 'One Prime');
+      assert.ok(!f.events.includes('history'));
+      if (failure !== 'sheet-drift') {
+        await reconcilePendingLeagueTransactions({ db: f.db, sheets: f.sheets,
+          discord: { ...discord, applyNicknameChange: async () => assert.fail('Recovery must not replay a nickname') } });
+        assert.equal(getLeagueTransaction(f.db, reference)?.status, 'reconciliation_required');
+        assert.equal(rollbackCount, 0);
+      }
+    } finally { f.db.close(); }
+  }
+});
+
+test('a queued rename blocks a changed nickname before creating a mutation record', async () => {
+  const f = fixture();
+  try {
+    const member = f.current.discordMembers[0]!; member.nickname = null;
+    const fingerprint = leagueTransactionPlanFingerprint(buildStaffRenamePlan(f.current, 'one', 'One Prime'));
+    member.nickname = 'New staff edit'; member.displayName = 'New staff edit';
+    await assert.rejects(() => executeLeagueTransaction({ db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'valk', actorName: 'Valkyrie',
+      freeAgentRoleId: 'free-agent', now: new Date(), sheets: f.sheets, discord: f.discord,
+      buildPlan: current => buildStaffRenamePlan(current, 'one', 'One Prime'), expectedPlanFingerprint: fingerprint,
+      jobReference: 'YSL-TRX-STALE-NICK' }), LeagueTransactionPreviewChangedError);
+    assert.equal(getLeagueTransaction(f.db, 'YSL-TRX-STALE-NICK'), undefined);
+    assert.equal(member.nickname, 'New staff edit');
+    assert.ok(!f.events.includes('sheet-apply'));
+  } finally { f.db.close(); }
+});
 
 test('every confirmed mutation audits before Discord and completes the durable sequence', async () => {
   const f = fixture();

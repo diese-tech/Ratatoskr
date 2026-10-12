@@ -99,7 +99,7 @@ export async function handleLeagueAuditReviewButton(
   if (parsed.action === 'review') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   else await interaction.deferUpdate();
   const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
-  if (!hasAccess(member, 'ADMIN')) {
+  if (!hasAccess(member, 'OPERATIONS')) {
     await interaction.editReply({ content: 'Only league administrators can review or resolve roster audit issues.' });
     return true;
   }

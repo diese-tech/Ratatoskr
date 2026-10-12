@@ -1,6 +1,6 @@
 # Private League Ops review (#155)
 
-The existing rolling League Ops Status card remains the public health summary. **Review League Ops** opens an ephemeral, owner-bound Fluxcord panel for a current ADMIN (Allfather, Aesir or Valkyrie). Existing commands, the 6 AM full audit and hourly presentation heartbeat keep their current contracts.
+The existing rolling League Ops Status card remains the public health summary. **Review League Ops** opens an ephemeral, owner-bound Fluxcord panel for current OPERATIONS staff (Allfather, Aesir or Valkyrie). Structural ADMIN/configuration access remains Allfather/Aesir only. Existing commands, the 6 AM full audit and hourly presentation heartbeat keep their current contracts.
 
 ## Operator workflow
 

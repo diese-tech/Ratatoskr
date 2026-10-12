@@ -92,5 +92,5 @@ test('every slash command, subcommand, and option uses readable English', () => 
   assert.equal(transaction.description, 'Process approved YSL roster changes.');
   assert.equal(child(transaction, 'trade').description, 'Swap two players between teams in the same division.');
   assert.equal(child(child(transaction, 'pickup'), 'team').description, 'Division-suffixed team role receiving the player.');
-  assert.equal(child(transaction, 'rename').description, "Update a player's roster name after their Discord display name changes.");
+  assert.equal(child(transaction, 'rename').description, "Preview or confirm a player's Discord nickname and league name change.");
 });

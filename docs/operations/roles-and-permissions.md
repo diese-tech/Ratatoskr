@@ -11,7 +11,8 @@ hand in Discord (Server Settings → Roles, or right-click a member → Roles):
 
 | Role | Purpose |
 | --- | --- |
-| `Allfather`, `Aesir`, `Valkyrie` / `Valkyries` | Full admin access through Ratatoskr's `ADMIN` policy, including `/transaction`, confirmations and queued execution. Allfather/Aesir IDs are pinned in `.env`; Valkyrie uses the existing stable YSL staff role ID unless `ROLE_VALKYRIE_ID` overrides it. Names alone never grant access. |
+| `Allfather`, `Aesir` | Structural/configuration `ADMIN` access and routine `OPERATIONS` access. IDs are pinned in environment configuration. |
+| `Valkyrie` / `Valkyries` | Routine `OPERATIONS` access: transactions, player renames, private League Ops inspection/confirmed repairs and account reconciliation, and Scout game operations across active divisions. This role alone cannot manage server structure, divisions, seasons or Scout configuration. Uses the existing stable YSL role ID unless `ROLE_VALKYRIE_ID` overrides it. Names alone never grant access. |
 | `Org Owner` | League ownership role, not currently wired to a Ratatoskr access policy. |
 | `Franchise Representative` | Built-in Scout management access across **every** division (see `docs/operations/scout-workflow.md`). |
 | `Production` | Staff role for channel visibility; it does not grant the `ADMIN` command policy. |
@@ -78,10 +79,11 @@ Quick orientation by namespace:
 
 | Namespace | Who | Purpose |
 | --- | --- | --- |
-| `/server` | Admin | Bootstrap/repair the standard server roles and channels. |
-| `/division` | Admin | Create/repair/status/archive/delete a division's channels and roles. |
-| `/season` | Admin | Create, check, and close season workspaces. |
-| `/scout` | Admin (config) / Division Manager & Captain / other staff | Configure Scout, create and cancel scouting games. |
+| `/server` | Allfather/Aesir; native Discord Administrator bootstrap exception | Bootstrap/repair the standard server roles and channels. |
+| `/division` | Allfather/Aesir | Create/repair/status/archive/delete a division's channels and roles. |
+| `/season` | Allfather/Aesir | Create, check, and close season workspaces. |
+| `/transaction` and League Ops | Allfather/Aesir/Valkyrie | Preview/confirm roster moves, change player nicknames and league records, inspect and explicitly reconcile player issues. |
+| `/scout` | Allfather/Aesir for config; operations staff, Division Manager & Captain and configured staff for games | Configure Scout separately from game creation, review, publication, swaps/replacements, cancellation and finishing. |
 | `/help` | Everyone with command access | Private in-app quickstart. |
 
 Scout day-to-day usage (creating games, reviewing rosters, publishing, swaps,

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { assertNoUnresolvedAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
-import { auditLeagueRoster, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
   createLeagueTransaction,
@@ -68,6 +68,10 @@ export interface LeagueDiscordPort {
   validateMemberAbsent(discordId: string, presentRemedy?: 'drop' | 'self-drop'): Promise<void>;
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
   validateDisplayName(discordId: string, expectedDisplayName: string): Promise<void>;
+  validateNicknameChange?(change: DiscordNicknameChange): Promise<void>;
+  applyNicknameChange?(change: DiscordNicknameChange): Promise<void>;
+  verifyNicknameChange?(change: DiscordNicknameChange): Promise<void>;
+  rollbackNicknameChange?(change: DiscordNicknameChange): Promise<void>;
   applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void>;
   rollbackRoleChange(change: DiscordRoleChange, expected: LeagueRoleState, applied: LeagueRoleState): Promise<void>;
   findAnnouncement(reference: string): Promise<string | undefined>;
@@ -401,7 +405,13 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
-    if (plan.kind === 'rename') {
+    const nickname = plan.discordNicknameChange;
+    if (nickname) {
+      if (plan.kind !== 'rename' || !input.discord.validateNicknameChange || !input.discord.applyNicknameChange
+        || !input.discord.verifyNicknameChange || !input.discord.rollbackNicknameChange)
+        throw new LeagueMutationValidationError('The approved nickname change cannot be executed safely. No changes were made.');
+      await input.discord.validateNicknameChange(nickname);
+    } else if (plan.kind === 'rename') {
       await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
     }
     if (outgoingPlayerIsAbsent) {
@@ -422,7 +432,16 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
 
     input.onPhase?.('APPLYING');
     const applied: DiscordRoleChange[] = [];
+    let nicknameApplied = false;
+    const rollback = async () => {
+      await rollbackDiscord(input.discord, applied, beforeByPlayer, afterByPlayer);
+      if (nicknameApplied) await input.discord.rollbackNicknameChange!(nickname!);
+    };
     try {
+      if (nickname) {
+        await input.discord.applyNicknameChange!(nickname);
+        nicknameApplied = true;
+      }
       for (const change of plan.discordRoleChanges) {
         await input.discord.applyRoleChange(change, beforeByPlayer.get(change.discordId)!, afterByPlayer.get(change.discordId)!);
         applied.push(change);
@@ -433,7 +452,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         throw errorWithReference(error, reference);
       }
       try {
-        await rollbackDiscord(input.discord, applied, beforeByPlayer, afterByPlayer);
+        await rollback();
         transitionLeagueTransaction(input.db, reference, 'applying_discord', 'failed', { errorMessage: String(error) });
       } catch (rollbackError) {
         markLeagueTransactionReconciliationRequired(input.db, reference, `Discord rollback failed: ${String(rollbackError)}`);
@@ -447,7 +466,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     } catch (error) {
       if (error instanceof LeagueSheetDriftError) {
         try {
-          await rollbackDiscord(input.discord, applied, beforeByPlayer, afterByPlayer);
+          await rollback();
           transitionLeagueTransaction(input.db, reference, 'applying_sheets', 'failed', { errorMessage: error.message });
         } catch (rollbackError) {
           markLeagueTransactionReconciliationRequired(input.db, reference, `Discord rollback failed after sheet drift: ${String(rollbackError)}`);
@@ -457,6 +476,13 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         markLeagueTransactionReconciliationRequired(input.db, reference, message);
       }
       throw errorWithReference(error, reference);
+    }
+    if (nickname) {
+      try { await input.discord.verifyNicknameChange!(nickname); }
+      catch (error) {
+        markLeagueTransactionReconciliationRequired(input.db, reference, `Nickname verification failed after Sheets write: ${String(error)}`);
+        throw errorWithReference(error, reference);
+      }
     }
     if (auditPassDeferredUntilMutation) {
       recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'passed', issues: [] });

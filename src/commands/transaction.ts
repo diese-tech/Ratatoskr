@@ -72,9 +72,9 @@ export const transactionCommand = new SlashCommandBuilder()
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('rename')
-    .setDescription("Update a player's roster name after their Discord display name changes.")
-    .addUserOption((option) => option.setName('player').setDescription('Player whose Discord display name changed.').setRequired(true))
-    .addStringOption((option) => option.setName('league_name').setDescription('Exact current Discord display name.').setRequired(true).setMaxLength(100))
+    .setDescription("Preview or confirm a player's Discord nickname and league name change.")
+    .addUserOption((option) => option.setName('player').setDescription('Player to rename.').setRequired(true))
+    .addStringOption((option) => option.setName('league_name').setDescription('New server nickname and official league name.').setRequired(true).setMaxLength(32))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')));
 
 function intentKey(interaction: ChatInputCommandInteraction): string {
@@ -114,7 +114,7 @@ function preview(plan: LeagueMutationPlan): string {
     return `**${label} preview**\n${plan.players[0]}: ${plan.teams[0]!.franchise} → ${destination}${replacement}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
   }
   if (plan.kind === 'pickup') return `**Pickup preview**\n${plan.players[0]}: Free Agents → ${plan.teams[0]!.franchise}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
-  return `**Name-change preview**\nOfficial league name: ${plan.players[0]}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
+  return `**Name-change preview**\nDiscord server nickname: ${plan.discordNicknameChange?.beforeDisplayName ?? plan.players[0]} → ${plan.players[0]}\nOfficial league name: ${plan.players[0]}\nCurrent Rosters, Player Name History and public roster will be synced; historical aliases remain preserved.\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
 }
 
 const divisionOrder = new Map([['Vanaheim', 0], ['Alfheim', 1], ['Svartalfheim', 2]]);
@@ -146,7 +146,7 @@ export async function handleTransactionAutocomplete(interaction: AutocompleteInt
   try {
     const member = interaction.guild.members.cache.get(interaction.user.id)
       ?? await interaction.guild.members.fetch(interaction.user.id);
-    if (!hasAccess(member, 'ADMIN')) {
+    if (!hasAccess(member, 'OPERATIONS')) {
       await interaction.respond([]);
       return;
     }
@@ -184,7 +184,7 @@ export async function handleTransactionCommand(
   const guildId = interaction.guild.id;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const member = await interaction.guild.members.fetch(interaction.user.id);
-  if (!hasAccess(member,'ADMIN')) { await interaction.editReply('You do not have permission to use this command.'); return; }
+  if (!hasAccess(member,'OPERATIONS')) { await interaction.editReply('You do not have permission to use this command.'); return; }
 
   const transactionEnvironment = loadLeagueOperationsConfig();
   const { gateway, config } = createGoogleLeagueSheetsGateway();
@@ -196,6 +196,7 @@ export async function handleTransactionCommand(
   const showPreview = async (message = '') => {
     const loaded = await sheets.load(await discord.getMembers(), transactionEnvironment.freeAgentRoleId);
     const plan = buildPlan(loaded.snapshot);
+    if (plan.discordNicknameChange) await discord.validateNicknameChange(plan.discordNicknameChange);
     await persistPreviewAfterDelivery(
       () => interaction.editReply(`${message}${preview(plan)}`),
       () => saveLeagueTransactionPreview(db, {

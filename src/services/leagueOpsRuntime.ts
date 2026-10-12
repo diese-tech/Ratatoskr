@@ -75,7 +75,7 @@ export function createLeagueOpsRuntime(input: {
   };
   const authorize = async (actorUserId: string) => {
     const member = await guild.members.fetch({ user: actorUserId, force: true });
-    if (!hasAccess(member, 'ADMIN'))
+    if (!hasAccess(member, 'OPERATIONS'))
       throw new LeagueJobBlockedError(
         'BLOCKED_REVIEW',
         'The approving administrator no longer has access. Ask a league administrator to review this operation.',

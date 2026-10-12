@@ -210,7 +210,7 @@ async function resolveScope(
 async function canManageScope(scope: ResolvedScope, guildId: string, db: Database.Database): Promise<boolean> {
   const config = getScoutConfig(db, guildId);
   const { hasAccess } = await import('./authorization.js');
-  return hasScoutDivisionManagementAccess(db, scope.member, config, scope.division, hasAccess(scope.member, 'ADMIN'));
+  return hasScoutDivisionManagementAccess(db, scope.member, config, scope.division, hasAccess(scope.member, 'OPERATIONS'));
 }
 
 function completeEmojiMap(

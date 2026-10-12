@@ -7,7 +7,7 @@ import {
   type GuildMember,
   type GuildTextBasedChannel,
 } from 'discord.js';
-import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange } from '../domain/leagueOperations.js';
+import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange, type DiscordNicknameChange } from '../domain/leagueOperations.js';
 import type { AccountReplacementMember, AccountReplacementRoleChange } from '../domain/leagueAccountReplacement.js';
 import type { LeagueAnnouncement, LeagueDiscordPort, LeagueRoleState } from './leagueTransactions.js';
 
@@ -35,7 +35,7 @@ async function fetchFreshMember(guild: Guild, discordId: string): Promise<GuildM
 }
 
 function roleSnapshot(member: GuildMember): DiscordLeagueMember {
-  return { discordId: member.id, displayName: member.displayName, roleIds: [...member.roles.cache.keys()] };
+  return { discordId: member.id, displayName: member.displayName, nickname: member.nickname, roleIds: [...member.roles.cache.keys()] };
 }
 
 function assertMemberRoleState(member: GuildMember, expected: LeagueRoleState): void {
@@ -205,6 +205,48 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
         'That player’s Discord display name changed after the operation was loaded. Review the newest value; no changes were made.',
       );
     }
+  }
+
+  private async nicknameMember(change: DiscordNicknameChange, willWrite = change.before !== change.after): Promise<GuildMember> {
+    await this.guild.roles.fetch();
+    const bot = await this.guild.members.fetchMe({ force: true });
+    const member = await fetchFreshMember(this.guild, change.discordId);
+    if (member.user.bot || (willWrite && (!member.manageable || !bot.permissions.has(PermissionFlagsBits.ManageNicknames))))
+      throw new LeagueMutationValidationError('Ratatoskr cannot change this player’s nickname. Check its Manage Nicknames permission and role hierarchy.');
+    if (member.nickname !== change.before || member.displayName !== change.beforeDisplayName)
+      throw new LeagueMutationValidationError('This player’s Discord nickname or display name changed. Review a fresh rename preview.');
+    return member;
+  }
+
+  async validateNicknameChange(change: DiscordNicknameChange): Promise<void> {
+    await this.nicknameMember(change);
+  }
+
+  async verifyNicknameChange(change: DiscordNicknameChange): Promise<void> {
+    const member = await fetchFreshMember(this.guild, change.discordId);
+    if (member.nickname !== change.after || member.displayName !== change.after)
+      throw new Error('The Discord nickname does not match the approved rename.');
+  }
+
+  async applyNicknameChange(change: DiscordNicknameChange): Promise<void> {
+    const member = await this.nicknameMember(change);
+    if (change.before === change.after) return;
+    try {
+      await member.setNickname(change.after, 'Ratatoskr approved league rename');
+      await this.verifyNicknameChange(change);
+    } catch (error) {
+      throw new DiscordRoleReconciliationRequiredError(`Discord nickname write may be partial: ${String(error)}`);
+    }
+  }
+
+  async rollbackNicknameChange(change: DiscordNicknameChange): Promise<void> {
+    const member = await this.nicknameMember({ ...change, before: change.after, beforeDisplayName: change.after }, change.before !== change.after);
+    if (change.before !== change.after) {
+      await member.setNickname(change.before, 'Ratatoskr rename rollback');
+    }
+    const restored = await fetchFreshMember(this.guild, change.discordId);
+    if (restored.nickname !== change.before || restored.displayName !== change.beforeDisplayName)
+      throw new Error('The original Discord nickname/display name did not converge after rollback.');
   }
 
   async applyRoleChange(change: DiscordRoleChange, before: LeagueRoleState, after: LeagueRoleState): Promise<void> {

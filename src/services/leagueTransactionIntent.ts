@@ -1,6 +1,6 @@
 import {
   buildDeparturePlan,
-  buildDiscordRenamePlan,
+  buildStaffRenamePlan,
   buildDropPlan,
   buildPickupPlan,
   buildSelfDropPlan,
@@ -28,7 +28,7 @@ export function buildLeagueIntentPlan(selections: string, snapshot: LeagueSnapsh
     case 'pickup':
       return buildPickupPlan(snapshot, first, second!);
     case 'rename':
-      return buildDiscordRenamePlan(snapshot, first, second!);
+      return buildStaffRenamePlan(snapshot, first, second!);
     default:
       throw new Error('Unknown stored league transaction intent.');
   }
