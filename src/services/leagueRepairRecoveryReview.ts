@@ -19,7 +19,7 @@ export async function handleLeagueRepairRecoveryButton(
     return true;
   }
   const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
-  if (!hasAccess(member, 'ADMIN')) {
+  if (!hasAccess(member, 'OPERATIONS')) {
     await interaction.editReply('Only league administrators can reconcile operations.');
     return true;
   }

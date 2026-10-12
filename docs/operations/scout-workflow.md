@@ -10,7 +10,7 @@ Scout games let preseason players show captains what they can play before a draf
 4. The admin selects any additional staff roles in the private config response.
 5. The admin runs `/scout config bind_emoji:true` and reacts with five distinct custom guild emoji in Solo, Jungle, Mid, Support, Carry order. The admin may then bind a sixth **Fill** emoji or press **Skip Fill**.
 
-Allfather, Aesir, Franchise Representative, and configured additional staff may manage every division. A division's Manager and Captain roles may manage only that division. Ratatoskr derives `<Division> Captain` from membership in both the global `Captain` role and the division role.
+Allfather, Aesir, Valkyrie, Franchise Representative, and configured additional staff may manage games in every division. Scout configuration (including authorized-role selections) remains Allfather/Aesir only. A division's Manager and Captain roles may manage games only in that division. Ratatoskr derives `<Division> Captain` from membership in both the global `Captain` role and the division role.
 
 Each division has two channels: scout-signups contains signup posts followed by roster posts; scout-results contains screenshots manually posted by players after matches. The bot needs View Channel, Send Messages, Read Message History, Embed Links, Add Reactions, and Manage Messages in signups and scout-ops. Players need View Channel, Read Message History, Send Messages and Attach Files in their results channel. Its configured Discord application must retain the Guild Members and Guild Message Reactions gateway intents. Division provisioning additionally needs Manage Channels and Manage Roles.
 

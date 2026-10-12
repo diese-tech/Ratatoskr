@@ -98,6 +98,12 @@ Verified per-Discord-ID observations are drift detectors, never mutation authori
 
 Resource-scoped mutation parallelism, a technical Discord channel, and generalized/external queue infrastructure remain deferred. People Directory/History work remains owned by #128.
 
+## Amendment: routine staff access and bot-driven player rename
+
+The owner separates structural `ADMIN` access (Allfather/Aesir) from routine `OPERATIONS` access (Allfather/Aesir/Valkyrie). Transactions, private player-issue reconciliation and Scout game controls use the latter. Server/division/season management and Scout configuration remain structural administration; role names alone grant neither policy. No broad native Discord permissions are added to Valkyrie.
+
+An explicitly confirmed player rename may set the Discord server nickname and sync the official league name. The canonical transaction persists the raw original nickname and display-name proof before writing, checks bot permission/hierarchy and current state, preserves aliases and team/captain ownership, and verifies the nickname after the guarded workbook mutation. Only proven unwritten Sheets failures permit a guarded nickname rollback. Ambiguous or interrupted writes remain reconciliation-required and cannot be replayed automatically. Existing Discord-name-only audit repair plans retain their existing behavior.
+
 ## Amendment: continuing-player account replacement (#154)
 
 A confirmed Discord account replacement is a League Ops reconciliation capability, separate from roster transactions and from slash-command naming. The domain/service plans an old-ID → new-ID linkage for the same continuing player; the later private Fluxcord UI owns presentation and explicit confirmation only.

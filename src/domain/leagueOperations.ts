@@ -33,6 +33,7 @@ export type LeagueNameRow = {
 };
 
 export type DiscordLeagueMember = {
+  nickname?: string | null;
   discordId: string;
   displayName: string;
   roleIds: string[];
@@ -61,6 +62,7 @@ export type PublicRosterChange = {
 };
 
 export type DiscordRoleChange = { discordId: string; remove: string[]; add: string[] };
+export type DiscordNicknameChange = { discordId: string; before: string | null; beforeDisplayName: string; after: string };
 
 export type LeagueMutationPlan = {
   kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure' | 'self-drop';
@@ -69,6 +71,7 @@ export type LeagueMutationPlan = {
   nameHistoryAppend?: Omit<LeagueNameRow, 'sheetRow'>;
   publicChanges: PublicRosterChange[];
   discordRoleChanges: DiscordRoleChange[];
+  discordNicknameChange?: DiscordNicknameChange;
   teams: LeagueTeam[];
   players: string[];
   playerIds: string[];
@@ -532,12 +535,12 @@ export function buildPickupPlan(snapshot: LeagueSnapshot, discordId: string, tea
   };
 }
 
-export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, requestedName: string): LeagueMutationPlan {
+export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, requestedName: string, allowUnchangedName = false): LeagueMutationPlan {
   const nextName = requestedName.trim();
   if (!nextName) throw new LeagueMutationValidationError('League name cannot be blank.');
   const current = currentNameRow(snapshot, discordId);
   const roster = snapshot.rosters.find((row) => row.discordId === discordId);
-  if (current.currentLeagueName === nextName) throw new LeagueMutationValidationError('That is already the player\'s Current League Name.');
+  if (current.currentLeagueName === nextName && !allowUnchangedName) throw new LeagueMutationValidationError('That is already the player\'s Current League Name.');
   const nameUsedInSameArea = snapshot.names.some((row) => {
     if (row.discordId === discordId || row.nameStatus !== 'Current Discord Name' || row.currentLeagueName !== nextName) return false;
     const otherRoster = snapshot.rosters.find((candidate) => candidate.discordId === row.discordId);
@@ -546,7 +549,7 @@ export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, req
       : !otherRoster && row.leagueStatus === 'Free Agent' && row.division === current.division;
   });
   if (nameUsedInSameArea) throw new LeagueMutationValidationError('That league name is already used by another player in this roster area.');
-  const existingAlias = snapshot.names.some((row) => row.discordId === discordId && row.knownName === current.currentLeagueName);
+  const existingAlias = current.currentLeagueName === nextName || snapshot.names.some((row) => row.discordId === discordId && row.knownName === current.currentLeagueName);
   return {
     kind: 'rename',
     rosters: snapshot.rosters.map((row) => row.discordId === discordId ? { ...row, player: nextName } : { ...row }),
@@ -560,7 +563,7 @@ export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, req
       franchise: current.franchise,
       leagueStatus: current.leagueStatus,
     },
-    publicChanges: [{
+    publicChanges: current.currentLeagueName === nextName ? [] : [{
       division: current.division,
       area: roster ? 'team' : 'free-agent',
       group: roster?.franchise ?? 'Free Agents',
@@ -572,6 +575,17 @@ export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, req
     players: [nextName],
     playerIds: [discordId],
   };
+}
+
+export function buildStaffRenamePlan(snapshot: LeagueSnapshot, discordId: string, requestedName: string): LeagueMutationPlan {
+  const member = snapshot.discordMembers.find(candidate => candidate.discordId === discordId);
+  if (!member) throw new LeagueMutationValidationError('That player is not currently in the Discord server.');
+  if (member.nickname === undefined) throw new LeagueMutationValidationError('The current Discord nickname could not be verified. Request a fresh preview.');
+  const name = requestedName.trim();
+  if (!name || name.length > 32 || /[\u0000-\u001f\u007f]/.test(name))
+    throw new LeagueMutationValidationError('The new player nickname must contain 1–32 characters without control characters.');
+  return { ...buildRenamePlan(snapshot, discordId, name, member.nickname !== name),
+    discordNicknameChange: { discordId, before: member.nickname, beforeDisplayName: member.displayName, after: name } };
 }
 
 export function buildDiscordRenamePlan(

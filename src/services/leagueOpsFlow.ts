@@ -189,5 +189,5 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
   return flow<LeagueOpsPanelData>('review', { screens: { issues: issueScreen, operations, issue, operation, preview, confirmation },
     first: 'issues', initialData: { snapshot: { issues: [], operations: [] }, page: 0, busy: false, notice: 'Choose a private read-only issue or operation view.' }, ttlMs: 10 * 60_000,
     parting: { note: 'Reopen Review League Ops on the current staff-ops status card. No expired approval is resumed.' } },
-    { policy: policy.all(policy.owner(), policy.privilege('ADMIN')), onSessionEnd: event => ended(event.sessionId) });
+    { policy: policy.all(policy.owner(), policy.privilege('OPERATIONS')), onSessionEnd: event => ended(event.sessionId) });
 }

@@ -59,7 +59,7 @@ export async function canManageScoutOperationsSetup(
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const config = getScoutConfig(db, setup.guildId);
   const { hasAccess } = await import('./authorization.js');
-  return hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'ADMIN')) ? setup : undefined;
+  return hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS')) ? setup : undefined;
 }
 
 function confirmation(setup: ScoutSetup) {
@@ -150,7 +150,7 @@ async function showCancellationPage(
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const { hasAccess } = await import('./authorization.js');
   const manageable = new Set(listDivisions(db, interaction.guild.id)
-    .filter((division) => division.status === 'active' && hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'ADMIN')))
+    .filter((division) => division.status === 'active' && hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS')))
     .map((division) => division.id));
   const setups = listCancellableScoutSetups(db, interaction.guild.id)
     .filter((setup) => manageable.has(setup.divisionId) && setup.operationsChannelId === interaction.channelId);

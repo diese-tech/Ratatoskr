@@ -40,7 +40,7 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
   discord: Pick<DiscordLeagueGateway, 'getMembers'>; freeAgentRoleId: string }): () => void {
   const authorize = async (actor: string) => {
     const member = await input.guild.members.fetch({ user: actor, force: true });
-    if (!hasAccess(member, 'ADMIN')) throw Error('League administrator access is required.');
+    if (!hasAccess(member, 'OPERATIONS')) throw Error('League administrator access is required.');
     return member.displayName;
   };
   const service = new LeagueOpsReviewService({ ...input, guildId: input.guild.id, authorize,

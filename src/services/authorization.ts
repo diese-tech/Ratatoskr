@@ -21,10 +21,11 @@ const authorizationEnv = AuthorizationEnvSchema.parse(process.env);
 // policy names are the stable, code-level security boundary. Add new keys
 // here (STAFF, ORG_OWNER, CAPTAIN, PLAYER, ...) once their backing roles
 // exist -- do not pre-declare policies for roles that aren't configured yet.
-export type AccessPolicy = 'ADMIN';
+export type AccessPolicy = 'ADMIN' | 'OPERATIONS';
 
 const POLICY_ROLE_IDS: Record<AccessPolicy, readonly string[]> = {
-  ADMIN: [authorizationEnv.ROLE_ALLFATHER_ID, authorizationEnv.ROLE_AESIR_ID,
+  ADMIN: [authorizationEnv.ROLE_ALLFATHER_ID, authorizationEnv.ROLE_AESIR_ID],
+  OPERATIONS: [authorizationEnv.ROLE_ALLFATHER_ID, authorizationEnv.ROLE_AESIR_ID,
     authorizationEnv.ROLE_VALKYRIE_ID || LEGACY_YSL_VALKYRIE_ROLE_ID],
 };
 

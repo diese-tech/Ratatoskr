@@ -71,7 +71,7 @@ async function managerCanAct(
   const member = await interaction.guild!.members.fetch(interaction.user.id);
   const config = getScoutConfig(db, setup.guildId);
   const { hasAccess } = await import('./authorization.js');
-  return hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'ADMIN')) ? setup : undefined;
+  return hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS')) ? setup : undefined;
 }
 
 async function refreshPublishedPresentation(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
