@@ -130,7 +130,8 @@ export class LeagueAccountReplacementService {
         continue;
       }
       if (!fresh && id === preview.plan.oldDiscordId && manuallyReconciled) continue;
-      if (!fresh || fresh.guildId !== i.guildId || fresh.bot || fresh.displayName !== before.displayName)
+      if (!fresh || fresh.guildId !== i.guildId || fresh.bot
+        || (fresh.displayName !== before.displayName && (!manuallyReconciled || id === preview.plan.newDiscordId)))
         throw new LeagueMutationValidationError('An account membership or display name changed during replacement.');
       const role = preview.plan.roles.find((change) => change.discordId === id)!;
       const managed = fresh.roleIds.filter((roleId) => role.managedRoleIds.includes(roleId)).sort();

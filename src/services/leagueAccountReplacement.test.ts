@@ -100,6 +100,50 @@ test('fresh approval retries a proven pre-write block while duplicate confirmati
   } finally { f.worker.stop(); f.db.close(); }
 });
 
+test('recovery protects original account and alias attribution while permitting unrelated notes', async () => {
+  for (const edit of [
+    (f: ReturnType<typeof fixture>) => { f.gateway.rows('admin', 'Player Name History')[5]![0] = 'another-player'; },
+    (f: ReturnType<typeof fixture>) => { f.gateway.rows('admin', 'Player Name History')[6]![2] = 'Lost alias'; },
+  ]) {
+    const f = fixture();
+    try {
+      const preview = await f.service.preview('admin', 'one', 'new');
+      const original = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+        expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+      f.gateway.failWorkbook = 'admin';
+      assert.equal((await settle(f, original.reference)).status, 'RECONCILIATION_REQUIRED');
+      edit(f);
+      await assert.rejects(() => f.service.previewRecovery('admin', original.reference), /alias history changed/i);
+      assert.equal(f.gateway.writes.length, 1);
+    } finally { f.worker.stop(); f.db.close(); }
+  }
+});
+
+test('retired nickname changes are fresh recovery evidence without retaining current-name authority', async () => {
+  const f = fixture();
+  try {
+    f.members.set('one', { guildId: 'g', bot: false, discordId: 'one', displayName: 'One', roleIds: ['a', 'division', 'captain-access'] });
+    const preview = await f.service.preview('admin', 'one', 'new');
+    const original = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new',
+      expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    f.gateway.failWorkbook = 'admin';
+    assert.equal((await settle(f, original.reference)).status, 'RECONCILIATION_REQUIRED');
+    f.members.get('one')!.roleIds = ['captain-access'];
+    f.members.get('one')!.displayName = 'Retired nickname';
+    const recovery = await f.service.previewRecovery('admin', original.reference);
+    f.members.get('one')!.displayName = 'Another retired nickname';
+    const stale = await f.service.confirmRecovery({ actorUserId: 'admin', reference: original.reference,
+      expectedFingerprint: recovery.fingerprint, approvalReference: recovery.approvalReference, historyReviewed: true });
+    assert.equal((await settle(f, stale.reference)).status, 'BLOCKED_REVIEW');
+    const fresh = await f.service.previewRecovery('admin', original.reference);
+    const job = await f.service.confirmRecovery({ actorUserId: 'admin', reference: original.reference,
+      expectedFingerprint: fresh.fingerprint, approvalReference: fresh.approvalReference, historyReviewed: true });
+    assert.equal((await settle(f, job.reference)).status, 'COMPLETED');
+    assert.equal(f.gateway.rows('admin', 'Player Name History')[5]![2], 'One alias');
+    assert.equal(f.gateway.writes.length, 1);
+  } finally { f.worker.stop(); f.db.close(); }
+});
+
 test('a fresh recovery approval can close the original after a safely blocked acknowledgement', async () => {
   const f = fixture();
   try {

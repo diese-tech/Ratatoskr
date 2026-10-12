@@ -605,6 +605,9 @@ export class LeagueSheetsService {
       || fresh.snapshot.rosters.some((row) => row.discordId === plan.oldDiscordId)
       || fresh.snapshot.names.some((row) => row.discordId === plan.oldDiscordId && row.nameStatus === 'Current Discord Name'))
       throw new LeagueSheetReconciliationRequiredError('Account replacement active identity invariants do not match the approved plan.');
+    for (const expected of [plan.oldNameAfter, ...plan.preservedHistory.nameRows])
+      if (!equal(expected, fresh.snapshot.names.find(row => row.sheetRow === expected.sheetRow)))
+        throw new LeagueSheetReconciliationRequiredError('The original account name/alias history changed. Review preserved attribution before reconciliation.');
     const block = publicTeamCells[plan.rosterAfter.franchise];
     const expectedBlock = prepared.after.publicByDivision[plan.rosterAfter.division];
     const currentBlock = fresh.sources.publicByDivision[plan.rosterAfter.division];
