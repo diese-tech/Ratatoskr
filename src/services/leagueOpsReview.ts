@@ -186,7 +186,7 @@ export class LeagueOpsReviewService {
         .get(this.input.guildId, preview.finding, preview.action, preview.fingerprint) as { reference: string } | undefined;
       const latest = match && getLeagueJob(this.input.db, match.reference);
       const safelyBlocked = latest && ['BLOCKED_REVIEW', 'FAILED'].includes(latest.status) && !getLeagueAuditRepair(this.input.db, latest.reference);
-      if (latest && !safelyBlocked) {
+      if (latest && latest.status !== 'COMPLETED' && !safelyBlocked) {
         this.input.db.prepare('INSERT INTO league_job_approvals VALUES(?,?,?)').run(this.input.guildId, key, latest.reference);
         return latest;
       }

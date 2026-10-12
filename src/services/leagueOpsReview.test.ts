@@ -160,6 +160,34 @@ test('repair approval aliases stay idempotent after a safe block, while fresh re
   } finally { f.close(); }
 });
 
+test('a recurring repaired role finding receives fresh work while its old approval stays idempotent', async () => {
+  const f = await leagueOpsReviewFixture();
+  try {
+    const correctRoles = [...f.members.get('two')!.roleIds];
+    f.members.get('two')!.roleIds = ['division'];
+    await f.recheck();
+    const issue = (await f.service.snapshot('admin')).issues.find(item => item.finding.includes('Two') && item.finding.includes('team role'))!;
+    assert.ok(issue);
+    const first = await f.service.previewRepair('admin', issue.key);
+    const original = await f.service.confirmRepair('admin', first);
+    await executeLeagueAuditRepair({ db: f.db, operationScope: f.db, guildId: 'g', auditReference: 'audit', actorUserId: 'admin',
+      actorName: 'Admin', now: new Date(), expectedFinding: first.finding, action: first.action, expectedRepairFingerprint: first.fingerprint,
+      freeAgentRoleId: 'fa', jobReference: original.reference, members: { getMembers: async () => [...f.members.values()] }, sheets: f.sheets,
+      discord: { validateDisplayName: async () => {}, reconcileManagedRoles: async () => { f.members.get('two')!.roleIds = correctRoles; } } });
+    transitionLeagueJob(f.db, original.reference, 'COMPLETED');
+    await f.recheck();
+    f.members.get('two')!.roleIds = ['division'];
+    await f.recheck();
+    const second = await f.service.previewRepair('admin', issue.key);
+    assert.equal(second.fingerprint, first.fingerprint);
+    const recurring = await f.service.confirmRepair('admin', second);
+    assert.notEqual(recurring.reference, original.reference);
+    assert.equal(recurring.status, 'QUEUED');
+    assert.equal((await f.service.confirmRepair('admin', second)).reference, recurring.reference);
+    assert.equal((await f.service.confirmRepair('admin', first)).reference, original.reference);
+  } finally { f.close(); }
+});
+
 test('completed references and interrupted legacy repairs remain inspectable within their guild', async () => {
   const f = await leagueOpsReviewFixture();
   try {
