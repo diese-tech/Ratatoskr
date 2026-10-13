@@ -38,6 +38,8 @@ test('real seed CLI dry-run makes no POST; approved matching plan adds owned pub
   assert.equal(applied.trace.publicTextOnly, true);
   assert.equal(applied.trace.publicHighlights, 1);
   assert.equal(applied.trace.picksWritten, 96);
+  // Live Sheets discarded TEXT without an explicit pattern; preserve manual ID entry too.
+  assert.deepEqual(applied.trace.idTextColumns, [5, 9]);
   assert.equal(applied.trace.clearedAfterWrite, true);
 });
 

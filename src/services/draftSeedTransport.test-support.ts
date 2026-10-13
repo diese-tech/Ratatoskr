@@ -46,6 +46,7 @@ data.set("admin:'Draft Picks'!A6:J", picks);
 data.set("admin:'Draft Picks'!A5:J5", [DRAFT_PICK_HEADERS]);
 data.set("admin:'Draft Picks'!B4", [['2026-09-01']]);
 const trace = { posts: 0, adminOnly: true, publicTextOnly: true, publicHighlights: 0, picksWritten: 0, clearedAfterWrite: true,
+  idTextColumns: [] as number[],
   historyLabel: String(data.get("admin:'Transaction History'!A6:M")![0]![12] ?? '') };
 process.on('exit', () => console.log(`TEST_SEED_TRACE ${JSON.stringify(trace)}`));
 GoogleAuth.prototype.getClient = (async () => ({ request: async (options: { url: string; method: string; data?: any }) => {
@@ -54,6 +55,14 @@ GoogleAuth.prototype.getClient = (async () => ({ request: async (options: { url:
   if (options.method === 'POST') {
     trace.posts += 1;
     trace.adminOnly &&= workbook === 'admin';
+    for (const entry of options.data.requests ?? []) {
+      const repeat = entry.repeatCell;
+      if (workbook === 'admin' && repeat?.fields === 'userEnteredFormat.numberFormat'
+        && repeat.cell.userEnteredFormat.numberFormat.type === 'TEXT'
+        && repeat.cell.userEnteredFormat.numberFormat.pattern === '@') {
+        trace.idTextColumns.push(repeat.range.startColumnIndex);
+      }
+    }
     if (workbook === 'public') {
       trace.publicHighlights += options.data.requests.length;
       trace.publicTextOnly &&= options.data.requests.every((entry: any) => entry.repeatCell?.fields === 'userEnteredFormat.textFormat.foregroundColorStyle');
