@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
 import { ChannelType, Client, Collection, PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes, type ClientUser, type Guild, type GuildMember } from 'discord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
+import { leagueMemberReadDiagnostics } from './leagueMemberReads.js';
 
 function leagueMember(id: string, roleIds: string[]) {
   return {
@@ -11,6 +13,256 @@ function leagueMember(id: string, roleIds: string[]) {
     roles: { cache: new Collection(roleIds.map((roleId) => [roleId, {}])) },
   };
 }
+
+test('distinct gateway instances share an equivalent in-flight full guild request', async () => {
+  const cache = new Collection([['one', leagueMember('one', ['team-a'])]]);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let fetches = 0;
+  const guild = { id: 'guild', members: { cache, fetch: async () => {
+    fetches += 1; await held; return cache;
+  } } } as unknown as Guild;
+  const first = new DiscordLeagueGateway(guild, 'transactions').getMembers();
+  const second = new DiscordLeagueGateway(guild, 'transactions').getMembers();
+  const replacement = new DiscordLeagueGateway(guild, 'transactions').getAccountReplacementMembers();
+  release();
+  assert.deepEqual(await first, await second);
+  assert.equal((await replacement)[0]?.guildId, 'guild');
+  assert.equal(fetches, 1);
+  assert.equal(leagueMemberReadDiagnostics(guild).coalesced, 2);
+});
+
+test('cancelling one consumer leaves another shared full request intact', async () => {
+  const controller = new AbortController();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let fetches = 0;
+  const guild = { id: 'guild', members: { fetch: async () => {
+    fetches += 1; await held; return new Collection([['one', leagueMember('one', [])]]);
+  } } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  const first = gateway.getMembers({ signal: controller.signal });
+  const second = new DiscordLeagueGateway(guild, 'transactions').getMembers();
+  controller.abort(Error('operator cancelled'));
+  await assert.rejects(() => first, /operator cancelled/);
+  release();
+  assert.equal((await second).length, 1);
+  assert.equal(fetches, 1);
+});
+
+test('concurrent short-cooldown consumers share recovery even when their wait completions are staggered', async () => {
+  let now = 0;
+  let fetches = 0;
+  let firstWait!: () => void;
+  let secondWait!: () => void;
+  const firstGate = new Promise<void>((resolve) => { firstWait = resolve; });
+  const secondGate = new Promise<void>((resolve) => { secondWait = resolve; });
+  let bothWaiting!: () => void;
+  const began = new Promise<void>((resolve) => { bothWaiting = resolve; });
+  let waits = 0;
+  const clock = { now: () => now, sleep: async () => {
+    waits += 1;
+    if (waits === 1) await firstGate;
+    else { bothWaiting(); await secondGate; }
+  } };
+  const guild = { id: 'guild', members: { fetch: async () => {
+    fetches += 1;
+    if (fetches === 1) throw Object.assign(Error('limited'), { data: { opcode: 8, retry_after: 0.01 } });
+    return new Collection([['one', leagueMember('one', [])]]);
+  } } } as unknown as Guild;
+  const first = new DiscordLeagueGateway(guild, 'transactions', clock).getMembers();
+  const second = new DiscordLeagueGateway(guild, 'transactions', clock).getMembers();
+  await began;
+  now = 260;
+  firstWait();
+  await first;
+  secondWait();
+  await second;
+  assert.equal(fetches, 2);
+});
+
+test('cancelling a short throttle wait prevents retry and retains the shared cooldown', async () => {
+  const controller = new AbortController();
+  let waited!: () => void;
+  const beganWait = new Promise<void>((resolve) => { waited = resolve; });
+  let finishWait!: () => void;
+  const held = new Promise<void>((resolve) => { finishWait = resolve; });
+  let now = 0;
+  let fetches = 0;
+  const guild = { id: 'guild', members: { fetch: async () => {
+    fetches += 1;
+    if (fetches === 1) throw Object.assign(Error('limited'), { data: { opcode: 8, retry_after: 0.01 } });
+    return new Collection([['one', leagueMember('one', [])]]);
+  } } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions', { now: () => now,
+    sleep: async () => { waited(); await held; } });
+  const read = gateway.getMembers({ signal: controller.signal });
+  await beganWait;
+  controller.abort(Error('cancel wait'));
+  await assert.rejects(() => read, /cancel wait/);
+  await assert.rejects(() => new DiscordLeagueGateway(guild, 'transactions', { now: () => now })
+    .getMembers({ observation: true }), /cooldown/);
+  assert.equal(fetches, 1);
+  now = 261;
+  finishWait();
+  assert.equal((await gateway.getMembers()).length, 1);
+  assert.equal(fetches, 2);
+});
+
+test('incomplete collections and member changes during a full fetch cannot become absence or mutation proof', async () => {
+  const client = new EventEmitter();
+  let changed = false;
+  const member = leagueMember('one', []);
+  const guild = { id: 'guild', client, memberCount: 2, members: { fetch: async () => {
+    if (changed) client.emit('guildMemberRemove', { guild });
+    return new Collection([['one', member]]);
+  } } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  await assert.rejects(() => gateway.getMembers(), /incomplete or changed/);
+  (guild as unknown as { memberCount: number }).memberCount = 1;
+  changed = true;
+  await assert.rejects(() => gateway.getMembers({ observation: true }), /incomplete or changed/);
+  changed = false;
+  assert.equal((await gateway.getMembers()).length, 1);
+  (guild as unknown as { memberCount: number }).memberCount = 2;
+  await assert.rejects(() => gateway.getMembers({ observation: true }), /incomplete or changed/);
+});
+
+test('guild/session scoping shares wrappers but never combines another guild or Client', async () => {
+  const client = new EventEmitter();
+  let fetches = 0;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const make = (id: string, session = client) => ({ id, client: session, members: { fetch: async () => {
+    fetches += 1; await held; return new Collection([['one', leagueMember('one', [])]]);
+  } } }) as unknown as Guild;
+  const pending = [make('a'), make('a'), make('b'), make('a', new EventEmitter())]
+    .map((guild) => new DiscordLeagueGateway(guild, 'transactions').getMembers());
+  release();
+  await Promise.all(pending);
+  assert.equal(fetches, 3);
+});
+
+test('a second throttle stops recovery rather than entering a hot retry loop', async () => {
+  let now = 0;
+  let fetches = 0;
+  const guild = { id: 'guild', members: { fetch: async () => {
+    fetches += 1;
+    throw Object.assign(Error('limited'), { data: { opcode: 8, retry_after: 0.01 } });
+  } } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions', { now: () => now,
+    sleep: async (ms) => { now += ms; } });
+  await assert.rejects(() => gateway.getMembers(), /Gateway.*cooldown/i);
+  await assert.rejects(() => gateway.getMembers({ observation: true }), /Gateway.*cooldown/i);
+  assert.equal(fetches, 2);
+  assert.equal(leagueMemberReadDiagnostics(guild).waits, 1);
+});
+
+test('joins, departures, role/name changes and reconnects invalidate only the affected session snapshots', async () => {
+  const client = new EventEmitter();
+  const member = leagueMember('one', []);
+  let fetches = 0;
+  const guild = { id: 'guild', shardId: 0, client, memberCount: 1, members: { fetch: async () => {
+    fetches += 1; return new Collection([['one', member]]);
+  } } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  await gateway.getMembers({ observation: true });
+  for (const event of ['guildMemberAdd', 'guildMemberRemove', 'roleDelete']) {
+    client.emit(event, { guild });
+    await gateway.getMembers({ observation: true });
+  }
+  client.emit('userUpdate', {}, {});
+  await gateway.getMembers({ observation: true });
+  client.emit('shardDisconnect', {}, 1); // Unrelated shard retains its snapshot.
+  await gateway.getMembers({ observation: true });
+  assert.equal(fetches, 5);
+  client.emit('shardDisconnect', {}, 0);
+  await gateway.getMembers({ observation: true });
+  client.emit('shardResume', 0, 0);
+  await gateway.getMembers({ observation: true });
+  assert.equal(fetches, 7);
+});
+
+test('Discord REST and Sheets-shaped errors do not trigger Gateway retry/backoff', async () => {
+  for (const error of [Object.assign(Error('REST quota'), { status: 429 }),
+    Object.assign(Error('other opcode'), { data: { opcode: 1, retry_after: 0.01 } })]) {
+    let fetches = 0;
+    const guild = { id: 'guild', members: { fetch: async () => { fetches += 1; throw error; } } } as unknown as Guild;
+    const gateway = new DiscordLeagueGateway(guild, 'transactions', { sleep: async () => assert.fail('not a Gateway wait') });
+    await assert.rejects(() => gateway.getMembers(), (actual) => actual === error);
+    assert.equal(fetches, 1);
+  }
+});
+
+test('installed discord.js GatewayRateLimitError is recovered after a single cancellable short wait', async () => {
+  const client = new Client({ intents: [] });
+  const guild = (client.guilds as unknown as { _add(data: object): Guild })._add({
+    id: '100', name: 'Fixture', shardId: 0, member_count: 1, roles: [], unavailable: false, channels: [],
+  });
+  const member = (guild.members as unknown as { _add(data: object): GuildMember })._add({
+    user: { id: '200', username: 'Player', discriminator: '0', bot: false }, roles: [],
+    joined_at: '2026-10-01T00:00:00Z',
+  });
+  let requests = 0;
+  let now = 0;
+  const waits: number[] = [];
+  client.ws.shards.set(0, { send: (packet: { d: { nonce: string } }) => {
+    requests += 1;
+    if (requests === 1) client.emit('raw', { t: 'RATE_LIMITED', d: {
+      opcode: 8, retry_after: 0.01, meta: { guild_id: guild.id, nonce: packet.d.nonce },
+    } } as never, 0);
+    else client.emit('guildMembersChunk', new Collection([[member.id, member]]), guild,
+      { nonce: packet.d.nonce, count: 1, index: 0 } as never);
+  } } as never);
+  try {
+    const gateway = new DiscordLeagueGateway(guild, 'transactions', { now: () => now,
+      sleep: async (ms) => { waits.push(ms); now += ms; } });
+    assert.equal((await gateway.getMembers())[0]?.discordId, member.id);
+    assert.deepEqual(waits, [260]);
+    assert.equal(requests, 2);
+    assert.equal(client.listenerCount('raw'), 0);
+    assert.equal(client.listenerCount('guildMembersChunk'), 0);
+  } finally { client.ws.shards.clear(); await client.destroy(); }
+});
+
+test('mutation reads refresh and use the returned complete collection, never the mutable manager cache', async () => {
+  const stale = leagueMember('gone', ['team-a']);
+  const current = leagueMember('here', ['team-b']);
+  let fetches = 0;
+  const guild = { id: 'guild', members: {
+    cache: new Collection([['gone', stale]]),
+    fetch: async () => { fetches += 1; return new Collection([['here', current]]); },
+  } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  assert.deepEqual((await gateway.getMembers()).map((member) => member.discordId), ['here']);
+  current.displayName = 'Changed';
+  assert.equal((await gateway.getMembers())[0]?.displayName, 'Changed');
+  assert.equal(fetches, 2);
+});
+
+test('observation reads share a detached TTL snapshot; member events and expiry require another complete read', async () => {
+  const client = new EventEmitter();
+  const member = leagueMember('one', ['team-a']);
+  const cache = new Collection([['one', member]]);
+  let now = 0;
+  let fetches = 0;
+  const guild = { id: 'guild', client, memberCount: 1, members: { cache, fetch: async () => {
+    fetches += 1; return cache;
+  } } } as unknown as Guild;
+  const first = new DiscordLeagueGateway(guild, 'transactions', { now: () => now });
+  const second = new DiscordLeagueGateway(guild, 'transactions', { now: () => now });
+  const observed = await first.getMembers({ observation: true });
+  observed[0]!.roleIds.push('tampered');
+  cache.clear(); // SDK cache eviction is not a proven departure.
+  assert.deepEqual((await second.getMembers({ observation: true }))[0]?.roleIds, ['team-a']);
+  cache.set('one', member);
+  member.displayName = 'Renamed';
+  client.emit('guildMemberUpdate', member, { ...member, guild });
+  assert.equal((await second.getMembers({ observation: true }))[0]?.displayName, 'Renamed');
+  now = 60_001;
+  await first.getMembers({ observation: true });
+  assert.equal(fetches, 3);
+});
 
 test('account replacement proof rejects cached member fallback and preserves explicit bot/guild identity', async () => {
   const member = { ...leagueMember('new', ['team']), guild: { id: 'g' } };
@@ -24,7 +276,7 @@ test('account replacement proof rejects cached member fallback and preserves exp
   const gateway = new DiscordLeagueGateway(guild, 'notices');
   await gateway.getMembers();
   limited = true;
-  await assert.rejects(() => gateway.getAccountReplacementMembers(), /rate limit/);
+  await assert.rejects(() => gateway.getAccountReplacementMembers(), /Gateway.*cooldown/i);
   member.user.bot = true;
   assert.equal((await gateway.getAccountReplacementMember('new'))?.bot, true);
   assert.equal((await gateway.getAccountReplacementMember('new'))?.guildId, 'g');
@@ -87,7 +339,7 @@ test('installed discord.js role deltas converge without any gateway cache update
   } finally { client.destroy(); }
 });
 
-test('repeated roster reads reuse the complete live Discord cache instead of requesting every member again', async () => {
+test('sequential mutation reads recheck role changes rather than reusing an observation snapshot', async () => {
   const member = leagueMember('one', ['team-a']);
   const cache = new Collection<string, any>([['one', member]]);
   let fetches = 0;
@@ -100,7 +352,7 @@ test('repeated roster reads reuse the complete live Discord cache instead of req
   assert.deepEqual((await gateway.getMembers())[0]?.roleIds, ['team-a']);
   member.roles.cache.set('division-v', {});
   assert.deepEqual((await gateway.getMembers())[0]?.roleIds.sort(), ['division-v', 'team-a']);
-  assert.equal(fetches, 1);
+  assert.equal(fetches, 2);
 });
 
 test('display-name validation force-fetches the member instead of trusting the complete-member cache', async () => {
@@ -126,7 +378,7 @@ test('display-name validation force-fetches the member instead of trusting the c
   assert.deepEqual(fetchArguments[1], { user: 'one', force: true });
 });
 
-test('a Discord full-member rate limit falls back to a previously complete live cache', async () => {
+test('a Gateway cooldown is shared, honors a long retry_after and never falls back to an expired snapshot', async () => {
   const member = leagueMember('one', ['team-a']);
   const cache = new Collection<string, any>([['one', member]]);
   let now = 0;
@@ -137,9 +389,9 @@ test('a Discord full-member rate limit falls back to a previously complete live 
       cache,
       fetch: async () => {
         fetches += 1;
-        if (fetches === 1) return cache;
+        if (fetches === 1 || fetches === 3) return cache;
         throw Object.assign(new Error('Request with opcode 8 was rate limited.'), {
-          data: { opcode: 8, retry_after: 27.819 },
+          data: { opcode: 8, retry_after: 120.1 },
         });
       },
     },
@@ -149,10 +401,14 @@ test('a Discord full-member rate limit falls back to a previously complete live 
   await gateway.getMembers();
   now = 60_001;
   member.roles.cache.set('division-v', {});
-  const fallback = await gateway.getMembers();
-
-  assert.deepEqual(fallback[0]?.roleIds.sort(), ['division-v', 'team-a']);
+  await assert.rejects(() => gateway.getMembers(), /Gateway.*cooldown/i);
+  const other = new DiscordLeagueGateway(guild, 'transactions', { now: () => now });
+  now = 120_002; // More than the old 60-second clamp, still inside Discord's cooldown.
+  await assert.rejects(() => other.getMembers({ observation: true }), /Gateway.*cooldown/i);
   assert.equal(fetches, 2);
+  now = 180_352;
+  assert.deepEqual((await other.getMembers())[0]?.roleIds.sort(), ['division-v', 'team-a']);
+  assert.equal(fetches, 3);
 });
 
 test('a first full-member rate limit waits for Discord and retries once', async () => {
@@ -160,6 +416,7 @@ test('a first full-member rate limit waits for Discord and retries once', async 
   const cache = new Collection<string, any>([['one', member]]);
   let fetches = 0;
   const waits: number[] = [];
+  let now = 0;
   const guild = {
     id: 'guild',
     members: {
@@ -176,7 +433,8 @@ test('a first full-member rate limit waits for Discord and retries once', async 
     },
   } as unknown as Guild;
   const gateway = new DiscordLeagueGateway(guild, 'transactions', {
-    sleep: async (delayMs) => { waits.push(delayMs); },
+    now: () => now,
+    sleep: async (delayMs) => { waits.push(delayMs); now += delayMs; },
   });
 
   assert.equal((await gateway.getMembers()).length, 1);

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { LeagueMemberGatewayThrottleError } from './leagueMemberReads.js';
 import {
   claimLeagueJob,
   dismissResolvedBackgroundFailures,
@@ -92,7 +93,10 @@ export class LeagueJobWorker {
             const status = ambiguous ? 'RECONCILIATION_REQUIRED' : job.attemptCount >= 5 ? 'FAILED' : 'RETRYING';
             transitionLeagueJob(this.db, job.reference, status, {
               error: String(error),
-              availableAt: new Date(this.now().getTime() + Math.min(120_000, 5000 * 2 ** job.attemptCount)),
+              availableAt: new Date(this.now().getTime() + Math.max(
+                Math.min(120_000, 5000 * 2 ** job.attemptCount),
+                error instanceof LeagueMemberGatewayThrottleError ? error.retryAfterMs : 0,
+              )),
             });
             console.error(`League job ${job.reference} ${status}:`, error);
           }

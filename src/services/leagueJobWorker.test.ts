@@ -12,6 +12,7 @@ import {
   type LeagueJobType,
 } from '../db/repositories/leagueJobs.js';
 import { LeagueJobWorker, type LeagueJobHandler } from './leagueJobWorker.js';
+import { LeagueMemberGatewayThrottleError } from './leagueMemberReads.js';
 function handlers(handler: LeagueJobHandler): Record<LeagueJobType, LeagueJobHandler> {
   return {
     transaction: handler,
@@ -25,6 +26,24 @@ function handlers(handler: LeagueJobHandler): Record<LeagueJobType, LeagueJobHan
   };
 }
 const now = new Date('2026-10-05T12:00:00Z');
+test('Gateway cooldown defers a background job without holding the canonical lane or shortening retry_after', async () => {
+  const db = openDatabase(':memory:');
+  const order: string[] = [];
+  const worker = new LeagueJobWorker(db, 'g', handlers(async (job) => {
+    order.push(job.type);
+    if (job.type === 'dirty') throw new LeagueMemberGatewayThrottleError(300_250);
+  }), async () => {}, () => now);
+  try {
+    const background = worker.enqueue('dirty', {}, 'dirty');
+    const admin = worker.enqueue('transaction', {}, 'admin');
+    await new Promise((resolve) => setImmediate(resolve));
+    const deferred = getLeagueJob(db, background.reference)!;
+    assert.equal(deferred.status, 'RETRYING');
+    assert.equal(deferred.availableAt, new Date(now.getTime() + 300_250).toISOString());
+    assert.equal(getLeagueJob(db, admin.reference)?.status, 'COMPLETED');
+    assert.deepEqual(order, ['dirty', 'transaction']);
+  } finally { worker.stop(); db.close(); }
+});
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => {

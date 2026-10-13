@@ -30,6 +30,7 @@ import { LeagueSheetInputError, type LoadedLeagueSnapshot } from './leagueSheets
 import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
+import { LeagueMemberGatewayThrottleError, LeagueMemberSnapshotUnavailableError, type LeagueMemberReadOptions } from './leagueMemberReads.js';
 
 export type LeagueAuditCard = PersistedLeagueOpsCard;
 
@@ -49,7 +50,8 @@ type Input = {
   trigger: 'startup' | 'scheduled';
   now: Date;
   freeAgentRoleId: string;
-  members: { getMembers(): Promise<LeagueSnapshot['discordMembers']> };
+  members: { getMembers(options?: LeagueMemberReadOptions): Promise<LeagueSnapshot['discordMembers']> };
+  allowObservedMembers?: boolean;
   sheets: { load(members: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot> };
   cards: LeagueAuditCardPort;
   freshAfterRecovery?: boolean;
@@ -324,8 +326,10 @@ export async function refreshLeagueOpsPanel(
 async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirty' | 'error'; issues: string[] }> {
   let issues: string[];
   let result: 'clean' | 'dirty' | 'error';
+  let source: 'Discord' | 'Google Sheets' = 'Discord';
   try {
-    const members = await input.members.getMembers();
+    const members = await input.members.getMembers({ observation: input.allowObservedMembers === true });
+    source = 'Google Sheets';
     const loaded = await input.sheets.load(members, input.freeAgentRoleId);
     const diagnostics = auditLeagueRoster(loaded.snapshot);
     issues = humanizeLeagueAuditIssues(loaded.snapshot, diagnostics);
@@ -337,19 +341,23 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
     console.error('League roster audit could not read every source:', error);
     const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
     issues =
-      error instanceof LeagueSheetInputError
+      error instanceof LeagueMemberGatewayThrottleError || error instanceof LeagueMemberSnapshotUnavailableError
+        ? [error.message]
+        : error instanceof LeagueSheetInputError
         ? [
             `**What happened:** ${error.operationalSummary}`,
             `**What to do:** ${error.operationalNext}`,
             `**Error code:** ${error.operationalCode}`,
           ]
-        : status === 429
+        : status === 429 && source === 'Google Sheets'
           ? [
               'Google Sheets read quota reached (429). Reads are paused before retrying; no roster changes were made by this check.',
             ]
-          : status === 503
+          : status === 503 && source === 'Google Sheets'
             ? ['Google Sheets is temporarily unavailable (503). No roster changes were made by this check.']
-            : [
+            : status === 429 && source === 'Discord'
+              ? ['Discord REST read quota reached (429). No roster changes were made by this check.']
+              : [
                 'The audit could not read every required Discord and roster-sheet source. No roster changes were made by this check.',
               ];
     result = 'error';

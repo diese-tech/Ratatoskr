@@ -5,6 +5,50 @@ import { getLeagueAuditState } from '../db/repositories/leagueAudits.js';
 import type { LeagueSnapshot } from '../domain/leagueOperations.js';
 import { nextLeagueAuditAt, recoverPendingLeagueAudit, runLeagueAudit, startLeagueAuditWorker, type LeagueAuditCard, type LeagueAuditCardPort } from './leagueAudit.js';
 import { LeagueSheetInputError } from './leagueSheets.js';
+import { LeagueMemberGatewayThrottleError } from './leagueMemberReads.js';
+import { listLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
+
+test('a throttled member read reports Gateway cooldown and preserves existing roster findings without loading Sheets', async () => {
+  const db = openDatabase(':memory:');
+  const cards = new Cards();
+  let limited = false;
+  let sheetReads = 0;
+  const input = { db, operationScope: db, guildId: 'guild', freeAgentRoleId: 'free-agent', cards,
+    members: { getMembers: async () => {
+      if (limited) throw Object.assign(new LeagueMemberGatewayThrottleError(90_000), { status: 429 });
+      return snapshot().discordMembers;
+    } },
+    sheets: { load: async () => { sheetReads += 1; return { snapshot: snapshot(), sources: {} as never }; } },
+    trigger: 'scheduled' as const, freshAfterRecovery: true, deferPresentation: true,
+  };
+  try {
+    await runLeagueAudit({ ...input, now: new Date('2026-10-12T10:00:00Z') });
+    const before = listLeagueFindings(db, 'guild');
+    limited = true;
+    const result = await runLeagueAudit({ ...input, now: new Date('2026-10-12T10:02:00Z') });
+    assert.equal(result.status, 'error');
+    assert.match(result.issues.join(' '), /Discord Gateway.*cooldown/i);
+    assert.doesNotMatch(result.issues.join(' '), /Google Sheets.*429/);
+    assert.equal(sheetReads, 1);
+    assert.deepEqual(listLeagueFindings(db, 'guild').filter((finding) => finding.resourceKey !== 'connection'), before);
+  } finally { db.close(); }
+});
+
+test('full audits require fresh members unless a read-only dirty check explicitly allows an observation', async () => {
+  const db = openDatabase(':memory:');
+  const observations: unknown[] = [];
+  const input = { db, operationScope: db, guildId: 'guild', freeAgentRoleId: 'free-agent',
+    cards: new Cards(), deferPresentation: true, freshAfterRecovery: true,
+    members: { getMembers: async (options?: unknown) => { observations.push(options); return snapshot().discordMembers; } },
+    sheets: { load: async () => ({ snapshot: snapshot(), sources: {} as never }) },
+  };
+  try {
+    await runLeagueAudit({ ...input, trigger: 'startup', now: new Date('2026-10-12T09:00:00Z') });
+    await runLeagueAudit({ ...input, trigger: 'scheduled', now: new Date('2026-10-12T10:00:00Z') });
+    await runLeagueAudit({ ...input, trigger: 'scheduled', now: new Date('2026-10-12T10:02:00Z'), allowObservedMembers: true });
+    assert.deepEqual(observations, [{ observation: false }, { observation: false }, { observation: true }]);
+  } finally { db.close(); }
+});
 
 function snapshot(): LeagueSnapshot {
   return {

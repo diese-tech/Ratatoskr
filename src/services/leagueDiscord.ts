@@ -10,24 +10,10 @@ import {
 import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange, type DiscordNicknameChange } from '../domain/leagueOperations.js';
 import type { AccountReplacementMember, AccountReplacementRoleChange } from '../domain/leagueAccountReplacement.js';
 import type { LeagueAnnouncement, LeagueDiscordPort, LeagueRoleState } from './leagueTransactions.js';
+import { readLeagueMembers, type LeagueMemberReadOptions, type MemberReadClock } from './leagueMemberReads.js';
 
 export class DiscordRoleReconciliationRequiredError extends Error {
   readonly reconciliationRequired = true;
-}
-
-type MemberReadOptions = {
-  now?: () => number;
-  sleep?: (delayMs: number) => Promise<void>;
-};
-
-const COMPLETE_MEMBER_CACHE_TTL_MS = 60_000;
-
-function memberRateLimitDelayMs(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object' || !('data' in error)) return undefined;
-  const data = error.data;
-  if (!data || typeof data !== 'object' || !('opcode' in data) || !('retry_after' in data)) return undefined;
-  if (data.opcode !== 8 || typeof data.retry_after !== 'number' || !Number.isFinite(data.retry_after)) return undefined;
-  return Math.min(Math.max(Math.ceil(data.retry_after * 1_000) + 250, 250), 60_000);
 }
 
 async function fetchFreshMember(guild: Guild, discordId: string): Promise<GuildMember> {
@@ -52,41 +38,17 @@ function assertMemberRoleState(member: GuildMember, expected: LeagueRoleState): 
 }
 
 export class DiscordLeagueGateway implements LeagueDiscordPort {
-  private completeMemberSnapshotAt: number | undefined;
-  private fullMemberFetch: Promise<void> | undefined;
 
   constructor(
     private readonly guild: Guild,
     private readonly transactionsChannelId: string,
-    private readonly memberReadOptions: MemberReadOptions = {},
+    private readonly memberReadOptions: MemberReadClock = {},
     private readonly staffChannel?: () => Promise<GuildTextBasedChannel>,
   ) {}
 
   async notifyStaff(content: string): Promise<void> {
     if (!this.staffChannel) return;
     await (await this.staffChannel()).send({ content, allowedMentions: { parse: [] } });
-  }
-
-  private currentMembers(): DiscordLeagueMember[] {
-    return this.guild.members.cache.filter((member) => !member.user.bot).map(roleSnapshot);
-  }
-
-  private async refreshCompleteMemberCache(): Promise<void> {
-    if (!this.fullMemberFetch) {
-      this.fullMemberFetch = (async () => {
-        try {
-          await this.guild.members.fetch();
-        } catch (error) {
-          const retryDelayMs = memberRateLimitDelayMs(error);
-          if (retryDelayMs === undefined || this.completeMemberSnapshotAt !== undefined) throw error;
-          const sleep = this.memberReadOptions.sleep ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
-          await sleep(retryDelayMs);
-          await this.guild.members.fetch();
-        }
-        this.completeMemberSnapshotAt = (this.memberReadOptions.now ?? Date.now)();
-      })().finally(() => { this.fullMemberFetch = undefined; });
-    }
-    await this.fullMemberFetch;
   }
 
   private async transactionsChannel() {
@@ -107,8 +69,7 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
 
   async getAccountReplacementMembers(): Promise<AccountReplacementMember[]> {
     // Mutation proof never falls back to the complete-member presentation cache.
-    const fresh = await this.guild.members.fetch();
-    return fresh.filter((member) => !member.user.bot).map((member) => ({ ...roleSnapshot(member), guildId: member.guild.id, bot: member.user.bot }));
+    return readLeagueMembers(this.guild, {}, this.memberReadOptions);
   }
 
   async getAccountReplacementMember(discordId: string): Promise<AccountReplacementMember | null> {
@@ -159,19 +120,9 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     }
   }
 
-  async getMembers(): Promise<DiscordLeagueMember[]> {
-    const now = (this.memberReadOptions.now ?? Date.now)();
-    if (this.completeMemberSnapshotAt !== undefined
-      && now - this.completeMemberSnapshotAt <= COMPLETE_MEMBER_CACHE_TTL_MS) {
-      return this.currentMembers();
-    }
-    try {
-      await this.refreshCompleteMemberCache();
-    } catch (error) {
-      if (this.completeMemberSnapshotAt === undefined || memberRateLimitDelayMs(error) === undefined) throw error;
-      console.warn('Discord rate-limited a full league member refresh; using the last complete live member cache.');
-    }
-    return this.currentMembers();
+  async getMembers(options: LeagueMemberReadOptions = {}): Promise<DiscordLeagueMember[]> {
+    return (await readLeagueMembers(this.guild, options, this.memberReadOptions))
+      .map(({ guildId: _guildId, bot: _bot, ...member }) => member);
   }
 
   async validateMemberAbsent(discordId: string, presentRemedy: 'drop' | 'self-drop' = 'drop'): Promise<void> {
