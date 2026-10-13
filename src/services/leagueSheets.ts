@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { LeagueAccountReplacementPlan } from '../domain/leagueAccountReplacement.js';
 import { draftPickIdentityIndex, planDraftPickAccountReplacement } from './draftPicks.js';
 import { readDraftPickTracking, DraftPickTrackingError, type DraftPickHealth } from './draftPickTracking.js';
+import { PUBLIC_TEAM_CELLS, publicDraftHighlightCells, draftNameColorRequest, DRAFT_HISTORY_RULE, DRAFT_ROW_YELLOW, hasDraftHistoryRule, type DraftHistoryRule, type DraftHighlightSlot } from './draftPickPresentation.js';
 import {
   type DiscordLeagueMember,
   type LeagueDivision,
@@ -26,6 +27,7 @@ export type SelfDropPresentation = { sheetId: number; legend: CellRows; ruleExis
 export type LeagueSheetsReadOptions = { purpose: 'presentation' | 'fresh'; valueRenderOption?: 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' };
 
 export interface LeagueSheetsGateway {
+  ensureDraftPickHighlights?(adminId: string, publicId: string, slots: DraftHighlightSlot[]): Promise<void>;
   getWorkbookProperties?(spreadsheetId: string): Promise<{ title: string; sheets: Array<{ title: string; sheetId: number }> }>;
   getValues(spreadsheetId: string, range: string, options?: LeagueSheetsReadOptions): Promise<CellRows>;
   getValuesBatch?(spreadsheetId: string, ranges: string[], options?: LeagueSheetsReadOptions): Promise<CellRows[]>;
@@ -163,6 +165,34 @@ export function createScheduledLeagueSheetsGateway(
     }, { workbook, key: options.url, purpose: readOptions.purpose });
   };
   const gateway: LeagueSheetsGateway = {
+    async ensureDraftPickHighlights(adminId, publicId, slots) {
+      if (adminId === publicId) throw new Error('Draft highlighting requires distinct Admin and public targets.');
+      type Meta = { sheets: Array<{ properties: { title: string; sheetId: number }; conditionalFormats?: DraftHistoryRule[] }> };
+      const metadata = (id: string) => request<Meta>({ url: `https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets(properties(sheetId,title),conditionalFormats(ranges,booleanRule))` });
+      const admin = await metadata(adminId);
+      const history = admin.sheets.filter(sheet => sheet.properties.title === 'Transaction History');
+      if (history.length !== 1) throw new Error('Transaction History ownership is unavailable for draft highlighting.');
+      const historyId = history[0]!.properties.sheetId;
+      const ruleExists = hasDraftHistoryRule(historyId, history[0]!.conditionalFormats);
+      let publicRequests: ReturnType<typeof draftNameColorRequest>[] = [];
+      if (slots.length) {
+        const publicMeta = await metadata(publicId), divisions = [...new Set(slots.map(slot => slot.division))];
+        const grids = await gateway.getValuesBatch!(publicId, divisions.map(division => `'${division} Roster'!A1:O22`), { purpose: 'fresh' });
+        const cells = publicDraftHighlightCells(slots, Object.fromEntries(divisions.map((division, index) => [division, grids[index]!])));
+        publicRequests = cells.map(cell => {
+          const sheets = publicMeta.sheets.filter(sheet => sheet.properties.title === cell.title);
+          if (sheets.length !== 1) throw new Error('Public roster sheet ownership changed before draft highlighting.');
+          return draftNameColorRequest({ ...cell, sheetId: sheets[0]!.properties.sheetId });
+        });
+      }
+      // Both projections precede the history idempotency marker. Reapplying a
+      // color after a lost response is safe and does not replay the roster move.
+      if (publicRequests.length) await request({ method: 'POST', url: `https://sheets.googleapis.com/v4/spreadsheets/${publicId}:batchUpdate`, data: { requests: publicRequests } });
+      if (!ruleExists) await request({ method: 'POST', url: `https://sheets.googleapis.com/v4/spreadsheets/${adminId}:batchUpdate`, data: { requests: [{ addConditionalFormatRule: { index: 0, rule: {
+        ranges: [{ sheetId: historyId, startRowIndex: 5, startColumnIndex: 0, endColumnIndex: 13 }],
+        booleanRule: { condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: DRAFT_HISTORY_RULE }] }, format: { backgroundColorStyle: { rgbColor: DRAFT_ROW_YELLOW } } },
+      } } }] } });
+    },
     async getWorkbookProperties(spreadsheetId) {
       const data = await request<{ properties: { title: string }; sheets: Array<{ properties: { sheetId: number; title: string } }> }>({
         url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=properties(title),sheets(properties(sheetId,title))`,
@@ -277,16 +307,7 @@ const ADMIN_NAMES_RANGE = "'Player Name History'!A5:K";
 const PUBLIC_RANGE = 'A1:O99';
 
 const divisions = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
-const publicTeamCells: Record<string, { column: number; startRow: number; endRow: number }> = {
-  'Dream Walkers': { column: 2, startRow: 5, endRow: 11 },
-  'Eternal Vanguard': { column: 6, startRow: 5, endRow: 11 },
-  'Little Monsters': { column: 10, startRow: 5, endRow: 11 },
-  'Something Spicy': { column: 14, startRow: 5, endRow: 11 },
-  'The Rat Pack': { column: 2, startRow: 16, endRow: 22 },
-  'The Sewer': { column: 6, startRow: 16, endRow: 22 },
-  'Valhalla Vikings': { column: 10, startRow: 16, endRow: 22 },
-  'Wailing Banshees': { column: 14, startRow: 16, endRow: 22 },
-};
+const publicTeamCells = PUBLIC_TEAM_CELLS;
 
 const freeAgentCells = [
   { column: 6, startRow: 25, endRow: 99 },
@@ -964,6 +985,10 @@ export class LeagueSheetsService {
         range: `'Draft Picks'!I${pick.sheetRow}:J${pick.sheetRow}`,
         values: [[`Moved · ${plan.kind} · ${record.reference}`, pick.discordId]],
       })), 'RAW');
+    }
+    if (transactionRows.some(row => Boolean(row[12]))) {
+      if (!this.gateway.ensureDraftPickHighlights) throw new Error('Draft highlight delivery is unavailable; retain pending history for recovery.');
+      await this.gateway.ensureDraftPickHighlights(this.config.adminSpreadsheetId, this.config.publicSpreadsheetId, [...moved.values()]);
     }
     await this.gateway.append(this.config.adminSpreadsheetId, "'Transaction History'!A:M", transactionRows, 'RAW');
     return [...moved.values()];

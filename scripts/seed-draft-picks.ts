@@ -16,9 +16,10 @@ import {
 } from '../src/services/draftPicks.js';
 import { draftPickLabel } from '../src/services/leagueSheets.js';
 import { validateDraftPickTable } from '../src/services/draftPickTracking.js';
+import { publicDraftHighlightCells, draftNameColorRequest, hasDraftHistoryRule, type DraftHistoryRule } from '../src/services/draftPickPresentation.js';
 
 type Rows = (string | number | boolean | null)[][];
-type SheetMeta = { properties: { sheetId: number; title: string }; conditionalFormats?: Array<{ booleanRule?: { condition?: { values?: Array<{ userEnteredValue?: string }> } } }> };
+type SheetMeta = { properties: { sheetId: number; title: string }; conditionalFormats?: DraftHistoryRule[] };
 
 const write = process.argv.includes('--write');
 const allowPartial = process.argv.includes('--allow-partial');
@@ -59,7 +60,7 @@ async function read(spreadsheetId: string, ranges: string[], valueRenderOption =
   return data.valueRanges.map((range) => range.values ?? []);
 }
 const sheetsMeta = async (spreadsheetId: string) => (await call<{ sheets: SheetMeta[] }>(
-  `${base}/${spreadsheetId}?fields=sheets(properties(sheetId,title),conditionalFormats(booleanRule(condition(values(userEnteredValue)))))`,
+  `${base}/${spreadsheetId}?fields=sheets(properties(sheetId,title),conditionalFormats(ranges,booleanRule))`,
 )).sheets;
 const yellowRule = (sheetId: number, endColumnIndex: number, formula: string) => ({
   addConditionalFormatRule: {
@@ -78,9 +79,11 @@ async function main() {
   const publicMeta = await sheetsMeta(publicId);
   if (['League Teams', 'Current Rosters', 'Player Name History', 'Transaction History'].some(title => !adminMeta.some(sheet => sheet.properties.title === title)))
     throw new DraftPickSeedInputError('Configured Admin workbook lacks required Admin tabs. Do not seed this workbook.');
-  if (['FinalizedVetting', ...DRAFT_DIVISIONS.map(division => `${division} Draft`)].some(title => !publicMeta.some(sheet => sheet.properties.title === title)))
+  if (['FinalizedVetting', ...DRAFT_DIVISIONS.flatMap(division => [`${division} Draft`, `${division} Roster`])].some(title => !publicMeta.some(sheet => sheet.properties.title === title)))
     throw new DraftPickSeedInputError('Configured public workbook lacks required draft source tabs. Nothing was written.');
-  const [vetting, ...draftTabs] = await read(publicId, ['FinalizedVetting!A2:D', ...DRAFT_DIVISIONS.map((division) => `'${division} Draft'!A1:O60`)]);
+  const publicRanges = ['FinalizedVetting!A2:D', ...DRAFT_DIVISIONS.map(division => `'${division} Draft'!A1:O60`), ...DRAFT_DIVISIONS.map(division => `'${division} Roster'!A1:O22`)];
+  const publicSources = await read(publicId, publicRanges);
+  const vetting = publicSources[0], draftTabs = publicSources.slice(1, 4);
   const picksTabExists = adminMeta.some((sheet) => sheet.properties.title === 'Draft Picks');
   let [memberDirectory, nameHistory, rosters, history, existing, storedDate, draftHeaders] = await read(adminId, [
     "'Member Directory'!A6:D", "'Player Name History'!A6:C", "'Current Rosters'!A6:F", "'Transaction History'!A6:M",
@@ -111,6 +114,8 @@ async function main() {
     if (pick) byId.set(legacyId, pick);
   }
   const plannedHealth = validateDraftPickTable([DRAFT_PICK_HEADERS], picks.map(draftPickRow));
+  const publicHighlights = publicDraftHighlightCells(picks.filter(pick => pick.status.startsWith('Moved')), Object.fromEntries(DRAFT_DIVISIONS.map((division, index) => [division, publicSources[index + 4]!])))
+    .map(cell => ({ ...cell, sheetId: publicMeta.find(sheet => sheet.properties.title === cell.title)!.properties.sheetId }));
   // Recompute column M for every in-season row so ID corrections also clear stale marks.
   // Renames are not roster moves (the runtime skips them too).
   const historyMarks = history!.flatMap((row, index) => {
@@ -124,7 +129,7 @@ async function main() {
       : [{ row: index + 6, reference: String(row[0]), player: String(row[7]), label }];
   });
   const planFingerprint = createHash('sha256').update(JSON.stringify({ adminId, publicId, since, newSeason,
-    allowPartial, picks: picks.map(draftPickRow), historyMarks, existing: existing ?? [], storedDate: storedDate ?? [] })).digest('hex');
+    allowPartial, picks: picks.map(draftPickRow), historyMarks, publicHighlights, publicSources, existing: existing ?? [], storedDate: storedDate ?? [] })).digest('hex');
   console.log(`Seed plan fingerprint: ${planFingerprint}`);
 
   console.log(`Parsed ${picks.length} top-4 picks (expected ${EXPECTED_PICKS}).`);
@@ -136,6 +141,8 @@ async function main() {
   if (!summaryOnly) for (const pick of moved) console.log(`  ${pick.division} ${pick.team} R${pick.round} (#${pick.pick}): ${pick.draftName} → ${pick.status}`);
   console.log(`\nTransaction History column M changes (${historyMarks.length}):`);
   if (!summaryOnly) for (const mark of historyMarks) console.log(`  row ${mark.row} ${mark.reference} ${mark.player}: ${mark.label || '(clear stale mark)'}`);
+  console.log(`\nPublic roster name cells to color yellow (${publicHighlights.length}):`);
+  if (!summaryOnly) for (const cell of publicHighlights) console.log(`  ${cell.range}: yellow name text; preserve name, background and other font styling`);
 
   if (!write) {
     const problems = draftParseProblems(picks, rosters!);
@@ -173,9 +180,13 @@ async function main() {
   const freshAdmin = await read(adminId, ["'Member Directory'!A6:D", "'Player Name History'!A6:C", "'Current Rosters'!A6:F", "'Transaction History'!A6:M",
     ...(picksTabExists ? ["'Draft Picks'!A6:J", "'Draft Picks'!B4", "'Draft Picks'!A5:J5"] : [])]);
   if (picksTabExists) freshAdmin[4] = (await read(adminId, ["'Draft Picks'!A6:J"], 'UNFORMATTED_VALUE'))[0]!;
-  const freshPublic = await read(publicId, ['FinalizedVetting!A2:D', ...DRAFT_DIVISIONS.map(division => `'${division} Draft'!A1:O60`)]);
+  const freshPublic = await read(publicId, publicRanges);
+  const freshPublicMeta = await sheetsMeta(publicId);
+  if (publicHighlights.some(cell => freshPublicMeta.filter(sheet => sheet.properties.title === cell.title).length !== 1
+    || freshPublicMeta.find(sheet => sheet.properties.title === cell.title)?.properties.sheetId !== cell.sheetId))
+    throw new DraftPickSeedInputError('Public roster ownership changed after planning. Nothing was written.');
   const adminBefore = [memberDirectory, nameHistory, rosters, history, ...(picksTabExists ? [existing, storedDate, draftHeaders] : [])];
-  if (JSON.stringify(freshAdmin) !== JSON.stringify(adminBefore) || JSON.stringify(freshPublic) !== JSON.stringify([vetting, ...draftTabs]))
+  if (JSON.stringify(freshAdmin) !== JSON.stringify(adminBefore) || JSON.stringify(freshPublic) !== JSON.stringify(publicSources))
     throw new DraftPickSeedInputError('Seed inputs changed after planning. Review a new dry run; nothing was written.');
 
   if (!picksTabExists) {
@@ -211,9 +222,10 @@ async function main() {
   const historySheet = adminMeta.find((sheet) => sheet.properties.title === 'Transaction History')!;
   const rules = [
     ...(hasRule(picksSheet, PICKS_RULE) ? [] : [yellowRule(picksSheet.properties.sheetId, 10, PICKS_RULE)]),
-    ...(hasRule(historySheet, HISTORY_RULE) ? [] : [yellowRule(historySheet.properties.sheetId, 13, HISTORY_RULE)]),
+    ...(hasDraftHistoryRule(historySheet.properties.sheetId, historySheet.conditionalFormats) ? [] : [yellowRule(historySheet.properties.sheetId, 13, HISTORY_RULE)]),
   ];
   if (rules.length) await call(`${base}/${adminId}:batchUpdate`, { requests: rules });
+  if (publicHighlights.length) await call(`${base}/${publicId}:batchUpdate`, { requests: publicHighlights.map(draftNameColorRequest) });
   console.log(`\nWrote ${picks.length} Draft Picks rows, ${historyMarks.length} history marks, ${rules.length} highlight rules.`);
 }
 
