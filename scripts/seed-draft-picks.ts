@@ -199,7 +199,7 @@ async function main() {
     requests: [5, 9].map((column) => ({
       repeatCell: {
         range: { sheetId: picksSheetId, startRowIndex: 5, startColumnIndex: column, endColumnIndex: column + 1 },
-        cell: { userEnteredFormat: { numberFormat: { type: 'TEXT' } } },
+        cell: { userEnteredFormat: { numberFormat: { type: 'TEXT', pattern: '@' } } },
         fields: 'userEnteredFormat.numberFormat',
       },
     })),
