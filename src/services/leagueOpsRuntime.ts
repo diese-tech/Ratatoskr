@@ -36,6 +36,8 @@ import { getValidatedStaffChannel } from './operationalErrors.js';
 import type { LeagueSheetsService } from './leagueSheets.js';
 import { registerLeagueRepairRecovery, reconcileLeagueRepairRecord } from './leagueRepairRecovery.js';
 import { LeagueAccountReplacementService } from './leagueAccountReplacement.js';
+import { DRAFT_PICK_FEATURE, draftPickHealthFinding } from './draftPickTracking.js';
+import { replaceLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
 export type LeagueRepairIntent = {
   actorUserId: string;
   actorName: string;
@@ -50,7 +52,7 @@ type LeagueOpsSheets = Pick<
   LeagueSheetsService,
   'load' | 'loadMember' | 'assertUnchanged' | 'prepare' | 'apply' | 'appendTransactionHistory'
 > & Partial<Pick<LeagueSheetsService, 'prepareAccountReplacement' | 'assertAccountReplacementUnchanged'
-  | 'applyAccountReplacement' | 'verifyAccountReplacement'>>;
+  | 'applyAccountReplacement' | 'verifyAccountReplacement' | 'checkDraftPickHealth' | 'lastDraftPickHealth'>>;
 export function createLeagueOpsRuntime(input: {
   db: Database.Database;
   operationScope: object;
@@ -70,6 +72,9 @@ export function createLeagueOpsRuntime(input: {
   registerLeagueRepairRecovery({ db, operationScope, guildId, sheets, members: discord, freeAgentRoleId });
   let worker: LeagueJobWorker;
   const refresh = () => {
+    const observed = sheets.lastDraftPickHealth;
+    if (observed) replaceLeagueFindings(db, guildId, DRAFT_PICK_FEATURE,
+      [draftPickHealthFinding(observed.health, observed.checkedAt)], observed.checkedAt);
     worker.enqueue('panel', {}, 'panel', 500);
     scheduleDirtyLeagueCheck(db, worker);
   };
@@ -239,7 +244,7 @@ export function createLeagueOpsRuntime(input: {
       },
       panel: async () => refreshLeagueOpsPanel({ db, guildId, cards, now: new Date() }),
       dirty: async () => {
-        const findings = listLeagueFindings(db, guildId);
+        const findings = listLeagueFindings(db, guildId).filter(entry => entry.resourceKey !== DRAFT_PICK_FEATURE);
         const required = listActionableLeagueJobs(db, guildId).filter(
           (job) => job.status === 'RECONCILIATION_REQUIRED',
         );

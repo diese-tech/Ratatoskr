@@ -85,7 +85,8 @@ export function replaceFullLeagueFindings(
   now: Date,
 ): void {
   db.transaction(() => {
-    db.prepare('DELETE FROM league_findings WHERE guild_id=?').run(guildId);
+    // Optional feature observations are separate from roster reconciliation.
+    db.prepare("DELETE FROM league_findings WHERE guild_id=? AND resource_key NOT LIKE 'feature:%'").run(guildId);
     const ids = [
       ...new Set([
         ...snapshot.names.map((n) => n.discordId),

@@ -1,5 +1,6 @@
 import type { AccountReplacementMember, AccountReplacementRoleChange } from '../domain/leagueAccountReplacement.js';
 import { LeagueSheetsService, type LeagueSheetsGateway, type SheetValueUpdate } from './leagueSheets.js';
+import { DRAFT_PICK_HEADERS } from './draftPicks.js';
 
 type Rows = (string | number | boolean | null)[][];
 const column = (letters: string) => [...letters].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0) - 1;
@@ -11,6 +12,10 @@ function address(range: string) {
 }
 
 export class ReplacementTestGateway implements LeagueSheetsGateway {
+  async getWorkbookProperties() {
+    return { title: 'Admin', sheets: ['League Teams', 'Current Rosters', 'Player Name History', 'Transaction History',
+      ...(this.missingDraftPicks ? [] : ['Draft Picks'])].map((title, sheetId) => ({ title, sheetId })) };
+  }
   data = new Map<string, Rows>();
   writes: Array<{ workbook: string; updates: SheetValueUpdate[] }> = [];
   appends = 0;
@@ -21,7 +26,7 @@ export class ReplacementTestGateway implements LeagueSheetsGateway {
   async getValues(workbook: string, range: string): Promise<Rows> {
     this.beforeRead?.(workbook, range);
     const a = address(range);
-    if (a.tab === 'Draft Picks' && this.missingDraftPicks) throw Object.assign(Error('missing tab'), { status: 400 });
+    if (a.tab === 'Draft Picks' && this.missingDraftPicks) throw Object.assign(Error('Unable to parse range: Draft Picks'), { status: 400 });
     const grid = this.rows(workbook, a.tab) ?? [];
     const rows = grid.slice(a.row, a.endRow).map((row) => row.slice(a.column, a.endColumn + 1));
     while (rows.length && rows.at(-1)!.every((cell) => cell === '' || cell === null)) rows.pop();
@@ -61,6 +66,7 @@ export function accountReplacementSources() {
   gateway.data.set('admin:Draft Picks', header([
     ['Vanaheim', 'Dream Walkers', 1, 1, 'One draft alias', 'one', 'One', 'Manual', 'Moved · trade · legacy', 'one'],
   ]));
+  gateway.rows('admin', 'Draft Picks')[4] = [...DRAFT_PICK_HEADERS];
   gateway.data.set('admin:Transaction History', header([['legacy', 'trade', '2026-10-01', 'Vanaheim', 'The Sewer', 'Dream Walkers', 'one', 'One']]));
   for (const division of ['Vanaheim', 'Alfheim', 'Svartalfheim']) {
     const grid: Rows = Array.from({ length: 99 }, () => Array(15).fill(''));

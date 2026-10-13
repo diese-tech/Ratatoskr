@@ -23,6 +23,17 @@ import {
   type LeagueAuditCardPort,
 } from './leagueAudit.js';
 import { getLeagueAuditState } from '../db/repositories/leagueAudits.js';
+
+test('optional tracking health alone never schedules dirty roster retries', async () => {
+  const f = setup();
+  try {
+    replaceLeagueFindings(f.db, 'g', 'feature:draft-picks', ['Draft Picks missing; setup required'], now);
+    assert.equal(scheduleDirtyLeagueCheck(f.db, f.worker), false);
+    assert.equal(getLeagueJobByDedupe(f.db, 'g', 'dirty'), undefined);
+    replaceLeagueFindings(f.db, 'g', 'member:one', ['Real roster issue'], now);
+    assert.equal(scheduleDirtyLeagueCheck(f.db, f.worker), true);
+  } finally { f.worker.stop(); f.db.close(); }
+});
 const now = new Date('2026-10-05T12:00:00Z');
 const noWork: LeagueJobHandler = async () => {};
 const handlers: Record<LeagueJobType, LeagueJobHandler> = {

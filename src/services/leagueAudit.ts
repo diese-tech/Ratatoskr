@@ -31,6 +31,8 @@ import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 import { LeagueMemberGatewayThrottleError, LeagueMemberSnapshotUnavailableError, type LeagueMemberReadOptions } from './leagueMemberReads.js';
+import { DRAFT_PICK_FEATURE, draftPickHealthFinding, type DraftPickHealth } from './draftPickTracking.js';
+import { replaceLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
 
 export type LeagueAuditCard = PersistedLeagueOpsCard;
 
@@ -52,12 +54,18 @@ type Input = {
   freeAgentRoleId: string;
   members: { getMembers(options?: LeagueMemberReadOptions): Promise<LeagueSnapshot['discordMembers']> };
   allowObservedMembers?: boolean;
-  sheets: { load(members: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot> };
+  sheets: { load(members: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot>;
+    checkDraftPickHealth?(): Promise<DraftPickHealth> };
   cards: LeagueAuditCardPort;
   freshAfterRecovery?: boolean;
 };
 
 const LEAGUE_TIMEZONE = 'America/New_York';
+function appendDraftHealth(card: LeagueAuditCard, findings?: string[]): void {
+  if (!findings?.length) return;
+  card.description = card.description.replace('Status: Healthy', 'Roster status: Healthy');
+  card.description += `\n\nTop-four draft tracking\n${findings.join('\n')}`;
+}
 
 type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number; second: number };
 
@@ -250,7 +258,7 @@ export async function refreshLeagueOpsPanel(
   const resources = listLeagueFindings(input.db, input.guildId);
   const readErrors = resources.filter((entry) => entry.resourceKey === 'connection').flatMap((entry) => entry.findings);
   const issues = [
-    ...new Set(resources.filter((entry) => entry.resourceKey !== 'connection').flatMap((entry) => entry.findings)),
+    ...new Set(resources.filter((entry) => entry.resourceKey !== 'connection' && entry.resourceKey !== DRAFT_PICK_FEATURE).flatMap((entry) => entry.findings)),
   ];
   const tickets = listOpenLeagueReconciliationTickets(input.db, input.guildId);
   for (const ticket of tickets) if (!issues.includes(ticket.summary)) issues.push(ticket.summary);
@@ -270,6 +278,8 @@ export async function refreshLeagueOpsPanel(
   if (result === 'clean' && !prior?.lastFullAt)
     card.description =
       'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
+  const draftHealth = resources.find(entry => entry.resourceKey === DRAFT_PICK_FEATURE);
+  appendDraftHealth(card, draftHealth?.findings);
   if (!issues.length) card.actions = undefined;
   card.actions = [...(card.actions ?? []), { id: 'league-ops:open', label: 'Review League Ops' }];
   if (recoverableRepairs.length) card.actions = [...(card.actions ?? []), { id: 'league-recovery:list', label: 'Review operations' }];
@@ -336,6 +346,10 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
     result = issues.length ? 'dirty' : 'clean';
     replaceFullLeagueFindings(input.db, input.guildId, loaded.snapshot, diagnostics,
       diagnostics.map((diagnostic) => humanizeLeagueAuditIssues(loaded.snapshot, [diagnostic])[0]!), input.now);
+    if (input.sheets.checkDraftPickHealth) {
+      const health = await input.sheets.checkDraftPickHealth();
+      replaceLeagueFindings(input.db, input.guildId, DRAFT_PICK_FEATURE, [draftPickHealthFinding(health, input.now)], input.now);
+    }
     dismissResolvedRepairReviews(input.db, input.guildId, issues);
   } catch (error) {
     console.error('League roster audit could not read every source:', error);
@@ -374,6 +388,7 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
   // Create durable panel state even before the first Discord delivery.
   if (!getLeagueAuditState(input.db, input.guildId)) {
     const initialCard = cardFor(result, result === 'error' ? [] : issues, input.now, input.trigger);
+    appendDraftHealth(initialCard, listLeagueFindings(input.db, input.guildId).find(entry => entry.resourceKey === DRAFT_PICK_FEATURE)?.findings);
     if (result === 'error')
       initialCard.description += `\n\n${issues.join('\n')}\nNo changes were made by this check. The next dirty-state check will retry automatically.`;
     beginDirtyLeagueAudit(input.db, {

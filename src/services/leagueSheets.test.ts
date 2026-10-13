@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { DRAFT_PICK_HEADERS } from './draftPicks.js';
 import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan } from '../domain/leagueOperations.js';
 import {
   createLeagueSheetsReadSchedule,
@@ -16,6 +17,11 @@ type Rows = (string | number | boolean | null)[][];
 function emptyPublic(): Rows { return Array.from({ length: 99 }, () => Array(15).fill('')); }
 
 class FakeGateway implements LeagueSheetsGateway {
+  missingDraftPicks = false;
+  async getWorkbookProperties() {
+    return { title: 'Admin', sheets: ['League Teams', 'Current Rosters', 'Player Name History', 'Transaction History',
+      ...(this.missingDraftPicks ? [] : ['Draft Picks'])].map((title, sheetId) => ({ title, sheetId })) };
+  }
   readonly data = new Map<string, Rows>();
   readonly writes: { spreadsheetId: string; updates: SheetValueUpdate[]; option: 'RAW' | 'USER_ENTERED' }[] = [];
   readonly appends: { spreadsheetId: string; range: string; values: Rows; option: 'RAW' | 'USER_ENTERED' }[] = [];
@@ -28,6 +34,7 @@ class FakeGateway implements LeagueSheetsGateway {
   async getValues(spreadsheetId: string, range: string): Promise<Rows> {
     this.reads.push({ spreadsheetId, range });
     const rows = structuredClone(this.data.get(this.key(spreadsheetId, range)) ?? []);
+    if (range === "'Draft Picks'!A5:J5" && !this.data.has(this.key(spreadsheetId, range))) return [DRAFT_PICK_HEADERS];
     if (this.changed && range.includes('Current Rosters')) rows[1]![5] = 'Manual edit';
     return rows;
   }
@@ -326,7 +333,7 @@ test('departure history records the former team and inactive destination without
   });
   assert.deepEqual(gateway.appends[0]?.values[0], [
     'YSL-TRX-DEPARTURE', 'departure', '2026-09-30', 'Vanaheim', 'Dream Walkers', 'Inactive',
-    'one', 'One', 'admin', '', 'Completed', 'Admin', '',
+    'one', 'One', 'admin', '', 'Completed', 'Admin', 'Not verified: Draft Picks empty',
   ]);
 });
 
@@ -342,7 +349,7 @@ test('history marks top-4 draft picks in column M and records the move on Draft 
   });
   assert.equal(gateway.appends[0]?.range, "'Transaction History'!A:M");
   assert.deepEqual(gateway.appends[0]?.values.map((row) => [row[6], row[12]]), [
-    ['one', ''],
+    ['one', 'Not verified: Draft Picks incomplete'],
     ['two', 'Vanaheim The Sewer R2 (#16)'],
   ]);
   assert.deepEqual(moves.map((move) => [move.discordId, move.player]), [['two', 'Two']]);
@@ -384,9 +391,10 @@ test('Draft Picks status is written before the history row so recovery cannot sk
   ]);
 });
 
-test('history proceeds unmarked when the Draft Picks tab has not been seeded', async () => {
+test('history explicitly records unverified tracking only when Draft Picks absence is confirmed', async () => {
   const { gateway, service } = serviceFixture();
   const getValues = gateway.getValues.bind(gateway);
+  gateway.missingDraftPicks = true;
   gateway.getValues = async (spreadsheetId, range) => {
     if (range.includes('Draft Picks')) throw Object.assign(new Error('Unable to parse range'), { status: 400 });
     return getValues(spreadsheetId, range);
@@ -396,7 +404,27 @@ test('history proceeds unmarked when the Draft Picks tab has not been seeded', a
     reference: 'YSL-TRX-TRADE', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin',
   });
   assert.deepEqual(moves, []);
-  assert.deepEqual(gateway.appends[0]?.values.map((row) => row[12]), ['', '']);
+  assert.deepEqual(gateway.appends[0]?.values.map((row) => row[12]), [
+    'Not verified: Draft Picks tab missing', 'Not verified: Draft Picks tab missing',
+  ]);
+});
+
+test('unconfirmed Draft Picks failures preserve pick/history records instead of permitting unmarked history', async () => {
+  for (const status of [400, 403, 429, 503]) {
+    const { gateway, service } = serviceFixture();
+    const read = gateway.getValues.bind(gateway);
+    gateway.getValues = async (id, range) => {
+      if (range.includes('Draft Picks')) throw Object.assign(Error('Rejected source request'), { status });
+      return read(id, range);
+    };
+    const loaded = await service.load(members, 'free-agent');
+    await assert.rejects(() => service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
+      reference: 'never-appended', effectiveDate: '2026-10-13', processedById: 'admin', processedBy: 'Admin',
+    }), (error: unknown) => error instanceof Error && /not verified/.test(error.message));
+    assert.equal(gateway.appends.length, 0);
+    assert.equal(gateway.writes.length, 0);
+    assert.equal(service.lastDraftPickHealth?.health.httpStatus, status);
+  }
 });
 
 test('history recovery does not re-mark an already recorded reference', async () => {

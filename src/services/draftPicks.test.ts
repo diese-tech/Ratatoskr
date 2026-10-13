@@ -1,5 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { assertDraftPickSeedTargets, assertDraftPickSeedSeason } from './draftPicks.js';
+
+test('seed write requires both reviewed workbook identities and an approved season date/reset', () => {
+  const target = { adminId: 'admin', publicId: 'public', write: true };
+  assert.throws(() => assertDraftPickSeedTargets(target), /requires.*expect-admin-id/);
+  assert.throws(() => assertDraftPickSeedTargets({ ...target, expectedAdminId: 'public', expectedPublicId: 'public' }), /do not match/);
+  assert.throws(() => assertDraftPickSeedTargets({ ...target, adminId: 'public' }), /Distinct/);
+  assert.doesNotThrow(() => assertDraftPickSeedTargets({ ...target, expectedAdminId: 'admin', expectedPublicId: 'public' }));
+  assert.doesNotThrow(() => assertDraftPickSeedTargets({ ...target, write: false }));
+  assert.throws(() => assertDraftPickSeedSeason('', false, false), /draft date/);
+  assert.throws(() => assertDraftPickSeedSeason('2026-02-30', false, false), /draft date/);
+  assert.throws(() => assertDraftPickSeedSeason('2026-09-01', true, false), /confirm-season-reset/);
+  assert.doesNotThrow(() => assertDraftPickSeedSeason('2026-09-01', false, false));
+  assert.doesNotThrow(() => assertDraftPickSeedSeason('2026-09-01', true, true));
+});
 import { draftParseProblems, draftPickHistoricalIds, draftPickRow, normalizeName, parseDraftTab, planDraftPickAccountReplacement, resolveDraftPicks } from './draftPicks.js';
 
 // Mirrors the live draft grid: header row, Pick/Name row, Cap: row, then one row per round.

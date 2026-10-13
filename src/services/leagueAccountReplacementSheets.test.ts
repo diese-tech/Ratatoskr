@@ -4,6 +4,24 @@ import { buildLeagueAccountReplacementPlan } from '../domain/leagueAccountReplac
 import { buildTradePlan } from '../domain/leagueOperations.js';
 import { accountReplacementSources } from './accountReplacement.test-support.js';
 
+test('saved formatted draft rows remain recoverable after raw numeric reads without weakening identity or slot checks', async () => {
+  const f = accountReplacementSources();
+  const loaded = await f.sheets.load([...f.members.values()], 'fa');
+  const plan = buildLeagueAccountReplacementPlan({ guildId: 'g', snapshot: loaded.snapshot,
+    oldDiscordId: 'one', newDiscordId: 'new', oldMember: null, newMember: f.members.get('new')!, newNameSheetRow: 9 });
+  const prepared = await f.sheets.prepareAccountReplacement(loaded, plan);
+  await f.sheets.applyAccountReplacement(prepared, () => {});
+  // Representation persisted by the previous FORMATTED_VALUE reader.
+  for (const rows of [prepared.draftBefore, prepared.draftAfter])
+    for (const row of rows ?? []) { row[2] = String(row[2]); row[3] = String(row[3]); }
+  await f.sheets.verifyAccountReplacement(prepared);
+  f.gateway.rows('admin', 'Draft Picks')[5]![2] = 2;
+  await assert.rejects(() => f.sheets.verifyAccountReplacement(prepared), /draft slot or move status changed/i);
+  f.gateway.rows('admin', 'Draft Picks')[5]![2] = 1;
+  f.gateway.rows('admin', 'Draft Picks')[5]![5] = 123456789012345680;
+  await assert.rejects(() => f.sheets.verifyAccountReplacement(prepared), /identity or status ownership are invalid/i);
+});
+
 test('account replacement guards and writes only its existing roster/name cells, preserves draft status and historical IDs', async () => {
   const f = accountReplacementSources();
   const loaded = await f.sheets.load([...f.members.values()], 'fa');
@@ -36,7 +54,7 @@ test('changed name owns one public cell; pre-write drift and unavailable Draft P
     const plan = buildLeagueAccountReplacementPlan({ guildId: 'g', snapshot: loaded.snapshot,
       oldDiscordId: 'one', newDiscordId: 'new', oldMember: null, newMember: f.members.get('new')!, newNameSheetRow: 9 });
     const prepared = await f.sheets.prepareAccountReplacement(loaded, plan);
-    assert.equal(prepared.draftVerification, missingPicks ? 'skipped:missing-tab' : 'verified');
+    assert.equal(prepared.draftVerification, missingPicks ? 'skipped:missing-tab' : 'partial:unverified-slots');
     f.gateway.rows('admin', 'Current Rosters')[5]![8] = 'Unreviewed manual edit';
     await assert.rejects(() => f.sheets.applyAccountReplacement(prepared, () => assert.fail('must not enter write phase')), /before-values changed/i);
     assert.equal(f.gateway.writes.length, 0);

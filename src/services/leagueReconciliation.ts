@@ -19,6 +19,7 @@ import {
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
 import type { LeagueJobWorker } from './leagueJobWorker.js';
+import { DRAFT_PICK_FEATURE } from './draftPickTracking.js';
 export function observeLeagueMember(
   db: Database.Database,
   worker: LeagueJobWorker,
@@ -100,7 +101,7 @@ export const DIRTY_RECHECK_MS = 120_000;
 export const PANEL_HEARTBEAT_MS = 3_600_000;
 export function scheduleDirtyLeagueCheck(db: Database.Database, worker: LeagueJobWorker): boolean {
   if (
-    !listLeagueFindings(db, worker.guildId).length &&
+    !listLeagueFindings(db, worker.guildId).some(entry => entry.resourceKey !== DRAFT_PICK_FEATURE) &&
     !listOpenLeagueReconciliationTickets(db, worker.guildId).length &&
     !listLeagueMutationProblems(db, worker.guildId).length &&
     !hasPendingLeagueDeliveries(db, worker.guildId) &&
