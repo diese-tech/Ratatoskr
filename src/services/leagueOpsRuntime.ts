@@ -93,7 +93,7 @@ export function createLeagueOpsRuntime(input: {
       applyAccountReplacement: (...args) => requireReplacementSheets('applyAccountReplacement')(...args),
       verifyAccountReplacement: (...args) => requireReplacementSheets('verifyAccountReplacement')(...args) },
     enqueue: (intent, key) => worker.enqueue('account-replacement', intent, key) });
-  const audit = async (trigger: 'startup' | 'scheduled') => {
+  const audit = async (trigger: 'startup' | 'scheduled', allowObservedMembers = false) => {
     const result = await runLeagueAudit({
       db,
       operationScope,
@@ -106,6 +106,7 @@ export function createLeagueOpsRuntime(input: {
       cards,
       deferPresentation: true,
       freshAfterRecovery: true,
+      allowObservedMembers,
     });
     refresh();
     return result;
@@ -282,7 +283,7 @@ export function createLeagueOpsRuntime(input: {
             ids.add(entry);
         }
         if (ids.size && !findings.some((f) => f.resourceKey === 'connection')) for (const id of ids) await targeted(id);
-        else await audit('scheduled');
+        else await audit('scheduled', true);
         // Release the running key before scheduling the next 2-minute pass.
         scheduleDirtyLeagueCheck(db, worker);
       },
