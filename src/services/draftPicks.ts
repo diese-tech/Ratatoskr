@@ -10,6 +10,26 @@ export const DRAFT_PICK_HEADERS = [
   'Division', 'Team', 'Round', 'Pick #', 'Draft Name', 'Discord ID', 'Current League Name', 'Match Source', 'Status', 'Status For ID',
 ];
 
+export class DraftPickSeedInputError extends Error {}
+export function assertDraftPickSeedTargets(input: {
+  adminId: string; publicId: string; write: boolean; expectedAdminId?: string; expectedPublicId?: string;
+}): void {
+  if (!input.adminId.trim() || !input.publicId.trim() || input.adminId === input.publicId)
+    throw new DraftPickSeedInputError('Distinct configured Admin and public workbooks are required.');
+  if ((input.expectedAdminId && input.expectedAdminId !== input.adminId)
+    || (input.expectedPublicId && input.expectedPublicId !== input.publicId))
+    throw new DraftPickSeedInputError('Configured workbooks do not match the reviewed targets. Nothing was written.');
+  if (input.write && (!input.expectedAdminId || !input.expectedPublicId))
+    throw new DraftPickSeedInputError('--write requires --expect-admin-id and --expect-public-id matching the reviewed workbooks.');
+}
+export function assertDraftPickSeedSeason(since: string, newSeason: boolean, confirmedReset: boolean): void {
+  const date = new Date(`${since}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(since) || Number.isNaN(date.getTime()) || !date.toISOString().startsWith(since))
+    throw new DraftPickSeedInputError('An approved real draft date is required for --write; use --since=YYYY-MM-DD.');
+  if (newSeason && !confirmedReset)
+    throw new DraftPickSeedInputError('Changing the stored draft date resets existing identity/status continuity. Review and explicitly use --confirm-season-reset.');
+}
+
 export type DraftPick = { division: string; team: string; round: number; pick: string; draftName: string };
 export type ResolvedDraftPick = DraftPick & {
   discordId: string; currentName: string; matchSource: string; status: string;

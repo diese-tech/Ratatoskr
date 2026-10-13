@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { LeagueAccountReplacementPlan } from '../domain/leagueAccountReplacement.js';
 import { draftPickIdentityIndex, planDraftPickAccountReplacement } from './draftPicks.js';
+import { readDraftPickTracking, DraftPickTrackingError, type DraftPickHealth } from './draftPickTracking.js';
 import {
   type DiscordLeagueMember,
   type LeagueDivision,
@@ -22,9 +23,10 @@ export type SheetValueUpdate = { range: string; values: CellRows };
 export type SelfDropPresentation = { sheetId: number; legend: CellRows; ruleExists: boolean };
 
 // Reuse is opt-in for presentation only. Proof reads always bypass it.
-export type LeagueSheetsReadOptions = { purpose: 'presentation' | 'fresh' };
+export type LeagueSheetsReadOptions = { purpose: 'presentation' | 'fresh'; valueRenderOption?: 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' };
 
 export interface LeagueSheetsGateway {
+  getWorkbookProperties?(spreadsheetId: string): Promise<{ title: string; sheets: Array<{ title: string; sheetId: number }> }>;
   getValues(spreadsheetId: string, range: string, options?: LeagueSheetsReadOptions): Promise<CellRows>;
   getValuesBatch?(spreadsheetId: string, ranges: string[], options?: LeagueSheetsReadOptions): Promise<CellRows[]>;
   batchUpdate(spreadsheetId: string, updates: SheetValueUpdate[], valueInputOption?: 'RAW' | 'USER_ENTERED'): Promise<void>;
@@ -161,9 +163,15 @@ export function createScheduledLeagueSheetsGateway(
     }, { workbook, key: options.url, purpose: readOptions.purpose });
   };
   const gateway: LeagueSheetsGateway = {
+    async getWorkbookProperties(spreadsheetId) {
+      const data = await request<{ properties: { title: string }; sheets: Array<{ properties: { sheetId: number; title: string } }> }>({
+        url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=properties(title),sheets(properties(sheetId,title))`,
+      });
+      return { title: data.properties.title, sheets: data.sheets.map(sheet => sheet.properties) };
+    },
     async getValuesBatch(spreadsheetId, ranges, options) {
       if (!ranges.length) return [];
-      const query = new URLSearchParams({ valueRenderOption: 'FORMATTED_VALUE' });
+      const query = new URLSearchParams({ valueRenderOption: options?.valueRenderOption ?? 'FORMATTED_VALUE' });
       for (const range of ranges) query.append('ranges', range);
       const data = await request<{ valueRanges?: Array<{ values?: CellRows }> }>({
         url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${query}`,
@@ -176,7 +184,7 @@ export function createScheduledLeagueSheetsGateway(
     async getValues(spreadsheetId, range, options) {
       const encoded = encodeURIComponent(range);
       const data = await request<{ values?: CellRows }>({
-        url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encoded}?valueRenderOption=FORMATTED_VALUE`,
+        url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encoded}?valueRenderOption=${options?.valueRenderOption ?? 'FORMATTED_VALUE'}`,
       }, options);
       return data.values ?? [];
     },
@@ -314,7 +322,7 @@ export type PreparedAccountReplacementSheets = {
   publicUpdates: SheetValueUpdate[];
   draftBefore: CellRows | null;
   draftAfter: CellRows | null;
-  draftVerification: 'verified' | 'skipped:missing-tab';
+  draftVerification: 'verified' | 'skipped:missing-tab' | 'skipped:empty-tab' | 'partial:unverified-slots';
 };
 
 // A captain's first four draft picks (rounds 1-4, not the Cap: line). Seeded by
@@ -479,7 +487,10 @@ function samePublicRosters(
   return true;
 }
 
+const draftHealthWarnings = new Map<string, string>();
 export class LeagueSheetsService {
+  private draftHealthObservation?: { health: DraftPickHealth; checkedAt: Date };
+  get lastDraftPickHealth() { return this.draftHealthObservation && structuredClone(this.draftHealthObservation); }
   constructor(
     private readonly gateway: LeagueSheetsGateway, private readonly config: LeagueSheetsConfig,
   ) {}
@@ -491,11 +502,25 @@ export class LeagueSheetsService {
   }
 
   private async accountReplacementDraftRows(): Promise<CellRows | null> {
-    try { return await this.gateway.getValues(this.config.adminSpreadsheetId, DRAFT_PICKS_RANGE, { purpose: 'fresh' }); }
-    catch (error) {
-      if (error && typeof error === 'object' && 'status' in error && error.status === 400) return null;
-      throw error;
+    const result = await this.readDraftTracking();
+    if (result.health.status === 'missing-tab') return null;
+    if (!result.rows) throw new DraftPickTrackingError(result.health);
+    return result.rows;
+  }
+
+  private async readDraftTracking() {
+    const result = await readDraftPickTracking(this.gateway, this.config.adminSpreadsheetId);
+    this.draftHealthObservation = { health: result.health, checkedAt: new Date() };
+    const signature = `${result.health.status}:${result.health.summary}`;
+    if (draftHealthWarnings.get(this.config.adminSpreadsheetId) !== signature) {
+      draftHealthWarnings.set(this.config.adminSpreadsheetId, signature);
+      if (result.health.status !== 'ready') console.warn(result.health.summary, result.health.next);
     }
+    return result;
+  }
+
+  async checkDraftPickHealth(): Promise<DraftPickHealth> {
+    return (await this.readDraftTracking()).health;
   }
 
   async prepareAccountReplacement(loaded: LoadedLeagueSnapshot, plan: LeagueAccountReplacementPlan): Promise<PreparedAccountReplacementSheets> {
@@ -521,6 +546,7 @@ export class LeagueSheetsService {
       after.publicByDivision[match[1] as LeagueDivision][Number(match[3]) - 1]![match[2]!.charCodeAt(0) - 65] = update.values[0]![0]!;
     }
     const draftBefore = await this.accountReplacementDraftRows();
+    const draftStatus = this.draftHealthObservation!.health.status;
     const draftAfter = structuredClone(draftBefore);
     if (draftBefore) {
       for (const pick of planDraftPickAccountReplacement(draftBefore, plan.oldDiscordId, plan.newDiscordId, plan.rosterAfter.player)) {
@@ -530,7 +556,8 @@ export class LeagueSheetsService {
       }
     }
     return { plan, freeAgentRoleId: loaded.snapshot.freeAgentRoleId, before: structuredClone(loaded.sources), after,
-      adminUpdates, publicUpdates, draftBefore, draftAfter, draftVerification: draftBefore ? 'verified' : 'skipped:missing-tab' };
+      adminUpdates, publicUpdates, draftBefore, draftAfter, draftVerification: draftStatus === 'missing-tab' ? 'skipped:missing-tab'
+        : draftStatus === 'empty-tab' ? 'skipped:empty-tab' : draftStatus === 'partial' ? 'partial:unverified-slots' : 'verified' };
   }
 
   async assertAccountReplacementUnchanged(prepared: PreparedAccountReplacementSheets): Promise<void> {
@@ -914,14 +941,17 @@ export class LeagueSheetsService {
       plan.playerIds[0] ?? '',
       plan.players[0] ?? '', record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
     ]];
-    const picks = plan.kind === 'rename' ? new Map<string, DraftPickMove>() : await this.loadDraftPicks();
+    const tracking = plan.kind === 'rename' ? undefined : await this.loadDraftPicks();
+    const picks = tracking?.picks ?? new Map<string, DraftPickMove>();
     const moved = new Map<string, DraftPickMove>();
     for (const row of transactionRows) {
       const pick = picks.get(String(row[6] ?? ''));
       // The transaction row carries the current name; Draft Picks may predate a rename.
       if (pick) moved.set(pick.discordId, { ...pick, player: String(row[7] ?? '') || pick.player });
       // Column M drives the Transaction History yellow conditional-format rule.
-      row.push(pick ? draftPickLabel(pick) : '');
+      row.push(pick ? draftPickLabel(pick) : !tracking || tracking.health.status === 'ready' ? ''
+        : tracking.health.status === 'missing-tab' ? 'Not verified: Draft Picks tab missing'
+          : tracking.health.status === 'empty-tab' ? 'Not verified: Draft Picks empty' : 'Not verified: Draft Picks incomplete');
     }
     // Status first: the history row is the idempotency marker, so anything written after it
     // would be skipped by recovery. Rewriting the same status on retry is harmless.
@@ -935,19 +965,11 @@ export class LeagueSheetsService {
     return [...moved.values()];
   }
 
-  // A missing tab (400) means tracking has not been seeded yet; transactions proceed unmarked.
-  private async loadDraftPicks(): Promise<Map<string, DraftPickMove>> {
-    let rows: CellRows;
-    try {
-      rows = await this.gateway.getValues(this.config.adminSpreadsheetId, DRAFT_PICKS_RANGE);
-    } catch (error) {
-      if (error && typeof error === 'object' && 'status' in error && error.status === 400) {
-        console.warn('Draft Picks tab is unavailable; top-4 pick tracking is skipped.');
-        return new Map();
-      }
-      throw error;
-    }
+  private async loadDraftPicks(): Promise<{ picks: Map<string, DraftPickMove>; health: DraftPickHealth }> {
+    const { rows, health } = await this.readDraftTracking();
     const picks = new Map<string, DraftPickMove>();
+    if (health.status === 'missing-tab') return { picks, health };
+    if (!rows) throw new DraftPickTrackingError(health);
     const identities = draftPickIdentityIndex(rows);
     rows.forEach((row, index) => {
       const discordId = String(row[5] ?? '').trim();
@@ -966,6 +988,6 @@ export class LeagueSheetsService {
       const pick = picks.get(currentId);
       if (pick) picks.set(historicalId, pick);
     }
-    return picks;
+    return { picks, health };
   }
 }

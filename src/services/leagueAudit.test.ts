@@ -7,6 +7,23 @@ import { nextLeagueAuditAt, recoverPendingLeagueAudit, runLeagueAudit, startLeag
 import { LeagueSheetInputError } from './leagueSheets.js';
 import { LeagueMemberGatewayThrottleError } from './leagueMemberReads.js';
 import { listLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
+import type { DraftPickHealth } from './draftPickTracking.js';
+
+test('optional Draft Picks health appears separately from clean roster status and survives panel refresh', async () => {
+  const db = openDatabase(':memory:');
+  const cards = new Cards();
+  const clean = snapshot(); clean.publicRosters.Vanaheim!.teams.B = ['Two'];
+  const health: DraftPickHealth = { status: 'missing-tab', summary: 'Draft tracking unavailable: Draft Picks tab is missing.', next: 'Use the approved setup runbook.' };
+  try {
+    const result = await runLeagueAudit({ db, operationScope: db, guildId: 'guild', trigger: 'scheduled',
+      now: new Date('2026-10-13T10:00:00Z'), freeAgentRoleId: 'fa', members: { getMembers: async () => clean.discordMembers },
+      sheets: { load: async () => ({ snapshot: clean, sources: {} as never }), checkDraftPickHealth: async () => health }, cards });
+    assert.equal(result.status, 'clean');
+    assert.match(cards.sent.at(-1)!.card.description, /Draft Picks tab is missing/);
+    assert.match(cards.sent.at(-1)!.card.description, /Open reconciliation items: 0/);
+    assert.equal(listLeagueFindings(db, 'guild').filter(row => row.resourceKey === 'feature:draft-picks').length, 1);
+  } finally { db.close(); }
+});
 
 test('a throttled member read reports Gateway cooldown and preserves existing roster findings without loading Sheets', async () => {
   const db = openDatabase(':memory:');

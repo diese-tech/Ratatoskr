@@ -36,7 +36,7 @@ test('changed name owns one public cell; pre-write drift and unavailable Draft P
     const plan = buildLeagueAccountReplacementPlan({ guildId: 'g', snapshot: loaded.snapshot,
       oldDiscordId: 'one', newDiscordId: 'new', oldMember: null, newMember: f.members.get('new')!, newNameSheetRow: 9 });
     const prepared = await f.sheets.prepareAccountReplacement(loaded, plan);
-    assert.equal(prepared.draftVerification, missingPicks ? 'skipped:missing-tab' : 'verified');
+    assert.equal(prepared.draftVerification, missingPicks ? 'skipped:missing-tab' : 'partial:unverified-slots');
     f.gateway.rows('admin', 'Current Rosters')[5]![8] = 'Unreviewed manual edit';
     await assert.rejects(() => f.sheets.applyAccountReplacement(prepared, () => assert.fail('must not enter write phase')), /before-values changed/i);
     assert.equal(f.gateway.writes.length, 0);

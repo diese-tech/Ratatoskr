@@ -25,11 +25,11 @@ The original nickname, including a missing/null nickname, is restored only after
 
 League rules protect each captain's first four draft picks (rounds 1–4; the `Cap:` line is not a pick). Moves of those players are marked so staff can review trades for competitive balance.
 
-- The Admin **Draft Picks** tab lists every top-4 pick with its Discord ID. Seed or refresh it with `railway run npx tsx scripts/seed-draft-picks.ts` (dry run), review the unresolved and moved lists, then re-run with `--write`. Draft names often differ from league names, so type any unresolved Discord ID into column F and re-run; staff-entered IDs are kept.
+- The Admin **Draft Picks** tab lists every top-four pick with its Discord ID. Use the [approved setup runbook](draft-picks.md) for targeted dry runs and guarded writes. Review unresolved/moved picks, the draft date and the plan fingerprint first. Staff-entered text IDs are retained on same-season reseeding; do not infer an unresolved identity from a similar name.
 - When a confirmed transaction moves a listed player, Ratatoskr writes the pick into **Transaction History** column M (`Top-4 Pick`), sets the Draft Picks status to `Moved · <move> · <reference>` (column J records whose move it is, so correcting an ID never carries over another player's record), and posts one unpinged note in staff-ops. Conditional formatting turns both rows yellow; do not highlight roster cells by hand.
 - The seed run also backfills column M for earlier history rows and marks picks that moved before tracking (`Moved · before tracking`).
 - The tab records its draft date in B4 (`--since=YYYY-MM-DD`, optional for Season One). Re-runs reuse it and keep staff-entered IDs. For a new season, pass the new draft date; a different date starts the tab over so last season's IDs and move statuses are not carried over, and history before that date is ignored.
-- Without a Draft Picks tab, transactions proceed unmarked. The staff-ops note is best-effort; the Transaction History row is the record.
+- Confirmed missing/empty/incomplete tracking is recorded as `Not verified: ...` in history, rather than silently treating unmatched players as unprotected. Other source/schema errors retain pending-delivery recovery. The staff-ops move note remains best-effort; history is the record. See [Draft Picks health and approved setup](draft-picks.md) for diagnosis, guarded dry-run/write flags and independent production validation.
 
 ## Automatic safety checks
 

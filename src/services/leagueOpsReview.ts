@@ -6,6 +6,7 @@ import { getLeagueTransaction } from '../db/repositories/leagueOperations.js';
 import { getLeagueAuditRepair, getLeagueRepairResolution, listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 import { getAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
 import { getVerifiedLeagueMember, listLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
+import { DRAFT_PICK_FEATURE } from './draftPickTracking.js';
 import { LeagueMutationValidationError, type LeagueMutationPlan } from '../domain/leagueOperations.js';
 import type { LeagueAccountReplacementService, AccountReplacementPreview } from './leagueAccountReplacement.js';
 import { leagueTransactionPlanFingerprint } from './leagueTransactions.js';
@@ -116,7 +117,7 @@ export class LeagueOpsReviewService {
     const operations = listActionableLeagueJobs(db, guildId).filter(job => ['transaction', 'repair', 'account-replacement'].includes(job.type)).map(job => this.operation(job));
     for (const repair of listIncompleteLeagueAuditRepairs(db).filter(repair => repair.guildId === guildId))
       if (!operations.some(operation => operation.reference === repair.reference)) operations.push(this.legacyRepair(repair.reference)!);
-    return { issues: listLeagueFindings(db, guildId).flatMap(entry => entry.findings.map((finding, index) => {
+    return { issues: listLeagueFindings(db, guildId).filter(entry => entry.resourceKey !== DRAFT_PICK_FEATURE).flatMap(entry => entry.findings.map((finding, index) => {
       const id = entry.resourceKey.startsWith('member:') ? entry.resourceKey.slice(7) : undefined;
       const state = id ? getVerifiedLeagueMember(db, guildId, id) : undefined;
       return { key: `${entry.resourceKey}:${index}`, finding,

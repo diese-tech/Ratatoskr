@@ -5,28 +5,41 @@
 // --since: the draft date. Only history on/after it counts. It is stored in Draft Picks B4; a later run
 //   with a different date is a new season and starts the tab over, while omitting it reuses B4.
 // --allow-partial: write even if fewer than 3 divisions x 8 teams x 4 picks were parsed.
+// --write also requires reviewed --expect-admin-id / --expect-public-id targets.
+// A changed stored draft date requires explicit --confirm-season-reset approval.
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
+import { createHash } from 'node:crypto';
 import {
   DRAFT_DIVISIONS, DRAFT_PICK_HEADERS, draftParseProblems, draftPickIdentityIndex, draftPickRow, parseDraftTab, resolveDraftPicks,
+  assertDraftPickSeedTargets, assertDraftPickSeedSeason, DraftPickSeedInputError,
 } from '../src/services/draftPicks.js';
 import { draftPickLabel } from '../src/services/leagueSheets.js';
+import { validateDraftPickTable } from '../src/services/draftPickTracking.js';
 
 type Rows = (string | number | boolean | null)[][];
 type SheetMeta = { properties: { sheetId: number; title: string }; conditionalFormats?: Array<{ booleanRule?: { condition?: { values?: Array<{ userEnteredValue?: string }> } } }> };
 
 const write = process.argv.includes('--write');
 const allowPartial = process.argv.includes('--allow-partial');
+const summaryOnly = process.argv.includes('--summary-only');
+const expectedAdminId = process.argv.find(arg => arg.startsWith('--expect-admin-id='))?.slice('--expect-admin-id='.length);
+const expectedPublicId = process.argv.find(arg => arg.startsWith('--expect-public-id='))?.slice('--expect-public-id='.length);
+const expectedPlan = process.argv.find(arg => arg.startsWith('--expect-plan='))?.slice('--expect-plan='.length);
 const sinceArg = process.argv.find((arg) => arg.startsWith('--since='))?.slice('--since='.length) ?? '';
 const EXPECTED_PICKS = DRAFT_DIVISIONS.length * 8 * 4;
 // Round-trip through Date so shape-valid but impossible dates (2026-13-01, 2026-02-30) are rejected.
 const sinceTime = new Date(`${sinceArg}T00:00:00Z`).getTime();
 if (sinceArg && !(/^\d{4}-\d{2}-\d{2}$/.test(sinceArg) && !Number.isNaN(sinceTime) && new Date(sinceTime).toISOString().startsWith(sinceArg)))
   throw new Error(`--since must be a real YYYY-MM-DD date, got "${sinceArg}".`);
-const adminId = process.env.YSL_ADMIN_SPREADSHEET_ID!;
-const publicId = process.env.YSL_PUBLIC_SPREADSHEET_ID!;
+const adminId = process.env.YSL_ADMIN_SPREADSHEET_ID ?? '';
+const publicId = process.env.YSL_PUBLIC_SPREADSHEET_ID ?? '';
+assertDraftPickSeedTargets({ adminId, publicId, write, expectedAdminId, expectedPublicId });
+let credentials: object;
+try { credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON ?? '{}'); }
+catch { throw new DraftPickSeedInputError('GOOGLE_SERVICE_ACCOUNT_JSON must contain valid JSON.'); }
 const auth = new GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON ?? '{}'),
+  credentials,
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 const base = 'https://sheets.googleapis.com/v4/spreadsheets';
@@ -38,10 +51,11 @@ async function call<T>(url: string, data?: unknown): Promise<T> {
   const client = await auth.getClient();
   return (await client.request<T>({ url, method: data ? 'POST' : 'GET', ...(data ? { data } : {}), retry: false })).data;
 }
-async function read(spreadsheetId: string, ranges: string[]): Promise<Rows[]> {
-  const query = new URLSearchParams({ valueRenderOption: 'FORMATTED_VALUE' });
+async function read(spreadsheetId: string, ranges: string[], valueRenderOption = 'FORMATTED_VALUE'): Promise<Rows[]> {
+  const query = new URLSearchParams({ valueRenderOption });
   for (const range of ranges) query.append('ranges', range);
   const data = await call<{ valueRanges: Array<{ values?: Rows }> }>(`${base}/${spreadsheetId}/values:batchGet?${query}`);
+  if (data.valueRanges.length !== ranges.length) throw new DraftPickSeedInputError('Seed read returned an incomplete range set. Nothing was written.');
   return data.valueRanges.map((range) => range.values ?? []);
 }
 const sheetsMeta = async (spreadsheetId: string) => (await call<{ sheets: SheetMeta[] }>(
@@ -60,13 +74,25 @@ const hasRule = (sheet: SheetMeta | undefined, formula: string) => (sheet?.condi
   .some((rule) => rule.booleanRule?.condition?.values?.[0]?.userEnteredValue === formula);
 
 async function main() {
-  const [vetting, ...draftTabs] = await read(publicId, ['FinalizedVetting!A2:D', ...DRAFT_DIVISIONS.map((division) => `'${division} Draft'!A1:O60`)]);
   let adminMeta = await sheetsMeta(adminId);
+  const publicMeta = await sheetsMeta(publicId);
+  if (['League Teams', 'Current Rosters', 'Player Name History', 'Transaction History'].some(title => !adminMeta.some(sheet => sheet.properties.title === title)))
+    throw new DraftPickSeedInputError('Configured Admin workbook lacks required Admin tabs. Do not seed this workbook.');
+  if (['FinalizedVetting', ...DRAFT_DIVISIONS.map(division => `${division} Draft`)].some(title => !publicMeta.some(sheet => sheet.properties.title === title)))
+    throw new DraftPickSeedInputError('Configured public workbook lacks required draft source tabs. Nothing was written.');
+  const [vetting, ...draftTabs] = await read(publicId, ['FinalizedVetting!A2:D', ...DRAFT_DIVISIONS.map((division) => `'${division} Draft'!A1:O60`)]);
   const picksTabExists = adminMeta.some((sheet) => sheet.properties.title === 'Draft Picks');
-  const [memberDirectory, nameHistory, rosters, history, existing, storedDate] = await read(adminId, [
+  let [memberDirectory, nameHistory, rosters, history, existing, storedDate, draftHeaders] = await read(adminId, [
     "'Member Directory'!A6:D", "'Player Name History'!A6:C", "'Current Rosters'!A6:F", "'Transaction History'!A6:M",
-    ...(picksTabExists ? ["'Draft Picks'!A6:J", "'Draft Picks'!B4"] : []),
+    ...(picksTabExists ? ["'Draft Picks'!A6:J", "'Draft Picks'!B4", "'Draft Picks'!A5:J5"] : []),
   ]);
+  // Formatted reads turn numeric IDs into strings after precision was lost.
+  // Read actual stored F/J types before trusting an existing identity.
+  if (picksTabExists) existing = (await read(adminId, ["'Draft Picks'!A6:J"], 'UNFORMATTED_VALUE'))[0];
+  // The reviewed seed plan handles a manually corrected F/J owner by recomputing
+  // status; runtime proof reads reject that mismatch until this repair is approved.
+  if (picksTabExists && validateDraftPickTable(draftHeaders ?? [], existing ?? [], { allowCorrectedStatusOwner: true }).status === 'invalid-schema')
+    throw new DraftPickSeedInputError('Existing Draft Picks schema/identity/status is invalid. Preserve and repair it before seeding.');
   // The tab remembers its draft date. Same date (or none given) = same season: keep staff-entered IDs
   // and move records across re-runs. A different date = new season: start over.
   const tabDate = String(storedDate?.[0]?.[0] ?? '').trim();
@@ -94,18 +120,29 @@ async function main() {
       ? []
       : [{ row: index + 6, reference: String(row[0]), player: String(row[7]), label }];
   });
+  const planFingerprint = createHash('sha256').update(JSON.stringify({ adminId, publicId, since, newSeason,
+    allowPartial, picks: picks.map(draftPickRow), historyMarks, existing: existing ?? [], storedDate: storedDate ?? [] })).digest('hex');
+  console.log(`Seed plan fingerprint: ${planFingerprint}`);
 
   console.log(`Parsed ${picks.length} top-4 picks (expected ${EXPECTED_PICKS}).`);
   const unresolved = picks.filter((pick) => !pick.discordId);
   console.log(`\nUnresolved (${unresolved.length}) — type the Discord ID into column F of Draft Picks, then re-run:`);
-  for (const pick of unresolved) console.log(`  ${pick.division} ${pick.team} R${pick.round} (#${pick.pick}): ${pick.draftName}`);
+  if (!summaryOnly) for (const pick of unresolved) console.log(`  ${pick.division} ${pick.team} R${pick.round} (#${pick.pick}): ${pick.draftName}`);
   const moved = picks.filter((pick) => pick.status.startsWith('Moved'));
   console.log(`\nMoved top-4 picks (${moved.length}) — rows that will be yellow:`);
-  for (const pick of moved) console.log(`  ${pick.division} ${pick.team} R${pick.round} (#${pick.pick}): ${pick.draftName} → ${pick.status}`);
+  if (!summaryOnly) for (const pick of moved) console.log(`  ${pick.division} ${pick.team} R${pick.round} (#${pick.pick}): ${pick.draftName} → ${pick.status}`);
   console.log(`\nTransaction History column M changes (${historyMarks.length}):`);
-  for (const mark of historyMarks) console.log(`  row ${mark.row} ${mark.reference} ${mark.player}: ${mark.label || '(clear stale mark)'}`);
+  if (!summaryOnly) for (const mark of historyMarks) console.log(`  row ${mark.row} ${mark.reference} ${mark.player}: ${mark.label || '(clear stale mark)'}`);
 
-  if (!write) { console.log('\nDry run. Re-run with --write to apply.'); return; }
+  if (!write) {
+    const problems = draftParseProblems(picks, rosters!);
+    console.log(`\nParse valid: ${picks.length === EXPECTED_PICKS && !problems.length}. Draft date supplied/stored: ${Boolean(since)}.`);
+    console.log('Dry run: no writes. Approval, reviewed --expect-plan, matching workbook IDs and a draft date are required for --write.');
+    return;
+  }
+  assertDraftPickSeedSeason(since, newSeason, process.argv.includes('--confirm-season-reset'));
+  if (!expectedPlan || expectedPlan !== planFingerprint)
+    throw new DraftPickSeedInputError('--write requires --expect-plan matching the reviewed dry-run fingerprint. Nothing was written.');
   // A short parse would drop protected picks (and their staff-entered IDs) from the tab.
   const problems = draftParseProblems(picks, rosters!);
   if ((picks.length !== EXPECTED_PICKS || problems.length) && !allowPartial) {
@@ -120,6 +157,21 @@ async function main() {
     return other ? [`${pick.discordId} is in both ${other} and ${slot}`] : [];
   });
   if (duplicates.length) throw new Error(`Duplicate Discord IDs in Draft Picks: ${duplicates.join('; ')}. Fix column F, then re-run.`);
+
+  // A local Railway run has no production volume/lock. Guard observed workbook
+  // state immediately before writing and require an approved staff quiet window.
+  const freshMeta = await sheetsMeta(adminId);
+  const priorTab = adminMeta.find(sheet => sheet.properties.title === 'Draft Picks');
+  const currentTab = freshMeta.find(sheet => sheet.properties.title === 'Draft Picks');
+  if (priorTab?.properties.sheetId !== currentTab?.properties.sheetId)
+    throw new DraftPickSeedInputError('Draft Picks tab ownership changed after planning. Nothing was written.');
+  const freshAdmin = await read(adminId, ["'Member Directory'!A6:D", "'Player Name History'!A6:C", "'Current Rosters'!A6:F", "'Transaction History'!A6:M",
+    ...(picksTabExists ? ["'Draft Picks'!A6:J", "'Draft Picks'!B4", "'Draft Picks'!A5:J5"] : [])]);
+  if (picksTabExists) freshAdmin[4] = (await read(adminId, ["'Draft Picks'!A6:J"], 'UNFORMATTED_VALUE'))[0]!;
+  const freshPublic = await read(publicId, ['FinalizedVetting!A2:D', ...DRAFT_DIVISIONS.map(division => `'${division} Draft'!A1:O60`)]);
+  const adminBefore = [memberDirectory, nameHistory, rosters, history, ...(picksTabExists ? [existing, storedDate, draftHeaders] : [])];
+  if (JSON.stringify(freshAdmin) !== JSON.stringify(adminBefore) || JSON.stringify(freshPublic) !== JSON.stringify([vetting, ...draftTabs]))
+    throw new DraftPickSeedInputError('Seed inputs changed after planning. Review a new dry run; nothing was written.');
 
   if (!picksTabExists) {
     await call(`${base}/${adminId}:batchUpdate`, { requests: [{ addSheet: { properties: { title: 'Draft Picks' } } }] });
@@ -161,6 +213,9 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error);
+  // Raw Google errors can include authorization headers and private workbook URLs.
+  const status = error && typeof error === 'object' ? (error.status ?? error.response?.status) : undefined;
+  console.error(error instanceof DraftPickSeedInputError ? error.message
+    : `Draft Picks seeding stopped${typeof status === 'number' ? ` (HTTP ${status})` : ''}. Inspect private source/schema and access; do not replay --write blindly.`);
   process.exitCode = 1;
 });
