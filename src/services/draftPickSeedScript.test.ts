@@ -23,7 +23,7 @@ test('a complete slot count cannot authorize a seed whose planned schema runtime
     assert.match(write.stderr, /planned.*schema.*invalid/i);
   }
 });
-test('real seed CLI dry-run makes no POST; approved matching plan writes only Admin and clears after writing', () => {
+test('real seed CLI dry-run makes no POST; approved matching plan adds owned public text colors and clears after writing', () => {
   const preview = run([...targets, '--since=2026-09-01']);
   assert.equal(preview.status, 0, preview.stderr);
   assert.match(preview.stdout, /Parsed 96 top-4 picks/);
@@ -35,7 +35,8 @@ test('real seed CLI dry-run makes no POST; approved matching plan writes only Ad
   const applied = run([...targets, '--since=2026-09-01', '--write', `--expect-plan=${preview.fingerprint}`]);
   assert.equal(applied.status, 0, applied.stderr);
   assert.ok(applied.trace.posts > 0);
-  assert.equal(applied.trace.adminOnly, true);
+  assert.equal(applied.trace.publicTextOnly, true);
+  assert.equal(applied.trace.publicHighlights, 1);
   assert.equal(applied.trace.picksWritten, 96);
   assert.equal(applied.trace.clearedAfterWrite, true);
 });

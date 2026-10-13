@@ -12,6 +12,7 @@ function address(range: string) {
 }
 
 export class ReplacementTestGateway implements LeagueSheetsGateway {
+  async ensureDraftPickHighlights() {}
   async getWorkbookProperties() {
     return { title: 'Admin', sheets: ['League Teams', 'Current Rosters', 'Player Name History', 'Transaction History',
       ...(this.missingDraftPicks ? [] : ['Draft Picks'])].map((title, sheetId) => ({ title, sheetId })) };

@@ -17,6 +17,8 @@ type Rows = (string | number | boolean | null)[][];
 function emptyPublic(): Rows { return Array.from({ length: 99 }, () => Array(15).fill('')); }
 
 class FakeGateway implements LeagueSheetsGateway {
+  readonly draftHighlights: unknown[] = [];
+  async ensureDraftPickHighlights(admin: string, publicId: string, slots: unknown[]) { this.draftHighlights.push({ admin, publicId, slots }); }
   missingDraftPicks = false;
   async getWorkbookProperties() {
     return { title: 'Admin', sheets: ['League Teams', 'Current Rosters', 'Player Name History', 'Transaction History',
@@ -353,6 +355,7 @@ test('history marks top-4 draft picks in column M and records the move on Draft 
     ['two', 'Vanaheim The Sewer R2 (#16)'],
   ]);
   assert.deepEqual(moves.map((move) => [move.discordId, move.player]), [['two', 'Two']]);
+  assert.equal(gateway.draftHighlights.length, 1);
   assert.deepEqual(gateway.writes.at(-1)?.updates, [
     { range: "'Draft Picks'!I7:J7", values: [['Moved · trade · YSL-TRX-TRADE', 'two']] },
   ]);
@@ -374,6 +377,26 @@ test('pending old-account history retains protected draft attribution after acco
   assert.deepEqual(gateway.writes.at(-1)?.updates, [
     { range: "'Draft Picks'!I6:J6", values: [['Moved · trade · YSL-TRX-LEGACY', 'replacement']] },
   ]);
+});
+
+test('failed highlight delivery retains pending history and a restarted adapter finishes once without replaying the move', async () => {
+  const { gateway, service } = serviceFixture();
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
+    ['Vanaheim', 'The Sewer', '2', '16', 'Deux', 'two', 'Two', 'Member Directory', 'On drafted team'],
+  ]);
+  let attempts = 0;
+  gateway.ensureDraftPickHighlights = async () => { if (++attempts === 1) throw Error('format response lost'); };
+  const loaded = await service.load(members, 'free-agent'), plan = buildTradePlan(loaded.snapshot, 'one', 'two');
+  const record = { reference: 'highlight-recovery', effectiveDate: '2026-10-09', processedById: 'admin', processedBy: 'Admin' };
+  await assert.rejects(() => service.appendTransactionHistory(plan, record), /format response lost/);
+  assert.equal(gateway.appends.length, 0);
+  const restarted = new LeagueSheetsService(gateway, { adminSpreadsheetId: 'admin', publicSpreadsheetId: 'public' });
+  await restarted.appendTransactionHistory(plan, record);
+  assert.equal(gateway.appends.length, 1);
+  gateway.data.set(gateway.key('admin', "'Transaction History'!A6:A"), gateway.appends[0]!.values.map(row => [row[0]!]));
+  await restarted.appendTransactionHistory(plan, record);
+  assert.equal(gateway.appends.length, 1);
+  assert.equal(attempts, 2);
 });
 
 test('Draft Picks status is written before the history row so recovery cannot skip it', async () => {
