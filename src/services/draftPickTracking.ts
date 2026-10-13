@@ -1,8 +1,16 @@
 import { DRAFT_DIVISIONS, DRAFT_PICK_HEADERS, draftParseProblems, draftPickIdentityIndex } from './draftPicks.js';
-import type { LeagueSheetsGateway } from './leagueSheets.js';
+import type { LeagueSheetsGateway, PreparedAccountReplacementSheets } from './leagueSheets.js';
 
 type Rows = (string | number | boolean | null)[][];
 export const DRAFT_PICK_FEATURE = 'feature:draft-picks';
+export function draftPickVerificationText(verification: PreparedAccountReplacementSheets['draftVerification']): string {
+  switch (verification) {
+    case 'verified': return 'identity and move continuity checked';
+    case 'skipped:missing-tab': return 'tracking tab is missing; draft verification was skipped';
+    case 'skipped:empty-tab': return 'tracking tab is empty; draft verification was skipped';
+    case 'partial:unverified-slots': return 'tracking is incomplete; matched identity and move continuity checked; remaining slots are not verified';
+  }
+}
 export function draftPickHealthFinding(health: DraftPickHealth, checkedAt: Date): string {
   return `${health.summary}\nNext: ${health.next}\nTracking checked: ${checkedAt.toISOString()}`;
 }
@@ -63,7 +71,8 @@ export function validateDraftPickTable(headers: Rows, rows: Rows, options: { all
       || (text(5) && (typeof row[5] !== 'string' || ids.has(text(5))))
       || (text(9) && (typeof row[9] !== 'string' || (!options.allowCorrectedStatusOwner && text(9) !== text(5))))
       || (!text(5) && text(8) !== 'Unknown')
-      || (text(5) && text(8) !== 'On drafted team' && !text(8).startsWith('Moved ·'))
+      || (text(5) && text(8) !== 'On drafted team' && !text(8).startsWith('Moved ·')
+        && !(options.allowCorrectedStatusOwner && text(8) === 'Unknown'))
       || (!options.allowCorrectedStatusOwner && text(8).startsWith('Moved ·') && text(9) !== text(5))) return invalid;
     slots.add(slot); if (text(5)) ids.add(text(5));
   }
@@ -71,7 +80,8 @@ export function validateDraftPickTable(headers: Rows, rows: Rows, options: { all
   const problems = draftParseProblems(populated.map(row => ({ division: String(row[0]), team: String(row[1]),
     round: Number(row[2]), pick: String(row[3]), draftName: String(row[4]) })));
   const unresolved = populated.filter(row => !String(row[5] ?? '').trim()).length;
-  if (populated.length !== 96 || problems.length || unresolved || populated.some(row => String(row[9] ?? '').trim() && row[9] !== row[5]))
+  if (populated.length !== 96 || problems.length || unresolved
+    || populated.some(row => String(row[8]).trim() === 'Unknown' || (String(row[9] ?? '').trim() && row[9] !== row[5])))
     return { status: 'partial', summary: `Draft tracking incomplete: ${populated.length}/96 slots; ${unresolved} unresolved identities. Unmatched players are not verified.`,
       next: 'Review the seed dry-run and correct unresolved IDs in column F before verifying tracking.' };
   return { status: 'ready', summary: 'Draft tracking ready: 96 resolved top-four picks.', next: 'No setup action needed.' };

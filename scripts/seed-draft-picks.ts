@@ -110,12 +110,15 @@ async function main() {
     const pick = byId.get(currentId);
     if (pick) byId.set(legacyId, pick);
   }
+  const plannedHealth = validateDraftPickTable([DRAFT_PICK_HEADERS], picks.map(draftPickRow));
   // Recompute column M for every in-season row so ID corrections also clear stale marks.
   // Renames are not roster moves (the runtime skips them too).
   const historyMarks = history!.flatMap((row, index) => {
     if (String(row[2] ?? '').trim() < since) return [];
-    const pick = String(row[1] ?? '').trim() === 'rename' ? undefined : byId.get(String(row[6] ?? '').trim());
-    const label = pick ? draftPickLabel({ ...pick, round: String(pick.round) }) : '';
+    const rename = String(row[1] ?? '').trim() === 'rename';
+    const pick = rename ? undefined : byId.get(String(row[6] ?? '').trim());
+    const label = pick ? draftPickLabel({ ...pick, round: String(pick.round) })
+      : rename || plannedHealth.status === 'ready' ? '' : 'Not verified: Draft Picks incomplete';
     return label === String(row[12] ?? '').trim()
       ? []
       : [{ row: index + 6, reference: String(row[0]), player: String(row[7]), label }];

@@ -207,7 +207,7 @@ export class LeagueOpsReviewService {
     if (job?.type === 'account-replacement') {
       const preview = await this.input.replacement.previewRecovery(actor, reference);
       result = { reference, type: 'account-replacement', fingerprint: preview.fingerprint, approvalReference: preview.approvalReference, canConfirm: true,
-        description: `${preview.plan.oldDiscordId} → ${preview.plan.newDiscordId}\n${preview.plan.rosterAfter.player}; ${preview.plan.rosterAfter.franchise}; ${preview.plan.rosterAfter.rosterStatus}.\nDraft Picks: ${preview.draftVerification}.\n${preview.plan.manualReview.join('\n')}` };
+        description: `${preview.plan.oldDiscordId} → ${preview.plan.newDiscordId}\n${preview.plan.rosterAfter.player}; ${preview.plan.rosterAfter.franchise}; ${preview.plan.rosterAfter.rosterStatus}.\nDraft Picks: ${draftPickVerificationText(preview.draftVerification)}.\n${preview.plan.manualReview.join('\n')}` };
     } else {
       const preview = await previewRegisteredLeagueRepairRecovery(this.input.scope, this.input.guildId, reference);
       result = { reference, type: 'repair', fingerprint: preview.fingerprint, approvalReference: randomUUID(), canConfirm: !preview.findings.length,
@@ -228,3 +228,4 @@ export class LeagueOpsReviewService {
       `repair-recovery:${preview.reference}:${actor}:${preview.fingerprint}:${preview.approvalReference}`);
   }
 }
+import { draftPickVerificationText } from './draftPickTracking.js';

@@ -6,6 +6,7 @@ import { leagueOpsText, type LeagueOpsIssue, type LeagueOpsOperation, type Leagu
   leagueOpsRepairAction, type LeagueOpsSnapshot, type ReviewTransactionPreview, type ReviewRepairPreview, type ReviewRecoveryPreview } from './leagueOpsReview.js';
 import { LeagueAuditRepairNoWriteError } from './leagueAuditResolution.js';
 import type { AccountReplacementPreview } from './leagueAccountReplacement.js';
+import { draftPickVerificationText } from './draftPickTracking.js';
 
 export type LeagueOpsPanelData = { snapshot: LeagueOpsSnapshot; page: number; selectedIssue?: LeagueOpsIssue;
   selectedOperation?: LeagueOpsOperation; replacement?: AccountReplacementPreview; transaction?: ReviewTransactionPreview;
@@ -24,7 +25,7 @@ export function leagueOpsPreviewText(data: DeepReadonly<Pick<LeagueOpsPanelData,
       `New current-name row ${p.newName.sheetRow}: ${p.newName.currentLeagueName}; preserve ${p.preservedHistory.nameRows.length} existing alternate-name rows.`,
       `Public name: ${p.publicChanges.length ? p.publicChanges.map(c => `${c.from} → ${c.to}`).join('; ') : 'unchanged, still verified'}.`,
       ...p.roles.map(r => `Account ${r.discordId}: managed roles add ${r.add.join(', ') || 'none'}; remove ${r.remove.join(', ') || 'none'}.`),
-      ...p.manualReview, `Draft Picks: ${replacement.draftVerification === 'verified' ? 'identity and move continuity checked' : 'tracking tab is missing; draft verification was skipped'}.`,
+      ...p.manualReview, `Draft Picks: ${draftPickVerificationText(replacement.draftVerification)}.`,
       `Original repair evidence: ${replacement.preservedJobReferences.join(', ') || 'none linked'}.`].join('\n');
   }
   if (data.recovery) return `Reconciliation acknowledgement for ${data.recovery.reference}\n${data.recovery.description}\nInspect preserved name/history records. This closes the verified interrupted record without replaying its mutation or claiming its old write succeeded.`;

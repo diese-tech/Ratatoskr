@@ -58,6 +58,15 @@ test('a manual ID correction is unverified at runtime but seed inspection retain
   assert.equal(validateDraftPickTable([DRAFT_PICK_HEADERS], rows, { allowCorrectedStatusOwner: true }).status, 'invalid-schema');
 });
 
+test('filling F on an unresolved pick permits seed status recomputation without becoming runtime proof', () => {
+  const rows = seededRows();
+  rows[0]![8] = 'Unknown'; // A staff member just filled F; I has not been recomputed.
+  const before = structuredClone(rows);
+  assert.equal(validateDraftPickTable([DRAFT_PICK_HEADERS], rows).status, 'invalid-schema');
+  assert.equal(validateDraftPickTable([DRAFT_PICK_HEADERS], rows, { allowCorrectedStatusOwner: true }).status, 'partial');
+  assert.deepEqual(rows, before);
+});
+
 test('only an invalid-range response plus confirmed absence from an Admin workbook means missing Draft Picks', async () => {
   const gateway = {
     getValues: async () => { throw Object.assign(Error('Unable to parse range: Draft Picks'), { status: 400 }); },

@@ -26,11 +26,17 @@ data.set("admin:'Member Directory'!A6:D", directory);
 data.set("admin:'Player Name History'!A6:C", names);
 data.set("admin:'Current Rosters'!A6:F", rosters);
 data.set("admin:'Transaction History'!A6:M", [['fixture-history', 'trade', '2026-09-02', 'Vanaheim', 'Team 0', 'Team 1', picks[0]![5], picks[0]![6]]]);
+if (process.env.TEST_SEED_UNRESOLVED === 'yes') {
+  directory.shift(); names.shift();
+  picks[0]![5] = ''; picks[0]![6] = ''; picks[0]![7] = 'UNRESOLVED'; picks[0]![8] = 'Unknown';
+  data.get("admin:'Transaction History'!A6:M")![0]![12] = 'Not verified: Draft Picks incomplete';
+}
 const existing = process.env.TEST_SEED_EXISTING === 'yes';
 data.set("admin:'Draft Picks'!A6:J", picks);
 data.set("admin:'Draft Picks'!A5:J5", [DRAFT_PICK_HEADERS]);
 data.set("admin:'Draft Picks'!B4", [['2026-09-01']]);
-const trace = { posts: 0, adminOnly: true, picksWritten: 0, clearedAfterWrite: true };
+const trace = { posts: 0, adminOnly: true, picksWritten: 0, clearedAfterWrite: true,
+  historyLabel: String(data.get("admin:'Transaction History'!A6:M")![0]![12] ?? '') };
 process.on('exit', () => console.log(`TEST_SEED_TRACE ${JSON.stringify(trace)}`));
 GoogleAuth.prototype.getClient = (async () => ({ request: async (options: { url: string; method: string; data?: any }) => {
   const url = new URL(options.url);
@@ -41,6 +47,8 @@ GoogleAuth.prototype.getClient = (async () => ({ request: async (options: { url:
     if (url.pathname.endsWith('/values:batchUpdate')) {
       const rows = options.data.data.find((entry: { range: string }) => entry.range.startsWith("'Draft Picks'!A6:J"));
       trace.picksWritten = rows?.values.length ?? 0;
+      const mark = options.data.data.find((entry: { range: string }) => entry.range === "'Transaction History'!M6");
+      if (mark) trace.historyLabel = String(mark.values[0][0]);
     }
     if (url.pathname.endsWith('/values:batchClear')) trace.clearedAfterWrite &&= trace.picksWritten === 96;
     return { data: {} };

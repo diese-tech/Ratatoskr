@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-function run(args: string[], existing = false) {
+function run(args: string[], existing = false, unresolved = false) {
   const result = spawnSync(process.execPath, ['--import', 'tsx', '--import',
     new URL('./draftSeedTransport.test-support.ts', import.meta.url).href, 'scripts/seed-draft-picks.ts', ...args],
   { encoding: 'utf8', env: { ...process.env, GOOGLE_SERVICE_ACCOUNT_JSON: '{}', YSL_ADMIN_SPREADSHEET_ID: 'admin',
-    YSL_PUBLIC_SPREADSHEET_ID: 'public', TEST_SEED_EXISTING: existing ? 'yes' : 'no' } });
+    YSL_PUBLIC_SPREADSHEET_ID: 'public', TEST_SEED_EXISTING: existing ? 'yes' : 'no', TEST_SEED_UNRESOLVED: unresolved ? 'yes' : 'no' } });
   const trace = JSON.parse(/TEST_SEED_TRACE (.+)/.exec(result.stdout)![1]!);
   return { ...result, trace, fingerprint: /Seed plan fingerprint: (\w+)/.exec(result.stdout)?.[1] };
 }
@@ -25,6 +25,14 @@ test('real seed CLI dry-run makes no POST; approved matching plan writes only Ad
   assert.equal(applied.trace.adminOnly, true);
   assert.equal(applied.trace.picksWritten, 96);
   assert.equal(applied.trace.clearedAfterWrite, true);
+});
+
+test('partial seed retains unverified history instead of clearing it for an unresolved pick', () => {
+  const preview = run([...targets, '--since=2026-09-01'], true, true);
+  assert.equal(preview.status, 0, preview.stderr);
+  const applied = run([...targets, '--since=2026-09-01', '--write', `--expect-plan=${preview.fingerprint}`], true, true);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(applied.trace.historyLabel, 'Not verified: Draft Picks incomplete');
 });
 test('real seed CLI refuses wrong workbook, missing date and unapproved season reset without a POST', () => {
   const wrong = run(['--write', '--expect-admin-id=wrong', '--expect-public-id=public']);
