@@ -139,10 +139,12 @@ async function main() {
 
   if (!write) {
     const problems = draftParseProblems(picks, rosters!);
-    console.log(`\nParse valid: ${picks.length === EXPECTED_PICKS && !problems.length}. Draft date supplied/stored: ${Boolean(since)}.`);
+    console.log(`\nParse valid: ${picks.length === EXPECTED_PICKS && !problems.length && plannedHealth.status !== 'invalid-schema'}. Planned tracking: ${plannedHealth.status}. Draft date supplied/stored: ${Boolean(since)}.`);
     console.log('Dry run: no writes. Approval, reviewed --expect-plan, matching workbook IDs and a draft date are required for --write.');
     return;
   }
+  if (plannedHealth.status === 'invalid-schema')
+    throw new DraftPickSeedInputError('Planned Draft Picks schema is invalid. Correct source slots/identities before seeding. Nothing was written.');
   assertDraftPickSeedSeason(since, newSeason, process.argv.includes('--confirm-season-reset'));
   if (!expectedPlan || expectedPlan !== planFingerprint)
     throw new DraftPickSeedInputError('--write requires --expect-plan matching the reviewed dry-run fingerprint. Nothing was written.');

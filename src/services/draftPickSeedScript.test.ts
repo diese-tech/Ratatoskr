@@ -1,15 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-function run(args: string[], existing = false, unresolved = false) {
+function run(args: string[], existing = false, unresolved = false, invalidPick = false) {
   const result = spawnSync(process.execPath, ['--import', 'tsx', '--import',
     new URL('./draftSeedTransport.test-support.ts', import.meta.url).href, 'scripts/seed-draft-picks.ts', ...args],
   { encoding: 'utf8', env: { ...process.env, GOOGLE_SERVICE_ACCOUNT_JSON: '{}', YSL_ADMIN_SPREADSHEET_ID: 'admin',
-    YSL_PUBLIC_SPREADSHEET_ID: 'public', TEST_SEED_EXISTING: existing ? 'yes' : 'no', TEST_SEED_UNRESOLVED: unresolved ? 'yes' : 'no' } });
+    YSL_PUBLIC_SPREADSHEET_ID: 'public', TEST_SEED_EXISTING: existing ? 'yes' : 'no', TEST_SEED_UNRESOLVED: unresolved ? 'yes' : 'no',
+    TEST_SEED_INVALID_PICK: invalidPick ? 'yes' : 'no' } });
   const trace = JSON.parse(/TEST_SEED_TRACE (.+)/.exec(result.stdout)![1]!);
   return { ...result, trace, fingerprint: /Seed plan fingerprint: (\w+)/.exec(result.stdout)?.[1] };
 }
 const targets = ['--expect-admin-id=admin', '--expect-public-id=public', '--summary-only'];
+test('a complete slot count cannot authorize a seed whose planned schema runtime would reject', () => {
+  const preview = run([...targets, '--since=2026-09-01'], false, false, true);
+  assert.match(preview.stdout, /Parse valid: false/);
+  assert.equal(preview.trace.posts, 0);
+  for (const extra of [[], ['--allow-partial']]) {
+    const inspected = extra.length ? run([...targets, '--since=2026-09-01', ...extra], false, false, true) : preview;
+    const write = run([...targets, '--since=2026-09-01', '--write', `--expect-plan=${inspected.fingerprint}`, ...extra], false, false, true);
+    assert.notEqual(write.status, 0);
+    assert.equal(write.trace.posts, 0);
+    assert.match(write.stderr, /planned.*schema.*invalid/i);
+  }
+});
 test('real seed CLI dry-run makes no POST; approved matching plan writes only Admin and clears after writing', () => {
   const preview = run([...targets, '--since=2026-09-01']);
   assert.equal(preview.status, 0, preview.stderr);

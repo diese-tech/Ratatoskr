@@ -632,9 +632,13 @@ export class LeagueSheetsService {
       if ([...ids].some(id => identities.get(id) !== expectedIdentities.get(id))
         || JSON.stringify(ownerRows(drafts)) !== JSON.stringify(ownerRows(prepared.draftAfter ?? [])))
         throw new LeagueSheetReconciliationRequiredError('Replacement Draft Picks identity/status ownership is duplicated or changed.');
+      // Older durable plans read round/pick cells with FORMATTED_VALUE. Compare
+      // those two non-ID cells consistently; raw identity validation above stays strict.
+      const slotProof = (row: CellRows[number] | undefined) => JSON.stringify(row?.map((cell, column) =>
+        column === 2 || column === 3 ? String(cell) : cell));
       for (const [index, row] of (prepared.draftAfter ?? []).entries()) {
-        if (JSON.stringify(row) !== JSON.stringify(prepared.draftBefore?.[index])
-          && JSON.stringify(drafts[index]) !== JSON.stringify(row))
+        if (slotProof(row) !== slotProof(prepared.draftBefore?.[index])
+          && slotProof(drafts[index]) !== slotProof(row))
           throw new LeagueSheetReconciliationRequiredError('The replacement draft slot or move status changed.');
       }
     }

@@ -22,6 +22,7 @@ for (const division of DRAFT_DIVISIONS) {
   data.set(`public:'${division} Draft'!A1:O60`, grid);
 }
 data.set('public:FinalizedVetting!A2:D', []);
+if (process.env.TEST_SEED_INVALID_PICK === 'yes') data.get("public:'Vanaheim Draft'!A1:O60")![3]![0] = '';
 data.set("admin:'Member Directory'!A6:D", directory);
 data.set("admin:'Player Name History'!A6:C", names);
 data.set("admin:'Current Rosters'!A6:F", rosters);
