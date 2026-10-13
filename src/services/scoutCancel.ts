@@ -153,7 +153,8 @@ async function showCancellationPage(
     .filter((division) => division.status === 'active' && hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS')))
     .map((division) => division.id));
   const setups = listCancellableScoutSetups(db, interaction.guild.id)
-    .filter((setup) => manageable.has(setup.divisionId) && setup.operationsChannelId === interaction.channelId);
+    .filter((setup) => setup.workflow !== 'inhouse' && setup.divisionId !== null
+      && manageable.has(setup.divisionId) && setup.operationsChannelId === interaction.channelId);
   if (!setups.length) {
     await interaction.editReply({ content: 'There are no active scout postings you can cancel.', components: [] });
     return;

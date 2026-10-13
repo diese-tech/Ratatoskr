@@ -9,7 +9,8 @@ import { scheduleScoutNotification, skipScheduledScoutNotification } from './sco
 type ScoutSetupRow = {
   id: number;
   guild_id: string;
-  division_id: number;
+  division_id: number | null;
+  workflow: 'scout' | 'inhouse';
   division_key: string;
   division_display_name: string;
   created_by: string;
@@ -51,6 +52,7 @@ function toScoutSetup(row: ScoutSetupRow): ScoutSetup {
     id: row.id,
     guildId: row.guild_id,
     divisionId: row.division_id,
+    workflow: row.workflow,
     divisionKey: row.division_key,
     divisionDisplayName: row.division_display_name,
     createdBy: row.created_by,
@@ -100,16 +102,17 @@ export function createScoutSetup(db: Database.Database, input: CreateScoutSetupI
          guild_id, division_id, division_key, division_display_name, created_by,
          signup_channel_id, results_channel_id, operations_channel_id, division_role_id, eligibility_role_id,
          solo_emoji_id, jungle_emoji_id, mid_emoji_id, support_emoji_id, carry_emoji_id, fill_emoji_id,
-         start_at, role_limit, note
+         start_at, role_limit, note, workflow
        ) VALUES (
          @guildId, @divisionId, @divisionKey, @divisionDisplayName, @createdBy,
          @signupChannelId, @resultsChannelId, @operationsChannelId, @divisionRoleId, @eligibilityRoleId,
          @soloEmojiId, @jungleEmojiId, @midEmojiId, @supportEmojiId, @carryEmojiId, @fillEmojiId,
-         @startAt, @roleLimit, @note
+         @startAt, @roleLimit, @note, @workflow
        ) RETURNING *`,
     )
       .get({
         ...input,
+        workflow: input.workflow ?? 'scout',
         soloEmojiId: input.emojiByRole.solo,
         jungleEmojiId: input.emojiByRole.jungle,
         midEmojiId: input.emojiByRole.mid,
@@ -267,7 +270,8 @@ export function listCancellableScoutSetups(
   return rows.map(toScoutSetup);
 }
 
-export function listDivisionScoutLifecycleBlockers(db: Database.Database, guildId: string, divisionId: number): ScoutSetup[] {
+export function listDivisionScoutLifecycleBlockers(db: Database.Database, guildId: string, divisionId: number | null): ScoutSetup[] {
+  if (divisionId === null) return [];
   const rows = db.prepare(`SELECT * FROM scout_setups
     WHERE guild_id = ? AND division_id = ? AND (
       status IN ('posting', 'open', 'roster_ready') OR

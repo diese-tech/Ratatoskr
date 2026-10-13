@@ -101,7 +101,8 @@ export type ScoutLifecycleCleanup = {
 export type ScoutSetup = {
   id: number;
   guildId: string;
-  divisionId: number;
+  divisionId: number | null;
+  workflow?: 'scout' | 'inhouse';
   divisionKey: string;
   divisionDisplayName: string;
   createdBy: string;

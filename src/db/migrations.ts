@@ -884,4 +884,36 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 35,
+    name: 'permanent_open_inhouses',
+    sql: `
+      -- SQLite 3.53+ supports changing nullability without rebuilding the parent
+      -- table or touching its signup/roster/history children.
+      ALTER TABLE scout_setups ALTER division_id DROP NOT NULL;
+      ALTER TABLE scout_setups ADD COLUMN workflow TEXT NOT NULL DEFAULT 'scout'
+        CHECK ((workflow = 'scout' AND division_id IS NOT NULL)
+          OR (workflow = 'inhouse' AND division_id IS NULL AND eligibility_role_id IS NULL));
+      CREATE TABLE inhouse_config (
+        guild_id TEXT PRIMARY KEY,
+        category_id TEXT NOT NULL,
+        role_name TEXT NOT NULL,
+        channel_name TEXT NOT NULL,
+        role_id TEXT,
+        channel_id TEXT,
+        optin_message_id TEXT,
+        optin_emoji TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE TABLE inhouse_subscriptions (
+        guild_id TEXT NOT NULL REFERENCES inhouse_config(guild_id),
+        user_id TEXT NOT NULL,
+        subscribed INTEGER NOT NULL CHECK(subscribed IN (0,1)),
+        revision INTEGER NOT NULL DEFAULT 1,
+        pending INTEGER NOT NULL DEFAULT 1 CHECK(pending IN (0,1)),
+        next_attempt_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(guild_id,user_id)
+      );
+    `,
+  },
 ];
