@@ -356,7 +356,7 @@ export async function runServerBootstrap(
     if (!deleteObsolete) {
       log(
         '\nThe items above were kept. ' +
-          'To remove them, review this list first, then use `/server bootstrap apply delete_obsolete:true`.',
+          'To remove them, review this list first. In Discord use `/server bootstrap apply delete_obsolete:true`; in a terminal use `npm run guild:apply -- --delete-obsolete`.',
       );
       return;
     }
@@ -425,5 +425,5 @@ export async function runServerBootstrap(
   await runCleanup();
 
   log('\nServer setup check complete.');
-  if (!apply) log('Review the list above, then use `/server bootstrap apply` when ready.');
+  if (!apply) log('Review the list above. When ready, use `/server bootstrap apply` in Discord or `npm run guild:apply` in a terminal.');
 }

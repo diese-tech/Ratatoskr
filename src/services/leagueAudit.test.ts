@@ -421,6 +421,13 @@ test('an unreadable source posts an audit-failed card instead of claiming the le
     assert.equal(result.status, 'error');
     assert.equal(cards.sent[0]!.card.title, 'League Status');
     assert.doesNotMatch(cards.sent[0]!.card.description, /Discord unavailable/);
+    assert.match(cards.sent[0]!.card.description, /No roster changes were made by this check/);
+    assert.doesNotMatch(cards.sent[0]!.card.description, /changes may already|do not repeat|saved action/);
+    let refreshed = '';
+    await refreshLeagueOpsPanel({ db, guildId: 'guild', now: new Date('2026-10-05T10:02:00Z'),
+      cards: Object.assign(cards, { edit: async (_id: string, card: { description: string }) => { refreshed = card.description; } }) });
+    assert.match(refreshed, /No roster changes were made by this check/);
+    assert.doesNotMatch(refreshed, /changes may already|do not repeat|saved action/);
     assert.equal(getLeagueAuditState(db, 'guild')?.result, 'error');
   } finally {
     db.close();

@@ -59,3 +59,16 @@ export function leagueRepairNoWriteMessage(message: string): string {
     ? 'The records changed after this review opened.' : 'Rat could not prepare this repair.';
   return `${reason} No changes were made. Open league tools from the latest League Status message, check the roster problems and review a fresh preview before approving a fix.`;
 }
+
+/** A roster check only reads sources; its outcome must not imply a saved write. */
+export function leagueAuditReadErrorMessage(message: string): string {
+  if (message.startsWith('**What happened:**') || message.startsWith('**What to do:**')) return message;
+  if (/^Google Sheets asked Rat to wait/.test(message))
+    return 'Google Sheets asked Rat to wait before checking again. No roster changes were made by this check.';
+  if (/^Google Sheets is temporarily unavailable/.test(message))
+    return 'Google Sheets is temporarily unavailable. No roster changes were made by this check.';
+  if (/^Discord asked Rat to wait\. Try checking again in \d+ seconds\. No roster changes were made by this check\.$/.test(message)) return message;
+  if (/^Discord asked Rat to wait/.test(message))
+    return 'Discord asked Rat to wait before checking again. No roster changes were made by this check.';
+  return 'Rat could not check all Discord members and roster sheets. No roster changes were made by this check.';
+}

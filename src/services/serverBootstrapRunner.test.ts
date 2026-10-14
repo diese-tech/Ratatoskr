@@ -77,4 +77,6 @@ test('server bootstrap dry-run awaits asynchronous storage without writing Disco
   assert.equal(discordCreates, 0);
   assert.match(log.join('\n'), /Preview only/);
   assert.match(log.at(-1) ?? '', /Review the list above/);
+  assert.match(log.at(-1) ?? '', /\/server bootstrap apply/);
+  assert.match(log.at(-1) ?? '', /npm run guild:apply/);
 });
