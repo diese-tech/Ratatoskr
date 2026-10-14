@@ -10,6 +10,12 @@ export type InhouseSetupInput = {
 };
 const marker = (reference: string) => `inhouse:optin:${reference}`;
 const reason = (reference: string) => `Ratatoskr permanent inhouses ${reference}`;
+function permissionSnapshot(overwrites: Iterable<{ id: string; type: number;
+  allow: { bitfield: bigint }; deny: { bitfield: bigint } }>) {
+  return [...overwrites].map(overwrite => ({ id: overwrite.id, type: overwrite.type,
+    allow: String(overwrite.allow.bitfield), deny: String(overwrite.deny.bitfield) }))
+    .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : a.type - b.type);
+}
 
 async function ownedCreation(guild: Guild, targetId: string, reference: string, type: AuditLogEvent): Promise<boolean> {
   const logs = await guild.fetchAuditLogs({ type, user: guild.client.user.id, limit: 100 });
@@ -76,12 +82,10 @@ export async function setupInhouses(guild: Guild, db: Database.Database, input: 
     if (!channel.permissionsFor(me)?.has(postingPermissions)) throw new Error('Inhouse channel posting permissions need review.');
   }
   const fingerprint = createHash('sha256').update(JSON.stringify({ input, existing: existing ?? null,
-    category: { id: category.id, name: category.name, overwrites: category.permissionOverwrites.cache
-      .map(overwrite => ({ id: overwrite.id, type: overwrite.type, allow: String(overwrite.allow.bitfield), deny: String(overwrite.deny.bitfield) })) },
+    category: { id: category.id, name: category.name, overwrites: permissionSnapshot(category.permissionOverwrites.cache.values()) },
     role: role ? { id: role.id, position: role.position, permissions: String(role.permissions.bitfield) } : null,
     channel: channel && channel.type === ChannelType.GuildText ? { id: channel.id, parent: channel.parentId, type: channel.type,
-      overwrites: channel.permissionOverwrites.cache.map(overwrite => ({ id: overwrite.id, type: overwrite.type,
-        allow: String(overwrite.allow.bitfield), deny: String(overwrite.deny.bitfield) })) } : null,
+      overwrites: permissionSnapshot(channel.permissionOverwrites.cache.values()) } : null,
   })).digest('hex');
   const summary = { fingerprint, newRole: !role, newChannel: !channel, optinMessageBound: Boolean(existing?.messageId) };
   if (!options.write) return summary;

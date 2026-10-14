@@ -88,3 +88,24 @@ test('inhouse setup refuses unowned resources and revoked category permissions b
     assert.equal(getInhouseConfig(f.db, 'guild'), undefined);
   } finally { f.db.close(); }
 });
+
+test('equivalent permission overwrite order keeps a reviewed setup plan valid', async () => {
+  const f = fixture();
+  try {
+    const category = f.channels.get('permanent');
+    const overwrites = category.permissionOverwrites.cache;
+    const bot = { id: 'rat', type: 0, allow: new PermissionsBitField(PermissionsBitField.Flags.SendMessages),
+      deny: new PermissionsBitField(0n) };
+    overwrites.set(bot.id, bot);
+    const preview = await setupInhouses(f.guild, f.db, f.input);
+    const everyone = overwrites.get('everyone');
+    overwrites.delete('everyone'); overwrites.set('everyone', everyone);
+    const reordered = await setupInhouses(f.guild, f.db, f.input);
+    assert.equal(reordered.fingerprint, preview.fingerprint);
+    await setupInhouses(f.guild, f.db, f.input, { write: true, expectedPlan: preview.fingerprint });
+    assert.equal(getInhouseConfig(f.db, 'guild')?.messageId, 'optin');
+    const boundPlan = await setupInhouses(f.guild, f.db, f.input);
+    everyone.deny = new PermissionsBitField(0n);
+    await assert.rejects(setupInhouses(f.guild, f.db, f.input, { write: true, expectedPlan: boundPlan.fingerprint }), /fingerprint/);
+  } finally { f.db.close(); }
+});
