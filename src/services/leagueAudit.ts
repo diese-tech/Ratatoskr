@@ -274,7 +274,8 @@ export async function refreshLeagueOpsPanel(
   const reference = `YSL-AUD-${randomUUID().slice(0, 8).toUpperCase()}`;
   const card = cardFor(result, issues, input.now, 'scheduled');
   if (readErrors.length)
-    card.description += `\n\nLatest check: ${readErrors.map(savedLeagueErrorMessage).join('\n')}\nRat will check again automatically in about 2 minutes.`;
+    card.description += `\n\nLatest check: ${readErrors.filter(line => !line.startsWith('**Error code:**')).map(line =>
+      line.startsWith('**What happened:**') || line.startsWith('**What to do:**') ? line : savedLeagueErrorMessage(line)).join('\n')}\nRat will check again automatically in about 2 minutes.`;
   if (result === 'clean' && !prior?.lastFullAt)
     card.description =
       'Rosters: Waiting for the first check.\nRat is still checking the league records.';

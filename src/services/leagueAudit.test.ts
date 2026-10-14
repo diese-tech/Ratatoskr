@@ -3,7 +3,7 @@ import test from 'node:test';
 import { openDatabase } from '../db/client.js';
 import { getLeagueAuditState } from '../db/repositories/leagueAudits.js';
 import type { LeagueSnapshot } from '../domain/leagueOperations.js';
-import { nextLeagueAuditAt, recoverPendingLeagueAudit, runLeagueAudit, startLeagueAuditWorker, type LeagueAuditCard, type LeagueAuditCardPort } from './leagueAudit.js';
+import { nextLeagueAuditAt, recoverPendingLeagueAudit, refreshLeagueOpsPanel, runLeagueAudit, startLeagueAuditWorker, type LeagueAuditCard, type LeagueAuditCardPort } from './leagueAudit.js';
 import { LeagueSheetInputError } from './leagueSheets.js';
 import { LeagueMemberGatewayThrottleError } from './leagueMemberReads.js';
 import { listLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
@@ -450,6 +450,12 @@ test('a known roster-sheet input problem gives staff the exact safe repair on th
     assert.doesNotMatch(description, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
     assert.match(description, /No changes were made/);
     assert.doesNotMatch(description, /check which connection failed/i);
+    let refreshed = '';
+    await refreshLeagueOpsPanel({ db, guildId: 'guild', now: new Date('2026-10-05T13:00:00Z'),
+      cards: Object.assign(cards, { edit: async (_id: string, card: { description: string }) => { refreshed = card.description; } }) });
+    assert.match(refreshed, /Player Name History row 234/);
+    assert.match(refreshed, /move the existing values one column left/);
+    assert.doesNotMatch(refreshed, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
   } finally {
     db.close();
   }
