@@ -26,7 +26,9 @@ import {
   markCancelledScoutSignupPostReconciled,
   type ScoutSetup,
 } from '../db/index.js';
-import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
+import { canHostInhouse, canManageScoutSetup, hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
+import { getInhouseConfig } from '../db/repositories/inhouse.js';
+import { scoutGameName } from './scoutGamePresentation.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
@@ -54,17 +56,12 @@ export async function canManageScoutOperationsSetup(
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || !interaction.guild) return undefined;
   if (!isScoutOperationsChannel(setup, interaction.channelId)) return undefined;
-  const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
-  if (!division || division.id !== setup.divisionId || (requireActiveDivision && division.status !== 'active')) return undefined;
-  const member = await interaction.guild.members.fetch(interaction.user.id);
-  const config = getScoutConfig(db, setup.guildId);
-  const { hasAccess } = await import('./authorization.js');
-  return hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS')) ? setup : undefined;
+  return await canManageScoutSetup(db, interaction.guild, interaction.user.id, setup, requireActiveDivision) ? setup : undefined;
 }
 
 function confirmation(setup: ScoutSetup) {
   return {
-    content: `Cancel the **${setup.divisionDisplayName} Scout** at <t:${setup.startAt}:F>? Signups will close and this cannot be undone.${setup.signupMessageId ? `\nhttps://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : ''}`,
+    content: `Cancel the **${scoutGameName(setup)}** at <t:${setup.startAt}:F>? Signups will close and this cannot be undone.${setup.signupMessageId ? `\nhttps://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : ''}`,
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -102,7 +99,7 @@ export async function reconcileCancelledScoutSignupPost(
       await message.edit({
         content: [
           renderScoutSignupPost(setup),
-          '🚫 **This scout setup was cancelled.**',
+          `🚫 **This ${setup.workflow === 'inhouse' ? 'inhouse' : 'scout setup'} was cancelled.**`,
           lifecycleCleanup?.action === 'cancelled'
             ? `Cancelled by <@${lifecycleCleanup.actorUserId}> automatically.`
             : '',
@@ -140,11 +137,16 @@ export async function reconcileCancelledScoutSignupPosts(client: Client, db: Dat
 
 async function showCancellationPage(
   interaction: ChatInputCommandInteraction | ButtonInteraction, db: Database.Database, requestedPage = 0,
+  workflow: 'scout' | 'inhouse' = 'scout',
 ): Promise<void> {
   if (!interaction.guild) return;
   const config = getScoutConfig(db, interaction.guild.id);
-  if (!config?.operationsChannelId || interaction.channelId !== config.operationsChannelId) {
-    await interaction.editReply({ content: 'Run `/scout cancel` from the configured `scout-ops` channel.', components: [] });
+  const inhouse = getInhouseConfig(db, interaction.guild.id);
+  const operationsChannel = workflow === 'inhouse' ? inhouse?.channelId : config?.operationsChannelId;
+  if (!operationsChannel || interaction.channelId !== operationsChannel) {
+    await interaction.editReply({ content: workflow === 'inhouse'
+      ? 'Run /inhouse cancel from the configured inhouse channel.'
+      : 'Run `/scout cancel` from the configured `scout-ops` channel.', components: [] });
     return;
   }
   const member = await interaction.guild.members.fetch(interaction.user.id);
@@ -153,16 +155,21 @@ async function showCancellationPage(
     .filter((division) => division.status === 'active' && hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS')))
     .map((division) => division.id));
   const setups = listCancellableScoutSetups(db, interaction.guild.id)
-    .filter((setup) => setup.workflow !== 'inhouse' && setup.divisionId !== null
-      && manageable.has(setup.divisionId) && setup.operationsChannelId === interaction.channelId);
+    .filter((setup) => setup.operationsChannelId === interaction.channelId && (workflow === 'inhouse'
+      ? setup.workflow === 'inhouse' && setup.createdBy === interaction.user.id
+      : setup.workflow !== 'inhouse' && setup.divisionId !== null && manageable.has(setup.divisionId)));
+  if (workflow === 'inhouse' && !await canHostInhouse(db, interaction.guild, interaction.user.id)) {
+    await interaction.editReply({ content: 'The Inhouse role is required to manage your games.', components: [] });
+    return;
+  }
   if (!setups.length) {
-    await interaction.editReply({ content: 'There are no active scout postings you can cancel.', components: [] });
+    await interaction.editReply({ content: `There are no active ${workflow} postings you can cancel.`, components: [] });
     return;
   }
   const pages = Math.ceil(setups.length / 25);
   const page = Math.max(0, Math.min(requestedPage, pages - 1));
-  const format = new Intl.DateTimeFormat('en-US', { timeZone: config.timezone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-  const menu = new StringSelectMenuBuilder().setCustomId('scout:cancelpick:all')
+  const format = new Intl.DateTimeFormat('en-US', { timeZone: config?.timezone ?? 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  const menu = new StringSelectMenuBuilder().setCustomId(workflow === 'inhouse' ? 'scout:cancelpick:inhouse' : 'scout:cancelpick:all')
     .setPlaceholder('Choose an active scout posting')
     .addOptions(setups.slice(page * 25, (page + 1) * 25).map((setup) => new StringSelectMenuOptionBuilder()
       .setLabel(`${setup.divisionDisplayName.slice(0, 35)} — ${format.format(setup.startAt * 1000)}`.slice(0, 100))
@@ -170,16 +177,16 @@ async function showCancellationPage(
       .setValue(`${setup.id}:${setup.version}`)));
   const components: (ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>)[] = [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)];
   if (pages > 1) components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(`scout:cancelpage:${page - 1}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
-    new ButtonBuilder().setCustomId(`scout:cancelpage:${page + 1}`).setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page === pages - 1),
+    new ButtonBuilder().setCustomId(`scout:cancelpage:${workflow === 'inhouse' ? 'inhouse:' : ''}${page - 1}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId(`scout:cancelpage:${workflow === 'inhouse' ? 'inhouse:' : ''}${page + 1}`).setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page === pages - 1),
   ));
-  await interaction.editReply({ content: `Choose an active scout posting to cancel. Page ${page + 1}/${pages}. Selection is followed by confirmation.`, components, allowedMentions: { parse: [] } });
+  await interaction.editReply({ content: `Choose an active ${workflow} posting to cancel. Page ${page + 1}/${pages}. Selection is followed by confirmation.`, components, allowedMentions: { parse: [] } });
 }
 
-export async function handleScoutCancelCommand(interaction: ChatInputCommandInteraction, db: Database.Database): Promise<void> {
+export async function handleScoutCancelCommand(interaction: ChatInputCommandInteraction, db: Database.Database, workflow: 'scout' | 'inhouse' = 'scout'): Promise<void> {
   if (!interaction.guild) return;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  await showCancellationPage(interaction, db);
+  await showCancellationPage(interaction, db, 0, workflow);
 }
 
 export async function handleScoutCancelSelect(
@@ -188,7 +195,8 @@ export async function handleScoutCancelSelect(
 ): Promise<boolean> {
   const parts = interaction.customId.split(':');
   if (parts[0] !== 'scout' || parts[1] !== 'cancelpick') return false;
-  const allDivisions = parts[2] === 'all';
+  const inhouse = parts[2] === 'inhouse';
+  const allDivisions = parts[2] === 'all' || inhouse;
   const divisionId = Number(parts[2]);
   const [idValue, versionValue] = (interaction.values[0] ?? '').split(':');
   const setupId = Number(idValue);
@@ -197,12 +205,14 @@ export async function handleScoutCancelSelect(
   await interaction.deferUpdate();
   const setup = await canManageScoutOperationsSetup(interaction, db, setupId);
   const config = interaction.guildId ? getScoutConfig(db, interaction.guildId) : undefined;
-  if (!setup || (!allDivisions && setup.divisionId !== divisionId) || config?.operationsChannelId !== interaction.channelId) {
+  if (!setup || (!allDivisions && setup.divisionId !== divisionId)
+    || (inhouse ? setup.workflow !== 'inhouse' : setup.workflow === 'inhouse')
+    || (!inhouse && config?.operationsChannelId !== interaction.channelId)) {
     await interaction.editReply({ content: 'That setup is no longer available to you.', components: [] });
     return true;
   }
   if (version !== undefined && setup.version !== version) {
-    await interaction.editReply({ content: 'That posting changed. Run /scout cancel again to refresh the list.', components: [] });
+    await interaction.editReply({ content: `That posting changed. Run /${inhouse ? 'inhouse' : 'scout'} cancel again to refresh the list.`, components: [] });
     return true;
   }
   if (!['open', 'roster_ready'].includes(setup.status)) {
@@ -222,10 +232,11 @@ export async function handleScoutCancelButton(
 ): Promise<boolean> {
   const parts = interaction.customId.split(':');
   if (parts[0] === 'scout' && parts[1] === 'cancelpage') {
-    const page = Number(parts[2]);
+    const workflow = parts[2] === 'inhouse' ? 'inhouse' : 'scout';
+    const page = Number(parts[workflow === 'inhouse' ? 3 : 2]);
     if (!Number.isSafeInteger(page)) return false;
     await interaction.deferUpdate();
-    await showCancellationPage(interaction, db, page);
+    await showCancellationPage(interaction, db, page, workflow);
     return true;
   }
   if (parts[0] !== 'scout' || !['cancel', 'cancelconfirm', 'cancelkeep'].includes(parts[1] ?? '')) return false;

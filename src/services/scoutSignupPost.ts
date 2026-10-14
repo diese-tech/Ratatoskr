@@ -1,4 +1,6 @@
+import { scoutGameName } from './scoutGamePresentation.js';
 export type ScoutSignupPostInput = {
+  workflow?: 'scout' | 'inhouse';
   divisionDisplayName: string;
   startAt: number;
   roleLimit: number;
@@ -14,10 +16,11 @@ function roleLimitPhrase(limit: number): string {
 export function renderScoutSignupPost(input: ScoutSignupPostInput): string {
   const lines: string[] = [];
   if (input.divisionRoleId) lines.push(`<@&${input.divisionRoleId}>`);
-  lines.push(`**${input.divisionDisplayName} Scout Games at <t:${input.startAt}:t> <t:${input.startAt}:R>**`);
+  lines.push(`**${scoutGameName(input)} Games at <t:${input.startAt}:t> <t:${input.startAt}:R>**`);
   lines.push('');
   lines.push('React with the role(s) you want to play.');
   lines.push(`You may select **${roleLimitPhrase(input.roleLimit)}**.`);
+  if (input.workflow === 'inhouse') lines.push('Anyone can join. Teams use best-effort division balancing; the host can adjust them.');
   if (input.eligibilityRoleId) lines.push(`Eligibility: <@&${input.eligibilityRoleId}>`);
   if (input.note?.trim()) {
     lines.push('');

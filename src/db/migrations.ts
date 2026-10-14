@@ -903,6 +903,7 @@ export const migrations: Migration[] = [
         channel_id TEXT,
         optin_message_id TEXT,
         optin_emoji TEXT NOT NULL,
+        provisioning_ref TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       );
       CREATE TABLE inhouse_subscriptions (

@@ -3,14 +3,15 @@ import test from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Collection, type Client, type ButtonInteraction } from 'discord.js';
+import { ChannelType, Collection, type Client, type ButtonInteraction } from 'discord.js';
 import { openDatabase, upsertDivision, createScoutSetup, getScoutSetupById, listScoutSignups,
   ensureScoutReadinessCard, readScoutReadinessSnapshot, cancelScoutSetupIfVersion,
   listScoutRosterSlots, swapPublishedScoutRosterSlotsIfVersion, replacePublishedScoutRosterSlotIfVersion,
   listDivisionScoutLifecycleBlockers, listOverlappingScoutSetups, listScoutEvents } from '../db/index.js';
 import { getScoutCompletion, finishScoutSetupIfVersion } from '../db/repositories/scoutCompletions.js';
 import { SCOUT_ROLES, type ScoutSignupRole } from '../domain/index.js';
-import { ensurePostedScoutSetup } from './scoutCreate.js';
+import { ensurePostedScoutSetup, handleInhouseCreateCommand, handleScoutCreateModal, handleScoutCreateButton } from './scoutCreate.js';
+import { setScoutEmojiByRole } from '../db/repositories/scoutConfig.js';
 import {
   handleScoutSignupReactionAdd,
   handleScoutSignupReactionRemove,
@@ -27,9 +28,85 @@ import { handleScoutCancelButton } from './scoutCancel.js';
 import { handleScoutFinishButton, reconcileFinishedScoutPosts } from './scoutFinish.js';
 import { processDueScoutLifecycleCleanups } from './scoutLifecycleCleanup.js';
 import { sqliteScoutLifecycleCleanupDependencies } from './scoutLifecycleCleanupCompatibility.js';
+import { beginInhouseConfiguration, bindInhouseResource } from '../db/repositories/inhouse.js';
+import { inhouseDivisionHints } from './inhouseBalance.js';
 
 process.env.ROLE_ALLFATHER_ID = 'admin';
 process.env.ROLE_AESIR_ID = 'aesir';
+
+test('inhouse creation uses a private preview and rechecks the host role before posting', async () => {
+  const f = fixture(':memory:', null, 'inhouse');
+  try {
+    setScoutEmojiByRole(f.db, 'guild', { solo: 'solo', jungle: 'jungle', mid: 'mid', support: 'support', carry: 'carry' });
+    f.guild.channels = { fetch: async () => ({ type: ChannelType.GuildText, parentId: 'permanent' }) };
+    let modal: any;
+    const replies: any[] = [];
+    const interaction = { ...f.interaction(''), reply: async (payload: any) => { replies.push(payload); },
+      showModal: async (value: any) => { modal = value.toJSON(); } };
+    await handleInhouseCreateCommand(interaction, f.db);
+    assert.equal(modal.title, 'Inhouse setup');
+    await handleScoutCreateModal({ ...interaction, customId: modal.custom_id,
+      fields: { getTextInputValue: (id: string) => ({ start_time: 'tomorrow 8pm', role_limit: '2', note: '' })[id] ?? '' },
+      isFromMessage: () => false,
+    }, f.db);
+    const preview = replies.at(-1);
+    assert.equal(preview.components.length, 1, 'Open inhouses have no eligibility-role selector.');
+    const post = preview.components[0].toJSON().components.find((button: any) => button.label === 'Post inhouse signups');
+    const owner = f.members.get('staff');
+    owner.roles.cache.delete('inhouse-role');
+    await handleScoutCreateButton({ ...interaction, customId: post.custom_id }, f.db);
+    assert.equal(f.sent.length, 0);
+    owner.roles.cache.set('inhouse-role', { id: 'inhouse-role' });
+    await handleScoutCreateButton({ ...interaction, customId: post.custom_id }, f.db);
+    assert.equal(f.sent.length, 2);
+    assert.deepEqual(f.sent[0].payload.allowedMentions.roles, ['inhouse-role']);
+    assert.match(f.sent[0].payload.content, /Anyone/);
+  } finally { f.db.close(); }
+});
+
+test('open inhouses fill, balance and publish with non-role participants while only their creator manages them', async () => {
+  const f = fixture(':memory:', null, 'inhouse');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    assert.match(f.sent[0]!.payload.content, /Inhouse Games/);
+    assert.deepEqual(f.sent[0]!.payload.allowedMentions.roles, ['inhouse-role']);
+    for (const role of SCOUT_ROLES) {
+      f.addMember(`${role}-0`, ['division']);
+      f.addMember(`${role}-1`, ['lower-division']);
+    }
+    await f.fill();
+    const ready = getScoutSetupById(f.db, f.setup.id)!;
+    assert.equal(ready.status, 'roster_ready');
+    const slots = listScoutRosterSlots(f.db, ready.id);
+    const upper = slots.filter(s => s.team === 'team_one' && s.userId.endsWith('-0')).length;
+    assert.ok(upper === 2 || upper === 3);
+    assert.equal(slots.length, 10);
+    assert.ok(slots.every(s => !f.members.get(s.userId).roles.cache.has('inhouse-role')));
+    f.addMember('other-host', ['inhouse-role']);
+    const version = ready.version;
+    const other = { ...f.interaction(`scout:shuffle:${ready.id}:${version}`), user: { id: 'other-host' } };
+    await handleScoutReviewButton(other, f.db);
+    assert.equal(getScoutSetupById(f.db, ready.id)!.version, version);
+    const owner = f.members.get('staff');
+    owner.roles.cache.delete('inhouse-role');
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${ready.id}:${version}`), f.db);
+    assert.equal(getScoutSetupById(f.db, ready.id)!.status, 'roster_ready');
+    owner.roles.cache.set('inhouse-role', { id: 'inhouse-role' });
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${ready.id}:${version}`), f.db);
+    const published = getScoutSetupById(f.db, ready.id)!;
+    assert.equal(published.status, 'published');
+    assert.ok(published.resultMessageId, `Publication must complete delivery: ${JSON.stringify(published)}`);
+    assert.ok(f.ops.all.has(published.resultMessageId), `Result post ${published.resultMessageId} must survive; messages ${[...f.ops.all.keys()]}`);
+    assert.match(f.ops.all.get(published.resultMessageId!)!.content, /Inhouse Roster/);
+    const controls = f.ops.all.get(published.resultMessageId!)!.components.flatMap((row: any) => row.toJSON().components);
+    assert.ok(!controls.some((component: any) => component.custom_id?.includes('changeorganizer')));
+    const finish = f.interaction(`scout:finishconfirm:${ready.id}:${published.version}`);
+    finish.message = f.ops.all.get(published.controlMessageId!)!;
+    await handleScoutFinishButton(finish, f.db);
+    assert.equal(getScoutCompletion(f.db, ready.id)?.posts_reconciled, 1);
+    assert.equal(listDivisionScoutLifecycleBlockers(f.db, 'guild', f.setup.divisionId).length, 0);
+  } finally { f.db.close(); }
+});
 
 function cardDisplayText(card: any): string {
   return [card.content, ...(card.embeds ?? []).flatMap((embed: any) => {
@@ -38,12 +115,13 @@ function cardDisplayText(card: any): string {
   })].filter(Boolean).join('\n');
 }
 
-function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
+function fixture(path = ':memory:', eligibilityRoleId: string | null = null, workflow: 'scout' | 'inhouse' = 'scout') {
   const db = openDatabase(path);
   const members = new Collection<string, any>();
   const roleCache = new Collection<string, any>([['eligible', { id: 'eligible', name: 'Eligible' }]]);
   const guild: any = { id: 'guild', roles: { cache: roleCache, fetch: async (id: string) => roleCache.get(id) ?? null },
-    members: { cache: members, fetch: async (id: string) => {
+    members: { cache: members, fetch: async (input: string | { user: string }) => {
+      const id = typeof input === 'string' ? input : input.user;
       if (!members.has(id)) throw { code: 10007 };
       return members.get(id);
     } } };
@@ -52,7 +130,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
       roles: { cache: new Collection(roles.map((role) => [role, { id: role }])) } };
     members.set(id, member); return member;
   };
-  addMember('staff', ['manager']);
+  addMember('staff', [workflow === 'inhouse' ? 'inhouse-role' : 'manager']);
   let nextId = 0;
   let loseSend = false;
   let loseDelete = false;
@@ -64,6 +142,7 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
   const signupDependencies = {
     storage: createSqliteScoutSignupStore(db),
     operationScope: db,
+    divisionHints: (targetGuild: any, ids: Iterable<string>) => inhouseDivisionHints(db, targetGuild, ids),
     refreshStatusCard: async (targetClient: Client, setupId: number) => refreshScoutStatusCardSafely(targetClient, db, setupId),
     reportError: async (context: any, error: unknown) => { await reportOperationalError(client, db, context, error); },
   };
@@ -96,16 +175,24 @@ function fixture(path = ':memory:', eligibilityRoleId: string | null = null) {
             client, users: { fetch: async () => new Collection(), remove: async () => undefined } }); },
         };
         messages.set(message.id, message); sent.push({ channel: id, payload, id: message.id });
-        if (id === 'ops' && loseSend) { loseSend = false; throw new Error('Send response lost'); }
+        if (id === 'ops' && loseSend && payload.embeds?.length) { loseSend = false; throw new Error('Send response lost'); }
         return message;
       }, all: messages };
     channels.set(id, result); return result;
   };
   const ops = channel('ops');
-  const signups = channel('signups');
+  const signups = workflow === 'inhouse' ? ops : channel('signups');
+  if (workflow === 'inhouse') {
+    beginInhouseConfiguration(db, { guildId: 'guild', categoryId: 'permanent', roleName: 'Inhouse', channelName: 'inhouses', emoji: '🎮' });
+    bindInhouseResource(db, 'guild', 'roleId', 'inhouse-role');
+    bindInhouseResource(db, 'guild', 'channelId', 'ops');
+    bindInhouseResource(db, 'guild', 'messageId', 'optin-message');
+    upsertDivision(db, { guildId: 'guild', divisionKey: 'svartalfheim', displayName: 'Svartalfheim', roleId: 'lower-division' });
+  }
   const division = upsertDivision(db, { guildId: 'guild', divisionKey: 'vanaheim', displayName: 'Vanaheim', roleId: 'division', managerRoleId: 'manager', captainRoleId: 'captain', categoryId: 'category' });
-  const makeSetup = () => createScoutSetup(db, { guildId: 'guild', divisionId: division.id, divisionKey: 'vanaheim', divisionDisplayName: 'Vanaheim',
-    createdBy: 'staff', signupChannelId: 'signups', resultsChannelId: 'signups', operationsChannelId: 'ops', divisionRoleId: 'division',
+  const makeSetup = () => createScoutSetup(db, { workflow, guildId: 'guild', divisionId: workflow === 'inhouse' ? null : division.id,
+    divisionKey: workflow === 'inhouse' ? 'inhouse' : 'vanaheim', divisionDisplayName: workflow === 'inhouse' ? 'Inhouse' : 'Vanaheim',
+    createdBy: 'staff', signupChannelId: signups.id, resultsChannelId: signups.id, operationsChannelId: 'ops', divisionRoleId: workflow === 'inhouse' ? 'inhouse-role' : 'division',
     startAt: 2_000_000_000, roleLimit: 5, eligibilityRoleId, emojiByRole: { solo: 'solo', jungle: 'jungle', mid: 'mid', support: 'support', carry: 'carry' } });
   const setup = makeSetup();
   const react = async (id: string, role: string, remove = false, target = setup.id) => {
@@ -843,19 +930,21 @@ test('private Finish cleanup retry reconciles posts without finishing the Scout 
   } finally { f.db.close(); }
 });
 
-test('lost temporary send response survives disk restart and concurrent refreshes without duplicate cards', async (t) => {
+for (const workflow of ['scout', 'inhouse'] as const) test(`${workflow}: lost temporary send response survives disk restart and concurrent refreshes without duplicate cards`, async (t) => {
   t.mock.method(console, 'error', () => undefined);
   const directory = mkdtempSync(join(tmpdir(), 'scout-card-'));
   const path = join(directory, 'db.sqlite');
-  const f = fixture(path);
+  const f = fixture(path, null, workflow);
   f.loseSend(); await ensurePostedScoutSetup(f.client, f.db, f.setup);
-  assert.equal(f.ops.all.size, 1); assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).telemetry_message_id, null);
+  const card = f.ops.all.last()!;
+  assert.equal(f.ops.all.size, workflow === 'inhouse' ? 2 : 1); assert.equal(ensureScoutReadinessCard(f.db, f.setup.id).telemetry_message_id, null);
   f.db.close();
   const db = openDatabase(path);
   try {
     await Promise.all([refreshScoutStatusCard(f.client, db, f.setup.id), refreshScoutStatusCard(f.client, db, f.setup.id)]);
-    assert.equal(f.ops.all.size, 1);
-    assert.equal(ensureScoutReadinessCard(db, f.setup.id).telemetry_message_id, f.ops.all.first()!.id);
+    assert.equal(f.ops.all.size, workflow === 'inhouse' ? 2 : 1);
+    assert.equal(ensureScoutReadinessCard(db, f.setup.id).telemetry_message_id, card.id);
+    assert.match(f.signups.all.get(getScoutSetupById(db, f.setup.id)!.signupMessageId!)!.content, /Games/);
   } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 

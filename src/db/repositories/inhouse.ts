@@ -3,11 +3,12 @@ import type Database from 'better-sqlite3';
 export type InhouseConfig = {
   guildId: string; categoryId: string; roleName: string; channelName: string;
   roleId: string | null; channelId: string | null; messageId: string | null; emoji: string;
+  provisioningRef: string;
 };
 export function getInhouseConfig(db: Database.Database, guildId: string): InhouseConfig | undefined {
   return db.prepare(`SELECT guild_id guildId, category_id categoryId, role_name roleName,
     channel_name channelName, role_id roleId, channel_id channelId,
-    optin_message_id messageId, optin_emoji emoji FROM inhouse_config WHERE guild_id=?`)
+    optin_message_id messageId, optin_emoji emoji, provisioning_ref provisioningRef FROM inhouse_config WHERE guild_id=?`)
     .get(guildId) as InhouseConfig | undefined;
 }
 export function beginInhouseConfiguration(db: Database.Database,

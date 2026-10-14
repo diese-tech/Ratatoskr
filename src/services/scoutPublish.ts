@@ -42,7 +42,7 @@ import {
   type ScoutSetup,
 } from '../db/index.js';
 import {
-  hasScoutDivisionManagementAccess,
+  canManageScoutSetup,
   isScoutOperationsChannel,
   isScoutResultsChannel,
 } from './scoutAuthorization.js';
@@ -99,7 +99,7 @@ export function publishedRosterRows(setup: ScoutSetup) {
       .setStyle(ButtonStyle.Link)
       .setURL(`https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}`)] : []),
   );
-  return [managementRow(setup.id, setup.version), publicRow];
+  return [managementRow(setup.id, setup.version, setup.workflow), publicRow];
 }
 
 async function findRecoverableResultMessage(client: Client, setup: ScoutSetup) {
@@ -179,7 +179,7 @@ export async function reconcileScoutPublishedDelivery(
   await attachRecoveredScoutResult(client, db, setup, resultMessage);
 }
 
-export function managementRow(setupId: number, version: number) {
+export function managementRow(setupId: number, version: number, workflow?: 'scout' | 'inhouse') {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`scout:publishedswap:${setupId}:${version}`)
@@ -193,8 +193,8 @@ export function managementRow(setupId: number, version: number) {
       .setLabel('Ping roster').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`scout:changehost:${setupId}:${version}`)
       .setLabel('Change host').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`scout:changeorganizer:${setupId}:${version}`)
-      .setLabel('Change organizer').setStyle(ButtonStyle.Secondary),
+    ...(workflow === 'inhouse' ? [] : [new ButtonBuilder().setCustomId(`scout:changeorganizer:${setupId}:${version}`)
+      .setLabel('Change organizer').setStyle(ButtonStyle.Secondary)]),
   );
 }
 
@@ -223,12 +223,7 @@ async function authorized(
   if (!correctChannel) return undefined;
   if (status === 'published' && origin === 'canonical-entry' &&
       !isCanonicalPublishedManagementMessage(interaction, setup)) return undefined;
-  const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
-  if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
-  const member = await interaction.guild.members.fetch(interaction.user.id);
-  const config = getScoutConfig(db, setup.guildId);
-  const { hasAccess } = await import('./authorization.js');
-  return hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS')) ? setup : undefined;
+  return await canManageScoutSetup(db, interaction.guild, interaction.user.id, setup) ? setup : undefined;
 }
 
 export async function handleScoutPublishButton(interaction: ButtonInteraction, db: Database.Database): Promise<boolean> {

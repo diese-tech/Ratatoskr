@@ -1,3 +1,4 @@
+import { scoutGameName } from './scoutGamePresentation.js';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -58,8 +59,8 @@ export async function resolveScoutNotification(
       ? `**Lobby Host:** <@${hosts[0]!.lobbyHostUserId}>${notification.kind === 't30' ? ', please get everyone rallied and the lobby ready.' : ''}`
       : hosts.map((host) => `**Game ${host.gameNumber} Lobby Host:** <@${host.lobbyHostUserId}>`).join('\n');
     const heading = notification.kind === 't30'
-      ? `**${setup.divisionDisplayName} Scout starts in 30 minutes.**`
-      : `**Reminder: ${setup.divisionDisplayName} Scout starts at <t:${setup.startAt}:t>.**`;
+      ? `**${scoutGameName(setup)} starts in 30 minutes.**`
+      : `**Reminder: ${scoutGameName(setup)} starts at <t:${setup.startAt}:t>.**`;
     return {
       status: 'deliver',
       payload: {
@@ -81,7 +82,7 @@ export async function resolveScoutNotification(
       payload: {
         content: `<@${coordination.organizerUserId}>`,
         embed: {
-          title: `${setup.divisionDisplayName} Scout · Organizer needed`,
+          title: `${scoutGameName(setup)} · Organizer needed`,
           description: `<t:${setup.startAt}:t>\nRequested by Game ${host.gameNumber} Lobby Host <@${host.lobbyHostUserId}>.`,
           color: 0xf59e0b,
         },
@@ -102,7 +103,7 @@ export async function resolveScoutNotification(
       payload: {
         content: `<@${coordination.organizerUserId}>`,
         embed: {
-          title: `⚠️ ${setup.divisionDisplayName} Scout · replacement needed`,
+          title: `⚠️ ${scoutGameName(setup)} · replacement needed`,
           description: `<t:${setup.startAt}:t>\n<@${slot.userId}> can no longer play **${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} · ${SCOUT_ROLE_LABELS[slot.role]}**.`,
           color: 0xf59e0b,
         },
@@ -127,7 +128,7 @@ export async function resolveScoutNotification(
     return {
       status: 'deliver',
       payload: {
-        content: `**<@${incomingUserId}>, you're in for the <t:${setup.startAt}:t> ${setup.divisionDisplayName} Scout.**\n${setup.gameCount === 2 ? `Game ${gameNumber} · ` : ''}${team === 'team_one' ? 'Order' : 'Chaos'} · ${SCOUT_ROLE_LABELS[role as keyof typeof SCOUT_ROLE_LABELS]} · replacing <@${outgoingUserId}>`,
+        content: `**<@${incomingUserId}>, you're in for the <t:${setup.startAt}:t> ${scoutGameName(setup)}.**\n${setup.gameCount === 2 ? `Game ${gameNumber} · ` : ''}${team === 'team_one' ? 'Order' : 'Chaos'} · ${SCOUT_ROLE_LABELS[role as keyof typeof SCOUT_ROLE_LABELS]} · replacing <@${outgoingUserId}>`,
         links,
         allowedUserIds: [incomingUserId],
       },

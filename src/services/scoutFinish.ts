@@ -1,3 +1,4 @@
+import { scoutGameName } from './scoutGamePresentation.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, RESTJSONErrorCodes,
   type ButtonInteraction, type Client } from 'discord.js';
 import type Database from 'better-sqlite3';
@@ -10,10 +11,10 @@ import { renderScoutSignupPost } from './scoutSignupPost.js';
 import { tryAcquireDivisionOperation } from './divisionOperation.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 
-export function scoutFinishButtonRow(setupId: number, version: number, retry = false) {
+export function scoutFinishButtonRow(setupId: number, version: number, retry = false, workflow?: 'scout' | 'inhouse') {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder()
     .setCustomId(`scout:finish:${setupId}:${version}`)
-    .setLabel(retry ? 'Retry post cleanup' : 'Finish scout').setStyle(ButtonStyle.Secondary));
+    .setLabel(retry ? 'Retry post cleanup' : workflow === 'inhouse' ? 'Finish inhouse' : 'Finish scout').setStyle(ButtonStyle.Secondary));
 }
 
 function privateScoutFinishRetryButtonRow(setupId: number, version: number) {
@@ -58,7 +59,7 @@ export async function reconcileFinishedScoutPost(
   try {
     if (!completion.posts_reconciled) {
       const finished = [
-        '✅ **This scout is finished. Roster changes are closed.**',
+        `✅ **This ${setup.workflow === 'inhouse' ? 'inhouse' : 'scout'} is finished. Roster changes are closed.**`,
         lifecycleCleanup?.action === 'finished'
           ? `Finished by <@${lifecycleCleanup.actorUserId}> automatically.`
           : '',
@@ -132,7 +133,7 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
       return true;
     }
     if (action === 'finish' && !existing) {
-      await interaction.editReply({ content: `Finish the **${setup.divisionDisplayName} Scout** at <t:${setup.startAt}:F>? This keeps the roster and signup history, closes player edits, and cannot be undone.`,
+      await interaction.editReply({ content: `Finish the **${scoutGameName(setup)}** at <t:${setup.startAt}:F>? This keeps the roster and signup history, closes player edits, and cannot be undone.`,
         components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder().setCustomId(`scout:finishconfirm:${setup.id}:${setup.version}`).setLabel('Confirm finish').setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId(`scout:finishkeep:${setup.id}:${setup.version}`).setLabel('Keep open').setStyle(ButtonStyle.Secondary),

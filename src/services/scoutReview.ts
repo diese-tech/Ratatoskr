@@ -1,3 +1,4 @@
+import { scoutGameName } from './scoutGamePresentation.js';
 import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
 import {
@@ -39,7 +40,9 @@ import {
   SCOUT_ROLE_LABELS,
   SCOUT_TEAMS,
 } from '../domain/index.js';
-import { hasScoutDivisionManagementAccess, isScoutOperationsChannel } from './scoutAuthorization.js';
+import { canManageScoutSetup, isScoutOperationsChannel } from './scoutAuthorization.js';
+import { balanceInhouseRoster } from '../domain/inhouseBalance.js';
+import { inhouseDivisionHints } from './inhouseBalance.js';
 import {
   classifyScoutSignups,
   eligibleScoutSignups,
@@ -127,7 +130,7 @@ export function buildScoutWorkingRosterView(
   contentLimit = 2_000,
 ) {
   const lines = [
-    `**${setup.divisionDisplayName} Scout · <t:${setup.startAt}:t>**`,
+    `**${scoutGameName(setup)} · <t:${setup.startAt}:t>**`,
     `Start: <t:${setup.startAt}:F> · <t:${setup.startAt}:R>`,
   ];
   for (let gameNumber = 1; gameNumber <= setup.gameCount; gameNumber++) {
@@ -232,7 +235,7 @@ export function buildScoutRosterReviewView(
   const setup = getScoutSetupById(db, setupId);
   const gameCount = setup?.gameCount ?? 1;
   const withdrawn = new Set(withdrawnScoutRosterUserIds(db, setupId));
-  const lines = [notice, '**Private scout roster review**'];
+  const lines = [notice, setup?.workflow === 'inhouse' ? '**Private inhouse roster review**' : '**Private scout roster review**'];
   for (let gameNumber = 1; gameNumber <= gameCount; gameNumber++) {
     if (gameCount === 2) lines.push('', `__**Game ${gameNumber}**__`);
     for (const [index, team] of SCOUT_TEAMS.entries()) {
@@ -303,13 +306,7 @@ async function authorized(interaction: MessageComponentInteraction, db: Database
   const setup = getScoutSetupById(db, setupId);
   if (!setup || setup.guildId !== interaction.guildId || !['open', 'roster_ready'].includes(setup.status) || !interaction.guild) return undefined;
   if (!isScoutOperationsChannel(setup, interaction.channelId)) return undefined;
-  const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
-  if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
-  const member = await interaction.guild.members.fetch(interaction.user.id);
-  const config = getScoutConfig(db, setup.guildId);
-  const { hasAccess } = await import('./authorization.js');
-  const allowed = hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS'));
-  return allowed ? setup : undefined;
+  return await canManageScoutSetup(db, interaction.guild, interaction.user.id, setup) ? setup : undefined;
 }
 
 async function showSeatPlayerPicker(
@@ -444,6 +441,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
     );
     const outcome = await reconcileWorkingScoutRoster(
       createSqliteScoutSignupStore(db), setup.id, eligibility.eligibleSignups, 'refresh', interaction.user.id, expectedVersion,
+      inhouseDivisionHints(db, interaction.guild!, eligibility.eligibleSignups.map(s => s.userId)),
     );
     const rostered = new Set(listScoutRosterSlots(db, setup.id).map((slot) => slot.userId));
     const excluded = ineligibleSignupLines(eligibility.ineligibleSignups, rostered);
@@ -503,6 +501,8 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
     if (!Number.isInteger(expectedVersion)) return false;
     const signups = await eligibleScoutSignups(interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
     const generated = generateScoutRoster(signups, { gameCount: 2 });
+    if (setup.workflow === 'inhouse') generated.slots = balanceInhouseRoster(generated.slots,
+      inhouseDivisionHints(db, interaction.guild!, signups.map(s => s.userId)));
     if (!generated.feasible) {
       await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'There are no longer enough compatible eligible signups to build two games.'));
       return true;
@@ -528,6 +528,11 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
   const current = listScoutRosterSlots(db, setup.id);
   const signups = await eligibleScoutSignups(interaction.guild!, listScoutSignups(db, setup.id), setup.eligibilityRoleId);
   const generated = generateDifferentScoutRoster(signups, scoutRosterFingerprint(current), Math.random, setup.gameCount);
+  if (setup.workflow === 'inhouse' && generated.result.feasible) {
+    generated.result.slots = balanceInhouseRoster(generated.result.slots,
+      inhouseDivisionHints(db, interaction.guild!, signups.map(s => s.userId)));
+    generated.isDifferent = scoutRosterFingerprint(generated.result.slots) !== scoutRosterFingerprint(current);
+  }
   if (!generated.result.feasible || !generated.isDifferent) {
     await interaction.editReply(buildScoutRosterReviewView(db, setup.id, setup.version, current, 'No different valid roster is available.'));
     return true;

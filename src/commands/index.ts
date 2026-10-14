@@ -12,11 +12,13 @@ import {
 import { handleSeasonCommand, seasonCommand } from './season.js';
 import { handleServerCommand, serverCommand } from './server.js';
 import { handleTransactionAutocomplete, handleTransactionCommand, transactionCommand } from './transaction.js';
+import { inhouseCommand, handleInhouseCommand } from './inhouse.js';
 
 export const commandData = [
   divisionCommand.toJSON(),
   seasonCommand.toJSON(),
   scoutCommand.toJSON(),
+  inhouseCommand.toJSON(),
   serverCommand.toJSON(),
   helpCommand.toJSON(),
   transactionCommand.toJSON(),
@@ -95,7 +97,9 @@ export async function handleInteraction(
 
   if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.commandName === 'division') {
+  if (interaction.commandName === 'inhouse') {
+    await handleInhouseCommand(interaction, db);
+  } else if (interaction.commandName === 'division') {
     await handleDivisionCommand(interaction, storage.divisions, storage.operationScope);
   } else if (interaction.commandName === 'season') {
     await handleSeasonCommand(interaction, storage.seasons);

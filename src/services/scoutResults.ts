@@ -1,9 +1,11 @@
+import { scoutGameName } from './scoutGamePresentation.js';
 import type { ScoutRosterSlot } from '../domain/scoutRoster.js';
 import { SCOUT_ROLES, SCOUT_ROLE_LABELS } from '../domain/index.js';
 
 export function renderScoutResult(
   setup: {
     divisionDisplayName: string;
+    workflow?: 'scout' | 'inhouse';
     startAt: number;
     gameCount?: 1 | 2;
     hosts?: readonly { gameNumber: 1 | 2; lobbyHostUserId: string }[];
@@ -11,7 +13,7 @@ export function renderScoutResult(
   slots: readonly (ScoutRosterSlot & { replacementNeeded?: boolean })[],
 ): string {
   const lines = [
-    `**${setup.divisionDisplayName} Scout Roster — <t:${setup.startAt}:F>**`,
+    `**${scoutGameName(setup)} Roster — <t:${setup.startAt}:F>**`,
   ];
   const gameCount = setup.gameCount ?? (slots.some((slot) => slot.gameNumber === 2) ? 2 : 1);
   for (let gameNumber = 1; gameNumber <= gameCount; gameNumber++) {

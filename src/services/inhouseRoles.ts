@@ -114,3 +114,20 @@ export async function reconcileInhouseRoles(client: Client, db: Database.Databas
   });
   await retryInhouseRoles(client, db, guildId, report);
 }
+
+export function startInhouseRoleWorker(client: Client, db: Database.Database, guildId: string,
+  report: (error: unknown) => Promise<void>): () => void {
+  let running = false, nextObservation = Date.now() + 60 * 60_000;
+  const timer = setInterval(() => {
+    if (running || !getInhouseConfig(db, guildId)?.messageId) return;
+    running = true;
+    const work = Date.now() >= nextObservation
+      ? reconcileInhouseRoles(client, db, guildId, report)
+      : retryInhouseRoles(client, db, guildId, report);
+    if (Date.now() >= nextObservation) nextObservation = Date.now() + 60 * 60_000;
+    void work.catch(report).catch(() => console.error('Inhouse role recovery could not report its failure.'))
+      .finally(() => { running = false; });
+  }, 60_000);
+  timer.unref();
+  return () => clearInterval(timer);
+}

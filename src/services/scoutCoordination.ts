@@ -26,7 +26,7 @@ import {
   scheduleScoutNotification,
   scheduleScoutNotificationIfCooldownAvailable,
 } from '../db/index.js';
-import { hasScoutDivisionManagementAccess } from './scoutAuthorization.js';
+import { canManageScoutSetup } from './scoutAuthorization.js';
 import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
 import { reconcileScoutPublishedPresentation } from './scoutPublish.js';
@@ -66,12 +66,7 @@ async function managerCanAct(
 ) {
   const setup = await activePublishedSetup(interaction, db, setupId, origin);
   if (!setup) return undefined;
-  const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
-  if (!division || division.id !== setup.divisionId || division.status !== 'active') return undefined;
-  const member = await interaction.guild!.members.fetch(interaction.user.id);
-  const config = getScoutConfig(db, setup.guildId);
-  const { hasAccess } = await import('./authorization.js');
-  return hasScoutDivisionManagementAccess(db, member, config, division, hasAccess(member, 'OPERATIONS')) ? setup : undefined;
+  return await canManageScoutSetup(db, interaction.guild!, interaction.user.id, setup) ? setup : undefined;
 }
 
 async function refreshPublishedPresentation(interaction: MessageComponentInteraction, db: Database.Database, setupId: number) {
@@ -145,6 +140,10 @@ export async function handleScoutCoordinationButton(
   );
   if (!setup || setup.version !== expectedVersion) {
     await interaction.editReply({ content: 'You are not authorized or that roster view is stale.', components: [] });
+    return true;
+  }
+  if (setup.workflow === 'inhouse' && parts[1] === 'changeorganizer') {
+    await interaction.editReply({ content: 'Only the creator manages this inhouse. Organizer transfer is unavailable.', components: [] });
     return true;
   }
   if (parts[1] === 'pingrosterback') {
@@ -256,7 +255,7 @@ export async function handleScoutCoordinationUserSelect(
   const member = setup && userId
     ? await interaction.guild!.members.fetch(userId).catch(() => undefined)
     : undefined;
-  if (!setup || setup.version !== expectedVersion || !userId || !member || member.user.bot) {
+  if (!setup || setup.workflow === 'inhouse' || setup.version !== expectedVersion || !userId || !member || member.user.bot) {
     await interaction.editReply({ content: 'That Organizer selection is stale or invalid.', components: [] });
     return true;
   }
