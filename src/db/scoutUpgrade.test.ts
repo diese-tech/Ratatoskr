@@ -80,6 +80,11 @@ for (const version of [14, 15, 16, 17, 18]) test(`v${version} disk upgrade prese
   try {
     const upgradedRows = tables.map((table) => {
       const rows = upgraded.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+      if (table === 'scout_setups') return rows.map(item => {
+        const { workflow, ...legacy } = item as Record<string, unknown>;
+        assert.equal(workflow, 'scout');
+        return legacy;
+      });
       return table === 'scout_roster_slots' && version < 18 ? withoutFoundationSlotColumns(rows) : rows;
     });
     assert.deepEqual(upgradedRows, snapshot);
@@ -132,13 +137,13 @@ test('v19 lifecycle alert references remain retryable after the delivery-state u
       legacy.prepare('INSERT INTO schema_migrations (id, name) VALUES (?, ?)').run(migration.id, migration.name);
     }
     legacy.prepare("INSERT INTO divisions (guild_id, division_key, display_name) VALUES ('guild', 'vanaheim', 'Vanaheim')").run();
-    const setup = createScoutSetup(legacy, {
-      guildId: 'guild', divisionId: 1, divisionKey: 'vanaheim', divisionDisplayName: 'Vanaheim',
-      createdBy: 'organizer', signupChannelId: 'signups', resultsChannelId: 'results',
-      operationsChannelId: 'ops', divisionRoleId: 'division-role',
-      emojiByRole: { solo: 's', jungle: 'j', mid: 'm', support: 'p', carry: 'c' },
-      startAt: 2_000, roleLimit: 2,
-    });
+    // Seed the historical schema directly; today's writer expects migration 35.
+    const setup = legacy.prepare(`INSERT INTO scout_setups
+      (guild_id,division_id,division_key,division_display_name,created_by,
+        signup_channel_id,results_channel_id,operations_channel_id,division_role_id,
+        solo_emoji_id,jungle_emoji_id,mid_emoji_id,support_emoji_id,carry_emoji_id,start_at,role_limit)
+      VALUES ('guild',1,'vanaheim','Vanaheim','organizer','signups','results','ops','division-role',
+        's','j','m','p','c',2000,2) RETURNING id`).get() as { id: number };
     legacy.prepare(`INSERT INTO scout_lifecycle_cleanups
       (setup_id, action, status_before, reason, scheduled_start_at, deadline_at,
         processed_at, actor_user_id, alert_attempted_at, alert_reference)

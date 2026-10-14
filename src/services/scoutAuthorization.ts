@@ -1,8 +1,35 @@
-import type { GuildMember } from 'discord.js';
+import type { Guild, GuildMember } from 'discord.js';
 import type { DivisionRecord, ScoutConfig, ScoutSetup } from '../db/types.js';
 
 import type Database from 'better-sqlite3';
 import { resolveFranchiseRepresentativeId } from './scoutRoleIdentity.js';
+import { getDivisionByKey, getScoutConfig } from '../db/index.js';
+import { getInhouseConfig } from '../db/repositories/inhouse.js';
+
+export async function canHostInhouse(db: Database.Database, guild: Guild, userId: string): Promise<boolean> {
+  const config = getInhouseConfig(db, guild.id);
+  if (!config?.roleId || !config.channelId) return false;
+  const member = await guild.members.fetch({ user: userId, force: true });
+  return !member.user.bot && member.roles.cache.has(config.roleId);
+}
+
+export async function canManageScoutSetup(db: Database.Database, guild: Guild, userId: string,
+  setup: ScoutSetup, requireActiveDivision = true): Promise<boolean> {
+  if (setup.guildId !== guild.id) return false;
+  if (setup.workflow === 'inhouse') {
+    const config = getInhouseConfig(db, guild.id);
+    return Boolean(config?.roleId && config.channelId && setup.createdBy === userId
+      && setup.divisionId === null && setup.eligibilityRoleId === null
+      && setup.divisionRoleId === config.roleId
+      && [setup.signupChannelId, setup.resultsChannelId, setup.operationsChannelId].every(id => id === config.channelId)
+      && await canHostInhouse(db, guild, userId));
+  }
+  const division = getDivisionByKey(db, setup.guildId, setup.divisionKey);
+  if (!division || division.id !== setup.divisionId || (requireActiveDivision && division.status !== 'active')) return false;
+  const member = await guild.members.fetch(userId);
+  const { hasAccess } = await import('./authorization.js');
+  return hasScoutDivisionManagementAccess(db, member, getScoutConfig(db, guild.id), division, hasAccess(member, 'OPERATIONS'));
+}
 
 export type ScoutManagementAccessInput = {
   isAdmin: boolean;

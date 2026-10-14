@@ -1,4 +1,5 @@
-import type { Client, MessageReaction, PartialMessageReaction, PartialUser, User } from 'discord.js';
+import type { Client, Guild, MessageReaction, PartialMessageReaction, PartialUser, User } from 'discord.js';
+import { balanceInhouseRoster } from '../domain/inhouseBalance.js';
 import type { ScoutSetup } from '../db/types.js';
 import { SCOUT_SIGNUP_ROLES, SCOUT_SIGNUP_ROLE_LABELS, type ScoutSignupRole } from '../domain/index.js';
 import {
@@ -16,6 +17,7 @@ export type ScoutSignupDependencies = {
   operationScope: object;
   refreshStatusCard: (client: Client, setupId: number) => Promise<unknown>;
   reportError: (context: OperationContext, error: unknown) => Promise<void>;
+  divisionHints?: (guild: Guild, userIds: Iterable<string>) => ReadonlyMap<string, string>;
 };
 
 export function scoutRoleForEmoji(
@@ -71,6 +73,7 @@ export async function reconcileWorkingScoutRoster(
   source: 'signup' | 'startup' | 'membership' | 'refresh',
   actorUserId?: string | null,
   expectedVersion?: number,
+  divisionHints: ReadonlyMap<string, string> | ((ids: Iterable<string>) => ReadonlyMap<string, string>) = new Map(),
 ): Promise<ReconcileScoutWorkingRosterOutcome> {
   const attempts = expectedVersion === undefined ? 3 : 1;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -89,6 +92,8 @@ export async function reconcileWorkingScoutRoster(
       gameCount: setup.gameCount,
       fixedSlots,
     });
+    if (setup.workflow === 'inhouse') generated.slots = balanceInhouseRoster(generated.slots,
+      typeof divisionHints === 'function' ? divisionHints(generated.slots.map(s => s.userId)) : divisionHints, fixedSlots);
     const outcome = await storage.reconcileWorkingRoster({
       setupId,
       expectedVersion: expectedVersion ?? setup.version,
@@ -154,7 +159,8 @@ export async function reconcileActiveScoutSignups(
             await dependencies.storage.listSignups(setup.id),
             setup.eligibilityRoleId,
           );
-          await reconcileWorkingScoutRoster(dependencies.storage, setup.id, eligible, 'startup');
+          await reconcileWorkingScoutRoster(dependencies.storage, setup.id, eligible, 'startup', undefined, undefined,
+            dependencies.divisionHints ? ids => dependencies.divisionHints!(message.guild!, ids) : undefined);
         }
         const latest = await dependencies.storage.getSetupBySignupMessageId(setup.signupMessageId);
         if (latest && ['open', 'roster_ready'].includes(latest.status)) {
@@ -224,7 +230,8 @@ export async function handleScoutSignupReactionAdd(
         current.eligibilityRoleId,
       );
       const wasReady = current.status === 'roster_ready';
-      await reconcileWorkingScoutRoster(dependencies.storage, resolved.setup.id, signups, 'signup', hydrated.user.id);
+      await reconcileWorkingScoutRoster(dependencies.storage, resolved.setup.id, signups, 'signup', hydrated.user.id, undefined,
+        dependencies.divisionHints ? ids => dependencies.divisionHints!(guild, ids) : undefined);
       const latest = await dependencies.storage.getSetupBySignupMessageId(hydrated.reaction.message.id);
       if (!wasReady && latest?.status === 'roster_ready') {
         await hydrated.reaction.message.edit({
@@ -272,7 +279,8 @@ export async function handleScoutSignupReactionRemove(
       const signups = await eligibleScoutSignups(
         guild, await dependencies.storage.listSignups(current.id), current.eligibilityRoleId,
       );
-      await reconcileWorkingScoutRoster(dependencies.storage, current.id, signups, 'signup', hydrated.user.id);
+      await reconcileWorkingScoutRoster(dependencies.storage, current.id, signups, 'signup', hydrated.user.id, undefined,
+        dependencies.divisionHints ? ids => dependencies.divisionHints!(guild, ids) : undefined);
     }
   });
   await dependencies.refreshStatusCard(hydrated.reaction.client, resolved.setup.id);
@@ -306,7 +314,8 @@ export async function refreshScoutMemberReadiness(
             await dependencies.storage.listSignups(setup.id),
             setup.eligibilityRoleId,
           );
-          await reconcileWorkingScoutRoster(dependencies.storage, setup.id, signups, 'membership');
+          await reconcileWorkingScoutRoster(dependencies.storage, setup.id, signups, 'membership', undefined, undefined,
+            dependencies.divisionHints ? ids => dependencies.divisionHints!(guild, ids) : undefined);
         }
       } catch (error) {
         await dependencies.reportError({ guildId, setupId: candidate.id, action: 'Scout membership readiness' }, error);

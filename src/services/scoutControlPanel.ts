@@ -1,3 +1,4 @@
+import { scoutGameName } from './scoutGamePresentation.js';
 import type { Client } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getScoutSetupById, type ScoutSetup } from '../db/index.js';
@@ -8,9 +9,10 @@ export function renderScoutControlPanelPrompt(setup: ScoutSetup, notifyCreator =
   return {
     content: [
       `<@${setup.createdBy}>`,
-      `**${setup.divisionDisplayName} Scout roster ready**`,
+      `**${scoutGameName(setup)} roster ready**`,
       `Start: <t:${setup.startAt}:F>`,
-      'Review and balance the roster here, then publish it to the division signup channel.',
+      setup.workflow === 'inhouse' ? 'Adjust the best-effort teams here, then publish them in the inhouse channel.'
+        : 'Review and balance the roster here, then publish it to the division signup channel.',
     ].join('\n'),
     components: [scoutReviewButtonRow(setup.id)],
     allowedMentions: { parse: [] as never[], users: notifyCreator ? [setup.createdBy] : [], roles: [] as string[] },

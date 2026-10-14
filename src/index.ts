@@ -28,6 +28,8 @@ import { DiscordLeagueGateway } from './services/leagueDiscord.js';
 import { reconcilePendingLeagueTransactions } from './services/leagueTransactions.js';
 import { runIsolatedStartupRecovery } from './services/startupRecovery.js';
 import { startLeagueAuditWorker } from './services/leagueAudit.js';
+import { handleInhouseRoleReaction, reconcileInhouseRoles, startInhouseRoleWorker } from './services/inhouseRoles.js';
+import { inhouseDivisionHints } from './services/inhouseBalance.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -63,6 +65,7 @@ const scoutCardDependencies: ScoutCardDependencies = {
 const scoutSignupDependencies: ScoutSignupDependencies = {
   storage: storage.scoutSignups,
   operationScope: storage.operationScope,
+  divisionHints: (guild, ids) => inhouseDivisionHints(db, guild, ids),
   refreshStatusCard: async (targetClient, setupId) => refreshScoutStatusCardSafely(targetClient, scoutCardDependencies, setupId),
   reportError: async (context, error) => {
     await reportOperationalError(client, db, context, error);
@@ -73,11 +76,13 @@ let stopScoutNotificationWorker: (() => void) | undefined;
 let leagueWorker: LeagueJobWorker | undefined;
 let stopLeagueOps: (() => void) | undefined;
 let stopLeagueAuditWorker: (() => void) | undefined;
+let stopInhouseRoles: (() => void) | undefined;
 
 async function shutdown() {
   stopLeagueOps?.();
   stopLeagueAuditWorker?.();
   stopScoutNotificationWorker?.();
+  stopInhouseRoles?.();
   await client.destroy();
   await storage.close();
   process.exit(0);
@@ -194,6 +199,13 @@ client.once('clientReady', async () => {
     },
   });
   console.log('Scout notification worker started.');
+  const reportInhouseError = async (error: unknown) => {
+    await reportOperationalError(client, db, { guildId: env.DISCORD_GUILD_ID, action: 'Inhouse opt-in role recovery' }, error);
+  };
+  await runIsolatedStartupRecovery('Inhouse opt-in recovery', async () => {
+    await reconcileInhouseRoles(client, db, env.DISCORD_GUILD_ID, reportInhouseError);
+  }, reportInhouseError);
+  stopInhouseRoles = startInhouseRoleWorker(client, db, env.DISCORD_GUILD_ID, reportInhouseError);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -244,6 +256,7 @@ client.on('roleDelete', async (role) => {
 
 client.on('messageReactionAdd', async (reaction, user) => {
   try {
+    if (await handleInhouseRoleReaction(client, db, reaction, user, true)) return;
     if (await tryHandleScoutEmojiBinding(reaction, user, storage.scoutConfiguration)) return;
     await handleScoutSignupReactionAdd(reaction, user, scoutSignupDependencies);
   } catch (error) {
@@ -253,6 +266,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
 client.on('messageReactionRemove', async (reaction, user) => {
   try {
+    if (await handleInhouseRoleReaction(client, db, reaction, user, false)) return;
     await handleScoutSignupReactionRemove(reaction, user, scoutSignupDependencies);
   } catch (error) {
     await reportOperationalError(client, db, { guildId: reaction.message.guildId ?? env.DISCORD_GUILD_ID, action: 'Scout signup reaction remove' }, error);

@@ -1,4 +1,5 @@
-import { RESTJSONErrorCodes, type Client, type Message, type TextBasedChannel } from 'discord.js';
+import { scoutGameName } from './scoutGamePresentation.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, RESTJSONErrorCodes, type Client, type Message, type TextBasedChannel } from 'discord.js';
 import type { ScoutSetup } from '../db/types.js';
 import { renderScoutReadiness, type ScoutReadinessSnapshot } from '../domain/scoutReadiness.js';
 import { SCOUT_ROLE_LABELS } from '../domain/index.js';
@@ -61,18 +62,20 @@ async function getMessage(channel: TextBasedChannel, messageId: string): Promise
   catch (error) { if (missingMessage(error)) return undefined; throw error; }
 }
 
-async function findCard(channel: TextBasedChannel, botId: string, setupId: number): Promise<Message | undefined> {
+async function findCard(channel: TextBasedChannel, botId: string, setupId: number, workflow?: ScoutSetup['workflow']): Promise<Message | undefined> {
   let before: string | undefined;
   while (true) {
     const page = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
-    const found = page.find((message) => message.author.id === botId && hasSetupScopedControl(message, setupId));
+    const found = page.find((message) => message.author.id === botId && (workflow === 'inhouse'
+      ? JSON.stringify(message.components).includes(`"scout:status:${setupId}"`)
+      : hasSetupScopedControl(message, setupId)));
     if (found || page.size < 100) return found;
     before = page.last()?.id;
     if (!before) throw new Error('Could not finish Scout card history lookup.');
   }
 }
 
-async function cardView(
+async function baseCardView(
   storage: ScoutReadinessCardStore,
   setup: ScoutSetup,
   kind: 'telemetry' | 'control',
@@ -88,7 +91,7 @@ async function cardView(
     return {
       content: '',
       embeds: [{
-        title: `✓ ${setup.divisionDisplayName} Scout finished`,
+        title: `✓ ${scoutGameName(setup)} finished`,
         description: [
         `<t:${setup.startAt}:t>`,
         `Created by <@${setup.createdBy}>`,
@@ -101,7 +104,7 @@ async function cardView(
       }],
       components: completion.posts_reconciled
         ? [scoutResultLinkRow(setup, 'View final roster')]
-        : [scoutResultLinkRow(setup, 'View final roster'), scoutFinishButtonRow(setup.id, setup.version, true)],
+        : [scoutResultLinkRow(setup, 'View final roster'), scoutFinishButtonRow(setup.id, setup.version, true, setup.workflow)],
       allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
     };
   }
@@ -127,7 +130,7 @@ async function cardView(
       ...view,
       content: notify ? `<@${setup.createdBy}>` : '',
       embeds: [{
-        title: `${setup.divisionDisplayName} Scout · ${setup.status === 'roster_ready' ? 'roster ready' : 'collecting signups'}`,
+        title: `${scoutGameName(setup)} · ${setup.status === 'roster_ready' ? 'roster ready' : 'collecting signups'}`,
         description: [`Created by <@${setup.createdBy}>`, warning, workingRosterLines.join('\n')].filter(Boolean).join('\n'),
         color: setup.status === 'roster_ready' ? 0x0d9488 : 0x3b82f6,
       }],
@@ -140,14 +143,14 @@ async function cardView(
       content: '',
       embeds: [{
         title: replacementSlots.length
-          ? `⚠️ ${setup.divisionDisplayName} Scout · replacement needed`
-          : `✓ ${setup.divisionDisplayName} Scout filled`,
+          ? `⚠️ ${scoutGameName(setup)} · replacement needed`
+          : `✓ ${scoutGameName(setup)} filled`,
         description: (replacementSlots.length
           ? `<t:${setup.startAt}:t> · ${replacementSlots.map((slot) => `${setup.gameCount === 2 ? `Game ${slot.gameNumber} · ` : ''}${slot.team === 'team_one' ? 'Order' : 'Chaos'} ${SCOUT_ROLE_LABELS[slot.role]}`).join(', ')}`
           : `<t:${setup.startAt}:t>`) + `\nCreated by <@${setup.createdBy}>`,
         color: replacementSlots.length ? 0xf59e0b : 0x22c55e,
       }],
-      components: [scoutResultLinkRow(setup), scoutFinishButtonRow(setup.id, setup.version)],
+      components: [scoutResultLinkRow(setup), scoutFinishButtonRow(setup.id, setup.version, false, setup.workflow)],
       allowedMentions: { parse: [] as never[], users: [] as string[], roles: [] as string[] },
     };
   }
@@ -155,7 +158,7 @@ async function cardView(
     return {
       content: '',
       embeds: [{
-        title: `🚫 ${setup.divisionDisplayName} Scout cancelled`,
+        title: `🚫 ${scoutGameName(setup)} cancelled`,
         description: [
           `Start: <t:${setup.startAt}:F>`,
           `Created by <@${setup.createdBy}>`,
@@ -176,7 +179,7 @@ async function cardView(
   const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
   return { content: kind === 'control' && !terminal ? `<@${setup.createdBy}>` : '',
   embeds: [{
-    title: `${setup.divisionDisplayName} Scout ${status}`,
+    title: `${scoutGameName(setup)} ${status}`,
     description: [
       `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
       `Created by <@${setup.createdBy}>`,
@@ -190,10 +193,21 @@ async function cardView(
     ].filter(Boolean).join('\n'),
     color: 0x3b82f6,
   }],
-  components: setup.status === 'published' ? [managementRow(setup.id, setup.version), scoutFinishButtonRow(setup.id, setup.version)]
+  components: setup.status === 'published' ? [managementRow(setup.id, setup.version, setup.workflow), scoutFinishButtonRow(setup.id, setup.version, false, setup.workflow)]
     : setup.status === 'open' ? [scoutCancelButtonRow(setup.id, setup.version)]
     : [],
   allowedMentions: { parse: [] as never[], users: notify ? [setup.createdBy] : [], roles: [] as string[] } };
+}
+
+async function cardView(...args: Parameters<typeof baseCardView>) {
+  const view = await baseCardView(...args);
+  const setup = args[1];
+  if (setup.workflow !== 'inhouse') return view;
+  // Signup, working card and published roster share one channel. Only this
+  // marker identifies a recoverable status card after an ambiguous send.
+  return { ...view, components: [...view.components, new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`scout:status:${setup.id}`).setLabel('Inhouse status')
+      .setStyle(ButtonStyle.Secondary).setDisabled(true))] };
 }
 
 async function editCard(message: Message, view: Awaited<ReturnType<typeof cardView>>): Promise<void> {
@@ -247,7 +261,7 @@ export async function refreshScoutStatusCard(
         if (setup.status !== previousStatus) continue;
       }
       let telemetry = state.telemetry_message_id ? await getMessage(channel, state.telemetry_message_id) : undefined;
-      if (!telemetry && !state.telemetry_message_id) telemetry = await findCard(channel, client.user.id, setupId);
+      if (!telemetry && !state.telemetry_message_id) telemetry = await findCard(channel, client.user.id, setupId, setup.workflow);
       if (telemetry && !state.telemetry_message_id) {
         await storage.patchCard(setupId, { telemetry_message_id: telemetry.id, telemetry_attempted: 1 });
         state = await storage.ensureCard(setupId);
@@ -284,7 +298,7 @@ export async function refreshScoutStatusCard(
       setup = (await storage.getSetup(setupId))!;
       state = await storage.ensureCard(setupId);
       let control = setup.controlMessageId ? await getMessage(channel, setup.controlMessageId) : undefined;
-      if (!control) control = await findCard(channel, client.user.id, setupId);
+      if (!control) control = await findCard(channel, client.user.id, setupId, setup.workflow);
       if (!control) {
         if (state.control_attempted && !setup.controlMessageId) throw new Error('Scout ready-panel send is uncertain; waiting for marker recovery.');
         // An open setup cancelled before its first card has nothing to notify.

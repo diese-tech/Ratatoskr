@@ -41,7 +41,9 @@ import {
 } from '../db/index.js';
 import { parseScoutStartTime } from '../domain/scoutTime.js';
 import { SCOUT_ROLES, SCOUT_SIGNUP_ROLES, type ScoutRole } from '../domain/index.js';
-import { hasScoutDivisionManagementAccess } from './scoutAuthorization.js';
+import { canHostInhouse, hasScoutDivisionManagementAccess } from './scoutAuthorization.js';
+import { getInhouseConfig } from '../db/repositories/inhouse.js';
+import { scoutGameName } from './scoutGamePresentation.js';
 import { resolveScoutChannelGroupForDivision, type ScoutChannelGroup } from './scoutChannels.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 
@@ -52,11 +54,11 @@ export function renderPersistedScoutSignupPost(setup: ScoutSetup): string {
   return renderScoutSignupPost(setup);
 }
 
-function signupCorrelationRow(setupId: number) {
+function signupCorrelationRow(setupId: number, workflow?: 'scout' | 'inhouse') {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`scout:signup:${setupId}`)
-      .setLabel('Scout signup')
+      .setLabel(workflow === 'inhouse' ? 'Inhouse signup' : 'Scout signup')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(true),
   );
@@ -99,7 +101,7 @@ export async function ensurePostedScoutSetup(
   if (!message) {
     message = await channel.send({
       content: renderPersistedScoutSignupPost(setup),
-      components: [signupCorrelationRow(setup.id)],
+      components: [signupCorrelationRow(setup.id, setup.workflow)],
       allowedMentions: { parse: [], roles: [setup.divisionRoleId], users: [] },
     });
   }
@@ -136,7 +138,8 @@ type ScoutCreateDraft = {
   id: string;
   guildId: string;
   userId: string;
-  divisionId: number;
+  divisionId: number | null;
+  workflow?: 'scout' | 'inhouse';
   divisionKey: string;
   divisionDisplayName: string;
   operationsChannelId: string;
@@ -259,7 +262,7 @@ function detailsModal(draft: ScoutCreateDraft): ModalBuilder {
 
   return new ModalBuilder()
     .setCustomId(`${CUSTOM_ID_PREFIX}details:${draft.id}`)
-    .setTitle(`${draft.divisionDisplayName} scout setup`)
+    .setTitle(`${scoutGameName(draft)} setup`)
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(start),
       new ActionRowBuilder<TextInputBuilder>().addComponents(roleLimit),
@@ -275,6 +278,7 @@ function previewView(draft: ScoutCreateDraft, error?: string) {
     hasDetails
       ? renderScoutSignupPost({
           divisionDisplayName: draft.divisionDisplayName,
+          workflow: draft.workflow,
           startAt: draft.startAt!,
           roleLimit: draft.roleLimit,
           note: draft.note,
@@ -294,7 +298,7 @@ function previewView(draft: ScoutCreateDraft, error?: string) {
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${CUSTOM_ID_PREFIX}post:${draft.id}`)
-      .setLabel('Post scout signups')
+      .setLabel(draft.workflow === 'inhouse' ? 'Post inhouse signups' : 'Post scout signups')
       .setStyle(ButtonStyle.Success)
       .setDisabled(!hasDetails),
     new ButtonBuilder()
@@ -308,7 +312,7 @@ function previewView(draft: ScoutCreateDraft, error?: string) {
   );
   return {
     content,
-    components: [new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(roleMenu), row],
+    components: draft.workflow === 'inhouse' ? [row] : [new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(roleMenu), row],
   };
 }
 
@@ -384,12 +388,48 @@ export async function handleScoutCreateCommand(
     expiresAt: Date.now() + DRAFT_TTL_MS,
     posting: false,
   };
+  await showCreateDraft(interaction, draft);
+}
+
+async function showCreateDraft(interaction: ChatInputCommandInteraction, draft: ScoutCreateDraft) {
   drafts.set(draft.id, draft);
   setTimeout(() => {
     const current = drafts.get(draft.id);
     if (current?.expiresAt === draft.expiresAt) drafts.delete(draft.id);
   }, DRAFT_TTL_MS).unref();
   await interaction.showModal(detailsModal(draft));
+}
+
+export async function handleInhouseCreateCommand(interaction: ChatInputCommandInteraction, db: Database.Database): Promise<void> {
+  const guild = interaction.guild;
+  const inhouse = guild && getInhouseConfig(db, guild.id);
+  if (!guild || !inhouse?.roleId || !inhouse.channelId || !inhouse.messageId || interaction.channelId !== inhouse.channelId) {
+    await interaction.reply({ content: 'Run /inhouse create in the configured inhouse channel after setup is complete.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+  if (!await canHostInhouse(db, guild, interaction.user.id)) {
+    await interaction.reply({ content: 'React to the Inhouse opt-in message to get the role before hosting.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const channel = await guild.channels.fetch(inhouse.channelId);
+  if (!channel || channel.type !== ChannelType.GuildText || channel.parentId !== inhouse.categoryId) {
+    await interaction.reply({ content: 'The permanent inhouse channel binding needs an admin review.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const config = getScoutConfig(db, guild.id);
+  const emojiByRole = config && completeEmojiMap(config);
+  if (!config || !emojiByRole) {
+    await interaction.reply({ content: 'The play-role signup emojis need to be configured by an admin.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await showCreateDraft(interaction, {
+    id: randomUUID(), workflow: 'inhouse', guildId: guild.id, userId: interaction.user.id,
+    divisionId: null, divisionKey: 'inhouse', divisionDisplayName: 'Inhouse',
+    operationsChannelId: inhouse.channelId, signupChannelId: inhouse.channelId,
+    resultsChannelId: inhouse.channelId, divisionRoleId: inhouse.roleId,
+    eligibilityRoleId: null, emojiByRole, timezone: config.timezone, startInput: '', startAt: null,
+    roleLimit: 2, note: null, expiresAt: Date.now() + DRAFT_TTL_MS, posting: false,
+  });
 }
 
 function overlapConfirmationView(draft: ScoutCreateDraft, overlaps: ReturnType<typeof listOverlappingScoutSetups>) {
@@ -426,9 +466,13 @@ export async function handleScoutCreateRoleSelect(
 ): Promise<boolean> {
   if (!interaction.customId.startsWith(`${CUSTOM_ID_PREFIX}eligibility:`)) return false;
   const draft = getLiveDraft(interaction.customId.slice(`${CUSTOM_ID_PREFIX}eligibility:`.length));
+  if (draft?.workflow === 'inhouse') {
+    await interaction.reply({ content: 'Inhouses are open to everyone; an eligibility role cannot be added.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
   if (!draft || !(await recheckDraftAccess(interaction, draft, db))) {
     await interaction.reply({
-      content: 'This private scout setup expired, restarted, or you no longer have access. Run `/scout create` again.',
+      content: 'This private game setup expired, restarted, or you no longer have access. Run the creation command again.',
       flags: MessageFlags.Ephemeral,
     });
     return true;
@@ -449,6 +493,12 @@ async function recheckDraftAccess(
     interaction.user.id !== draft.userId ||
     interaction.channelId !== draft.operationsChannelId
   ) return false;
+  if (draft.workflow === 'inhouse') {
+    const config = getInhouseConfig(db, draft.guildId);
+    return Boolean(config?.roleId === draft.divisionRoleId && config?.channelId === draft.signupChannelId
+      && draft.resultsChannelId === config.channelId && draft.operationsChannelId === config.channelId
+      && await canHostInhouse(db, interaction.guild, interaction.user.id));
+  }
   const scope = await resolveScope(
     interaction.guild,
     interaction.user.id,
@@ -513,7 +563,8 @@ export async function handleScoutCreateButton(interaction: ButtonInteraction, db
   if (!draft) return handleScoutCreateButtonLocked(interaction, db);
   const release = tryAcquireDivisionOperation(db, draft.guildId, draft.divisionKey);
   if (!release) {
-    await interaction.reply({ content: 'This division has an operation in progress. Retry when it finishes.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: draft.workflow === 'inhouse' ? 'An inhouse operation is in progress. Retry when it finishes.'
+      : 'This division has an operation in progress. Retry when it finishes.', flags: MessageFlags.Ephemeral });
     return true;
   }
   try { return await handleScoutCreateButtonLocked(interaction, db); } finally { release(); }
@@ -530,7 +581,7 @@ async function handleScoutCreateButtonLocked(
   const draft = getLiveDraft(draftId);
   if (!draft || !(await recheckDraftAccess(interaction, draft, db))) {
     await interaction.reply({
-      content: 'This private scout setup expired, restarted, or you no longer have access. Run `/scout create` again.',
+      content: 'This private game setup expired, restarted, or you no longer have access. Run the creation command again.',
       flags: MessageFlags.Ephemeral,
     });
     return true;
@@ -542,11 +593,11 @@ async function handleScoutCreateButtonLocked(
   }
   if (action === 'cancel') {
     drafts.delete(draft.id);
-    await interaction.update({ content: 'Scout setup cancelled. Nothing was posted.', components: [] });
+    await interaction.update({ content: `${scoutGameName(draft)} setup cancelled. Nothing was posted.`, components: [] });
     return true;
   }
   if (draft.posting) {
-    await interaction.reply({ content: 'This scout setup is already being posted.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'This game setup is already being posted.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (draft.startAt === null) {
@@ -568,6 +619,7 @@ async function handleScoutCreateButtonLocked(
   try {
     setup = createScoutSetup(db, {
       guildId: draft.guildId,
+      workflow: draft.workflow,
       divisionId: draft.divisionId,
       divisionKey: draft.divisionKey,
       divisionDisplayName: draft.divisionDisplayName,
@@ -618,6 +670,6 @@ async function handleScoutCreateButtonLocked(
   }
 
   drafts.delete(draft.id);
-  await interaction.editReply({ content: `Scout signups posted: ${signupMessage.url}`, components: [] });
+  await interaction.editReply({ content: `${scoutGameName(draft)} signups posted: ${signupMessage.url}`, components: [] });
   return true;
 }
