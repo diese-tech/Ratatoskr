@@ -48,5 +48,6 @@ test('unmatched technical validation messages use safe guidance rather than leak
     assert.doesNotMatch(guidance, /privileged|integration-owned|not editable|proven pre-write|UNRECOGNIZED_DETAIL|private-value/);
     assert.match(guidance, /admin|staff/i);
     assert.doesNotMatch(guidance, /before trying|try again/i);
+    assert.doesNotMatch(leagueValidationMessage(message, 'read-only'), /Some changes may already have happened/);
   }
 });

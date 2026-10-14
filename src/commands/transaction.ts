@@ -169,7 +169,7 @@ export async function replyToTransactionValidation(
   error: unknown,
 ): Promise<boolean> {
   if (!(error instanceof LeagueMutationValidationError)) return false;
-  await interaction.editReply(`Rat cannot show this player change yet: ${leagueValidationMessage(error.message)}\n\nNo changes were made.`);
+  await interaction.editReply(`Rat cannot show this player change yet: ${leagueValidationMessage(error.message, 'read-only')}\n\nNo changes were made.`);
   return true;
 }
 

@@ -67,8 +67,13 @@ const readableLeagueValidationMessages = new Set([
   'This saved action was not found in this server. Check its reference.',
   'Confirm that both Discord accounts belong to the same player.',
 ]);
-export function leagueValidationMessage(message: string): string {
-  return readableLeagueValidationMessages.has(message) ? message : savedLeagueErrorMessage(message);
+export function leagueValidationMessage(message: string, outcome: 'read-only' | 'unknown' = 'unknown'): string {
+  if (readableLeagueValidationMessages.has(message)
+    || /^<@[A-Za-z0-9_-]+> is (?:not rostered on an active YSL team|not registered in Player Name History)\.$/.test(message)) return message;
+  const guidance = savedLeagueErrorMessage(message);
+  if (outcome === 'read-only' && /Some changes may already have happened/i.test(guidance))
+    return 'Rat could not prepare this player change. Ask staff to check the selected players, roles and league records.';
+  return guidance;
 }
 
 /** Only for a typed repair failure that guarantees no external write occurred. */
