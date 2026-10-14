@@ -101,7 +101,7 @@ test('cancelling a short throttle wait prevents retry and retains the shared coo
   controller.abort(Error('cancel wait'));
   await assert.rejects(() => read, /cancel wait/);
   await assert.rejects(() => new DiscordLeagueGateway(guild, 'transactions', { now: () => now })
-    .getMembers({ observation: true }), /cooldown/);
+    .getMembers({ observation: true }), /Discord asked Rat to wait/);
   assert.equal(fetches, 1);
   now = 261;
   finishWait();
@@ -118,14 +118,14 @@ test('incomplete collections and member changes during a full fetch cannot becom
     return new Collection([['one', member]]);
   } } } as unknown as Guild;
   const gateway = new DiscordLeagueGateway(guild, 'transactions');
-  await assert.rejects(() => gateway.getMembers(), /incomplete or changed/);
+  await assert.rejects(() => gateway.getMembers(), /could not check every Discord member/);
   (guild as unknown as { memberCount: number }).memberCount = 1;
   changed = true;
-  await assert.rejects(() => gateway.getMembers({ observation: true }), /incomplete or changed/);
+  await assert.rejects(() => gateway.getMembers({ observation: true }), /could not check every Discord member/);
   changed = false;
   assert.equal((await gateway.getMembers()).length, 1);
   (guild as unknown as { memberCount: number }).memberCount = 2;
-  await assert.rejects(() => gateway.getMembers({ observation: true }), /incomplete or changed/);
+  await assert.rejects(() => gateway.getMembers({ observation: true }), /could not check every Discord member/);
 });
 
 test('guild/session scoping shares wrappers but never combines another guild or Client', async () => {
@@ -152,8 +152,8 @@ test('a second throttle stops recovery rather than entering a hot retry loop', a
   } } } as unknown as Guild;
   const gateway = new DiscordLeagueGateway(guild, 'transactions', { now: () => now,
     sleep: async (ms) => { now += ms; } });
-  await assert.rejects(() => gateway.getMembers(), /Gateway.*cooldown/i);
-  await assert.rejects(() => gateway.getMembers({ observation: true }), /Gateway.*cooldown/i);
+  await assert.rejects(() => gateway.getMembers(), /Discord asked Rat to wait/i);
+  await assert.rejects(() => gateway.getMembers({ observation: true }), /Discord asked Rat to wait/i);
   assert.equal(fetches, 2);
   assert.equal(leagueMemberReadDiagnostics(guild).waits, 1);
 });
@@ -276,7 +276,7 @@ test('account replacement proof rejects cached member fallback and preserves exp
   const gateway = new DiscordLeagueGateway(guild, 'notices');
   await gateway.getMembers();
   limited = true;
-  await assert.rejects(() => gateway.getAccountReplacementMembers(), /Gateway.*cooldown/i);
+  await assert.rejects(() => gateway.getAccountReplacementMembers(), /Discord asked Rat to wait/i);
   member.user.bot = true;
   assert.equal((await gateway.getAccountReplacementMember('new'))?.bot, true);
   assert.equal((await gateway.getAccountReplacementMember('new'))?.guildId, 'g');
@@ -401,10 +401,10 @@ test('a Gateway cooldown is shared, honors a long retry_after and never falls ba
   await gateway.getMembers();
   now = 60_001;
   member.roles.cache.set('division-v', {});
-  await assert.rejects(() => gateway.getMembers(), /Gateway.*cooldown/i);
+  await assert.rejects(() => gateway.getMembers(), /Discord asked Rat to wait/i);
   const other = new DiscordLeagueGateway(guild, 'transactions', { now: () => now });
   now = 120_002; // More than the old 60-second clamp, still inside Discord's cooldown.
-  await assert.rejects(() => other.getMembers({ observation: true }), /Gateway.*cooldown/i);
+  await assert.rejects(() => other.getMembers({ observation: true }), /Discord asked Rat to wait/i);
   assert.equal(fetches, 2);
   now = 180_352;
   assert.deepEqual((await other.getMembers())[0]?.roleIds.sort(), ['division-v', 'team-a']);

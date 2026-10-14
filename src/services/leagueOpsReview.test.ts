@@ -56,7 +56,7 @@ test('private operations preserve original repair errors, distinguish actions an
     assert.equal(result.operations[0]?.error, error);
     assert.equal(result.operations[0]?.action, 'repair-roles');
     assert.equal(result.operations[0]?.canRepreview, false);
-    assert.match(result.operations[0]!.next, /roster\/name/);
+    assert.match(result.operations[0]!.next, /Roster problems/);
     assert.ok(result.issues.some(issue => issue.oldDiscordId === 'one'));
     f.deny();
     await assert.rejects(() => f.service.snapshot('admin'), /revoked/);
@@ -110,10 +110,10 @@ test('account replacement requires a current absent-account issue and exact expl
   const f = await leagueOpsReviewFixture();
   try {
     const issue = (await f.service.snapshot('admin')).issues.find(issue => issue.oldDiscordId === 'one')!;
-    await assert.rejects(() => f.service.previewReplacement('admin', issue.key, 'two', 'new'), /finding changed/);
+    await assert.rejects(() => f.service.previewReplacement('admin', issue.key, 'two', 'new'), /problem changed/);
     const preview = await f.service.previewReplacement('admin', issue.key, 'one', 'new');
     assert.equal(f.gateway.writes.length, 0);
-    await assert.rejects(() => f.service.confirmReplacement('admin', preview, false), /attest/i);
+    await assert.rejects(() => f.service.confirmReplacement('admin', preview, false), /both Discord accounts belong to the same player/i);
     const job = await f.service.confirmReplacement('admin', preview, true);
     assert.equal((await f.service.confirmReplacement('admin', preview, true)).reference, job.reference);
     assert.equal(job.type, 'account-replacement');
@@ -199,7 +199,7 @@ test('completed references and interrupted legacy repairs remain inspectable wit
     const legacy = (await f.service.snapshot('admin')).operations.find(operation => operation.reference === 'YSL-AUD-FIX-LEGACY');
     assert.equal(legacy?.canRecover, true);
     assert.equal(legacy?.error, 'Original role response lost');
-    await assert.rejects(() => f.service.operationDetail('admin', 'unknown'), /unavailable in this guild/i);
+    await assert.rejects(() => f.service.operationDetail('admin', 'unknown'), /not found in this server/i);
   } finally { f.close(); }
 });
 

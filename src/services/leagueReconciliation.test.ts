@@ -191,7 +191,7 @@ test('healthy startup restores one panel; independent drifts edit it in place; h
     };
     await runLeagueAudit(audit);
     assert.equal(cards.sent.length, 1);
-    assert.match(cards.sent[0]!.card.description, /Status: Healthy/);
+    assert.match(cards.sent[0]!.card.description, /Rosters: No problems found./);
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
     assert.equal(cards.sent.length, 1);
     f.snapshot.discordMembers[0]!.displayName = 'First';
@@ -344,7 +344,7 @@ test('SQLite reopen restores one authoritative panel and outstanding dirty retry
     await runLeagueAudit(auditInput());
     assert.equal(cards.sent.length, 1);
     assert.equal(getLeagueAuditState(db, 'g')?.currentMessageId, 'm1');
-    assert.match(cards.sent[0]!.card.description, /Status: Healthy/);
+    assert.match(cards.sent[0]!.card.description, /Rosters: No problems found./);
   } finally {
     worker.stop();
     db.close();
@@ -380,9 +380,9 @@ for (const status of [429, 503]) {
       assert.equal(state.lastFullAt, verifiedAt);
       assert.equal(state.findings.length, 1);
       assert.match(state.findings[0]!, /Discord name now/);
-      assert.match(cards.sent[0]!.card.description, new RegExp(String(status)));
+      assert.match(cards.sent[0]!.card.description, status === 429 ? /asked Rat to wait/ : /temporarily unavailable/);
       assert.match(cards.sent[0]!.card.description, /last verified reads/);
-      assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review issues');
+      assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'View roster problems');
       assert.equal(cards.sent.length, 1);
       unavailable = false;
       await runLeagueAudit(audit);
@@ -433,7 +433,7 @@ test('historical cleanup selects only bot-owned standalone alerts with an exact 
   assert.equal(isResolvedLeagueAlertMessage(message, 'rat', references), true);
   assert.equal(isResolvedLeagueAlertMessage({ ...message, author: { id: 'human' } }, 'rat', references), false);
   assert.equal(isResolvedLeagueAlertMessage({ ...message, content: message.content + '-open' }, 'rat', references), false);
-  assert.equal(isResolvedLeagueAlertMessage({ ...message, content: 'League Ops Status\nReference: YSL-REC-resolved' }, 'rat', references), false);
+  assert.equal(isResolvedLeagueAlertMessage({ ...message, content: 'League Status\nReference: YSL-REC-resolved' }, 'rat', references), false);
   assert.equal(isResolvedLeagueAlertMessage(message, undefined, references), false);
 });
 
@@ -448,11 +448,11 @@ test('duplicate malformed roster diagnostics remain readable in the persistent p
     const findings = listLeagueFindings(f.db, 'g').flatMap((entry) => entry.findings);
     assert.ok(findings.length > 0);
     assert.ok(findings.every((finding) => typeof finding === 'string'));
-    assert.match(cards.sent[0]!.card.description, /Attention required/);
-    assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review issues');
+    assert.match(cards.sent[0]!.card.description, /Problems need review/);
+    assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'View roster problems');
     f.db.prepare("UPDATE league_findings SET findings_json='[null]' WHERE guild_id='g'").run();
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
-    assert.match(cards.sent[0]!.card.description, /Attention required/);
+    assert.match(cards.sent[0]!.card.description, /Problems need review/);
     assert.ok(listLeagueFindings(f.db, 'g').every((entry) => entry.findings.every((finding) => typeof finding === 'string')));
   } finally { f.worker.stop(); f.db.close(); }
 });
@@ -474,13 +474,13 @@ test('partial operations expose recovery controls and prevent legacy alert clean
     createLeagueAuditRepair(f.db, { reference: 'old-repair', guildId: 'g', actorUserId: 'old-admin', auditReference: 'old', finding: 'Old finding', action: 'use-discord-name' });
     markLeagueAuditRepairReconciliationRequired(f.db, 'old-repair', 'Interrupted');
     await runLeagueAudit({ ...input, trigger: 'scheduled' });
-    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Review operations'));
-    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Recheck roster'));
+    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'View unfinished fixes'));
+    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Check rosters again'));
     assert.deepEqual(cleanups, []);
     const preview = await previewLeagueRepairRecovery(input, 'old-repair');
     await reconcileLeagueRepairRecord({ ...input, reference: 'old-repair', actorUserId: 'admin', expectedFingerprint: preview.fingerprint });
     await assert.rejects(refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now }), /cleanup unavailable/);
-    assert.match(cards.sent[0]!.card.description, /Status: Healthy/);
+    assert.match(cards.sent[0]!.card.description, /Rosters: No problems found./);
     failCleanup = false;
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
@@ -523,7 +523,7 @@ test('targeted convergence after a dirty full audit cannot authorize legacy clea
     f.snapshot.discordMembers[0]!.displayName = original;
     await checkLeagueMember({ ...f.input, discordId: 'one', now: new Date(now.getTime() + 60_000) });
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now: new Date(now.getTime() + 60_000) });
-    assert.match(cards.sent[0]!.card.description, /Status: Healthy/);
+    assert.match(cards.sent[0]!.card.description, /Rosters: No problems found./);
     assert.deepEqual(cleaned, []);
     const cleanAt = new Date(now.getTime() + 120_000);
     await runLeagueAudit({ ...input, trigger: 'scheduled', now: cleanAt });
@@ -541,10 +541,10 @@ test('transaction-only interruptions do not advertise an audit-repair recovery b
     createLeagueTransaction(f.db, { reference: 'old-transaction', guildId: 'g', kind: 'trade', actorUserId: 'admin', payload: {} });
     markLeagueTransactionReconciliationRequired(f.db, 'old-transaction', 'Interrupted transaction');
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
-    assert.ok(!cards.sent[0]!.card.actions?.some((action) => action.label === 'Review operations'));
-    assert.doesNotMatch(cards.sent[0]!.card.description, /Select Review operations/);
-    assert.match(cards.sent[0]!.card.description, /transaction notice\/history for: old-transaction/);
-    assert.match(cards.sent[0]!.card.description, /Do not replay the transaction/);
+    assert.ok(!cards.sent[0]!.card.actions?.some((action) => action.label === 'View unfinished fixes'));
+    assert.doesNotMatch(cards.sent[0]!.card.description, /Select View unfinished fixes/);
+    assert.match(cards.sent[0]!.card.description, /transaction posts\/history for: old-transaction/);
+    assert.match(cards.sent[0]!.card.description, /Do not run the player change again/);
   } finally { f.worker.stop(); f.db.close(); }
 });
 

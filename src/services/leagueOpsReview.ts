@@ -72,24 +72,24 @@ export class LeagueOpsReviewService {
     const canRecover = job.status === 'RECONCILIATION_REQUIRED'
       && (job.type === 'repair' ? getLeagueAuditRepair(this.input.db, job.reference)?.status === 'reconciliation_required'
         : job.type === 'account-replacement' && getAccountReplacement(this.input.db, this.input.guildId, job.reference)?.status === 'reconciliation_required');
-    const next = job.status === 'COMPLETED' ? 'Completed. Stored history remains available; do not repeat this operation.'
-      : ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING'].includes(job.status) ? 'Ratatoskr is processing this operation. Refresh for its durable result.'
-      : job.status === 'RECONCILIATION_REQUIRED' ? 'Inspect the saved operation and fresh Discord/Sheets/history. Do not replay a possibly partial write.'
-      : job.status === 'RETRYING' ? 'Ratatoskr will retry automatically. Refresh this view for current state.'
-      : canRepreview ? 'Request a fresh preview of these selections, then explicitly confirm.'
-      : job.type === 'repair' ? 'Inspect current roster/name Issues. If no matching issue remains, no repeat repair is needed. Original attempts remain as evidence.'
-      : 'Review current state and configuration. No generic retry is available.';
+    const next = job.status === 'COMPLETED' ? 'Finished. The history is saved; do not run this action again.'
+      : ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING'].includes(job.status) ? 'Rat is working on this action. Refresh to check its progress; do not submit it again.'
+      : job.status === 'RECONCILIATION_REQUIRED' ? 'Check the saved action, Discord, sheets and history. Some changes may already have happened. Do not run it again.'
+      : job.status === 'RETRYING' ? 'Rat will try again automatically. Refresh to check progress.'
+      : canRepreview ? 'Preview the player change again, review it, then confirm.'
+      : job.type === 'repair' ? 'Check Roster problems for this player. If the problem is gone, no new fix is needed. Earlier attempts stay in history.'
+      : 'Check the latest records and settings with staff before trying another action.';
     const targets = ids.length ? ids.map(id => this.memberLabel(id)) : expectedFinding ? [expectedFinding] : [];
     if (selections[0] === 'pickup' && typeof selections[2] === 'string') targets.push(`Team role: ${this.input.roleLabel?.(selections[2]) ?? selections[2]}`);
     if (selections[0] === 'rename' && typeof selections[2] === 'string') targets.push(`Requested league name: ${selections[2]}`);
     const originalReference = typeof payload.reconcileReference === 'string' ? payload.reconcileReference : payload.mode === 'reconcile' ? payload.reference : undefined;
-    if (typeof originalReference === 'string') targets.push(`Reconciliation of original record: ${originalReference}`);
+    if (typeof originalReference === 'string') targets.push(`Checking the earlier saved action: ${originalReference}`);
     const acknowledged = job.result && typeof job.result === 'object' && 'manuallyReconciled' in job.result && job.result.manuallyReconciled;
     return { reference: job.reference, type: job.type, status: acknowledged ? 'RECONCILED' : job.status, action: originalReference ? `reconcile ${job.type}` : action,
       targets,
-      actor: typeof payload.actorName === 'string' ? payload.actorName : typeof payload.actorUserId === 'string' ? this.memberLabel(payload.actorUserId) : 'Background worker',
+      actor: typeof payload.actorName === 'string' ? payload.actorName : typeof payload.actorUserId === 'string' ? this.memberLabel(payload.actorUserId) : 'Rat',
       createdAt: job.createdAt, attempts: job.attemptCount, error: job.lastError ?? 'No saved error.',
-      next: acknowledged ? 'Explicitly reconciled against fresh state. The original mutation was not replayed.' : next, canRepreview, canRecover };
+      next: acknowledged ? 'Checked against the latest records and closed. The original change was not run again.' : next, canRepreview, canRecover };
   }
   private legacyRepair(reference: string): LeagueOpsOperation | undefined {
     const repair = getLeagueAuditRepair(this.input.db, reference);
@@ -98,17 +98,17 @@ export class LeagueOpsReviewService {
     const reconciled = getLeagueRepairResolution(this.input.db, this.input.guildId, reference);
     return { reference, type: 'repair', action: repair.action, status: reconciled ? 'RECONCILED' : ['applying', 'reconciliation_required'].includes(repair.status) ? 'RECONCILIATION_REQUIRED' : repair.status.toUpperCase(),
       targets: [repair.finding], actor: this.memberLabel(repair.actorUserId), createdAt: timestamp.created_at, attempts: 0,
-      error: repair.errorMessage ?? 'Legacy repair record; inspect the saved outcome.', canRepreview: false,
+      error: repair.errorMessage ?? 'Earlier fix; check the saved result.', canRepreview: false,
       canRecover: !reconciled && repair.status === 'reconciliation_required',
-      next: reconciled ? 'Explicitly reconciled against fresh state. The original mutation was not replayed.' : repair.status === 'completed' ? 'Completed. Preserved history is read-only.'
-        : 'Inspect fresh convergence and preserved name/history records before explicitly acknowledging reconciliation. The old mutation will not be replayed.' };
+      next: reconciled ? 'Checked against the latest records and closed. The original change was not run again.' : repair.status === 'completed' ? 'Finished. The history is kept for review.'
+        : 'Check that Discord and the sheets agree, then review the saved names and history before closing this action. The old change will not run again.' };
   }
   async operationDetail(actor: string, reference: string): Promise<LeagueOpsOperation> {
     await this.authorize(actor);
     const job = getLeagueJob(this.input.db, reference);
     const detail = job?.guildId === this.input.guildId && ['transaction', 'repair', 'account-replacement'].includes(job.type)
       ? this.operation(job) : this.legacyRepair(reference);
-    if (!detail) throw new LeagueMutationValidationError('This operation reference is unavailable in this guild.');
+    if (!detail) throw new LeagueMutationValidationError('This saved action was not found in this server. Check its reference.');
     return detail;
   }
   async snapshot(actor: string): Promise<LeagueOpsSnapshot> {
@@ -127,14 +127,14 @@ export class LeagueOpsReviewService {
   async previewReplacement(actor: string, issueKey: string, oldId: string, newId: string): Promise<AccountReplacementPreview> {
     const current = await this.snapshot(actor);
     if (!current.issues.some(issue => issue.key === issueKey && issue.oldDiscordId === oldId))
-      throw new LeagueMutationValidationError('This absent-account finding changed. Refresh Issues before choosing an account replacement.');
+      throw new LeagueMutationValidationError('This player’s account or roster problem changed. Refresh Roster problems before choosing an account change.');
     const preview = await this.input.replacement.preview(actor, oldId, newId);
     await this.authorize(actor);
     return preview;
   }
   async confirmReplacement(actor: string, preview: AccountReplacementPreview, samePlayerConfirmed: boolean) {
     await this.authorize(actor);
-    if (!samePlayerConfirmed) throw new LeagueMutationValidationError('Attest that the exact accounts belong to the same continuing player.');
+    if (!samePlayerConfirmed) throw new LeagueMutationValidationError('Confirm that both Discord accounts belong to the same player.');
     return this.input.replacement.confirm({ actorUserId: actor, oldDiscordId: preview.plan.oldDiscordId,
       newDiscordId: preview.plan.newDiscordId, expectedFingerprint: preview.fingerprint,
       approvalReference: preview.approvalReference, samePlayerConfirmed: true });

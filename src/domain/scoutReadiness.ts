@@ -21,22 +21,22 @@ export function scoutReadinessSnapshot(signups: readonly ScoutSignupRecord[], ga
 export type ScoutReadinessSnapshot = ReturnType<typeof scoutReadinessSnapshot>;
 
 export function renderScoutReadiness(snapshot: ScoutReadinessSnapshot, historical = false): string {
-  const lines = [historical ? '**Last recorded signup snapshot**' : '**Readiness**',
-    `**${snapshot.players}/${snapshot.requiredPlayers} unique eligible players**`,
+  const lines = [historical ? '**Last saved signup check**' : '**Readiness**',
+    `**${snapshot.players}/${snapshot.requiredPlayers} players who can join**`,
     ...snapshot.roles.map(({ role, count, compatible }) =>
       `${compatible < snapshot.requiredPerRole ? '⚠️' : '•'} ${SCOUT_ROLE_LABELS[role]} **${count}/${snapshot.requiredPerRole}**`),
-    `Fill: **${snapshot.fill} eligible**`];
-  if (snapshot.overflow !== null) lines.push(`Eligible unseated players: **${snapshot.overflow}**`);
+    `Fill: **${snapshot.fill} players**`];
+  if (snapshot.overflow !== null) lines.push(`Players waiting for a team: **${snapshot.overflow}**`);
   if (!historical) {
     if (snapshot.feasible) lines.push('✅ A complete roster can be formed.');
-    else if (snapshot.players < snapshot.requiredPlayers) lines.push(`Waiting on ${snapshot.requiredPlayers - snapshot.players} more eligible players and compatible role coverage.`);
+    else if (snapshot.players < snapshot.requiredPlayers) lines.push(`Need ${snapshot.requiredPlayers - snapshot.players} more players, with enough players for each play role.`);
     else {
       const missing = snapshot.roles.filter((role) => role.compatible < snapshot.requiredPerRole);
-      lines.push(missing.length ? `Waiting on: ${missing.map(({ role }) => SCOUT_ROLE_LABELS[role]).join(', ')} coverage (including Fill).`
-        : 'Role overlap prevents a complete assignment of unique players.');
+      lines.push(missing.length ? `Need players for: ${missing.map(({ role }) => SCOUT_ROLE_LABELS[role]).join(', ')}. Fill players can cover these roles.`
+        : 'There are enough players, but their chosen roles do not fill every team spot yet.');
     }
-    if (snapshot.unavailableDraftPlayers) lines.push(`⚠️ Current draft needs attention: ${snapshot.unavailableDraftPlayers} withdrawn or ineligible player(s).`);
+    if (snapshot.unavailableDraftPlayers) lines.push(`⚠️ Teams need checking: ${snapshot.unavailableDraftPlayers} player(s) withdrew or can no longer join.`);
   }
-  lines.push(`Recorded: <t:${snapshot.recordedAt}:F>${historical ? ' • Historical signups; availability is not confirmed.' : ''}`);
+  lines.push(`Checked: <t:${snapshot.recordedAt}:F>${historical ? ' • These are past signups; players may no longer be available.' : ''}`);
   return lines.join('\n');
 }

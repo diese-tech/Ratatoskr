@@ -43,7 +43,7 @@ import { parseScoutStartTime } from '../domain/scoutTime.js';
 import { SCOUT_ROLES, SCOUT_SIGNUP_ROLES, type ScoutRole } from '../domain/index.js';
 import { canHostInhouse, hasScoutDivisionManagementAccess } from './scoutAuthorization.js';
 import { getInhouseConfig } from '../db/repositories/inhouse.js';
-import { scoutGameName } from './scoutGamePresentation.js';
+import { scoutGameName, scoutGameStatusLabel } from './scoutGamePresentation.js';
 import { resolveScoutChannelGroupForDivision, type ScoutChannelGroup } from './scoutChannels.js';
 import { renderScoutSignupPost } from './scoutSignupPost.js';
 
@@ -437,7 +437,7 @@ function overlapConfirmationView(draft: ScoutCreateDraft, overlaps: ReturnType<t
     const link = setup.signupMessageId
       ? `https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}`
       : '_signup post is still being created_';
-    return `- ${setup.divisionDisplayName} — ${setup.status} — ${link}`;
+    return `- ${setup.divisionDisplayName} — ${scoutGameStatusLabel(setup.status)} — ${link}`;
   });
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()

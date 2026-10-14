@@ -28,7 +28,7 @@ const MAX_INTERACTIVE_WAIT_MS = 5_000;
 
 export class LeagueMemberGatewayThrottleError extends Error {
   constructor(readonly retryAfterMs: number) {
-    super(`Discord Gateway member-request cooldown: retry in ${Math.ceil(retryAfterMs / 1_000)} seconds. No roster changes were made by this read.`);
+    super(`Discord asked Rat to wait. Try checking again in ${Math.ceil(retryAfterMs / 1_000)} seconds. No roster changes were made by this check.`);
   }
 }
 
@@ -43,7 +43,7 @@ function throttleDelay(error: unknown, guildId: string): number | undefined {
 }
 
 export class LeagueMemberSnapshotUnavailableError extends Error {
-  constructor(message = 'Discord member snapshot is incomplete or changed during the read. Retry a fresh check.') {
+  constructor(message = 'Rat could not check every Discord member, or someone changed while it was checking. Try checking again.') {
     super(message);
   }
 }

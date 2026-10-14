@@ -525,7 +525,7 @@ test('a partial working roster can replace an occupied slot', async (t) => {
       f.db,
     );
 
-    assert.match(f.replies.at(-1).content, /Eligible signup seated/);
+    assert.match(f.replies.at(-1).content, /Player added to the team/);
     assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.id === target.id)?.userId, 'replacement-jungle');
     assert.equal(getScoutSetupById(f.db, f.setup.id)!.status, 'open');
   } finally {

@@ -98,7 +98,7 @@ async function baseCardView(
         lifecycleCleanup?.action === 'finished'
           ? `Finished by <@${completion.finished_by}> automatically.`
           : `Finished by <@${completion.finished_by}> at <t:${Math.floor(Date.parse(completion.finished_at) / 1000)}:F>.`,
-        completion.posts_reconciled ? '' : 'Discord post cleanup is pending. Retry after access is restored.',
+        completion.posts_reconciled ? '' : 'Rat still needs to update the Discord posts. Once access is fixed, use Retry updating posts.',
         ].filter(Boolean).join('\n'),
         color: 0x22c55e,
       }],
@@ -115,7 +115,7 @@ async function baseCardView(
       signupEligibility ? Promise.resolve([]) : storage.listSignups(setup.id),
     ]);
     const unavailableUsers = new Set(withdrawnUserIds);
-    const warning = unavailable ? `⚠️ Live eligibility could not be verified. ${unavailable}` : '';
+    const warning = unavailable ? `⚠️ Rat could not check who can join right now. ${unavailable}` : '';
     const prefixLength = warning.length + (warning ? 1 : 0);
     const view = buildScoutWorkingRosterView(
       setup,
@@ -163,7 +163,7 @@ async function baseCardView(
           `Start: <t:${setup.startAt}:F>`,
           `Created by <@${setup.createdBy}>`,
           lifecycleCleanup?.action === 'cancelled' ? `Cancelled by <@${lifecycleCleanup.actorUserId}> automatically.` : '',
-          !setup.signupPostReconciled ? 'Cancelled in the records; public post cleanup is pending. Use Retry post cleanup after access is restored.' : '',
+          !setup.signupPostReconciled ? 'The game is cancelled, but Rat still needs to update its signup post. Once access is fixed, use Retry updating posts.' : '',
           setup.signupMessageId ? `Signup: https://discord.com/channels/${setup.guildId}/${setup.signupChannelId}/${setup.signupMessageId}` : '',
         ].filter(Boolean).join('\n'),
         color: 0x6b7280,
@@ -176,15 +176,15 @@ async function baseCardView(
   const terminal = setup.status === 'published';
   const status = setup.status === 'open' ? 'collecting signups' : setup.status === 'roster_ready' ? 'roster ready'
     : setup.status === 'published' ? 'published' : 'posting';
-  const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No readiness snapshot was recorded.';
+  const readiness = saved ? renderScoutReadiness(saved, terminal || Boolean(unavailable)) : 'No signup check has been saved yet.';
   return { content: kind === 'control' && !terminal ? `<@${setup.createdBy}>` : '',
   embeds: [{
     title: `${scoutGameName(setup)} ${status}`,
     description: [
       `Start: <t:${setup.startAt}:F> • <t:${setup.startAt}:R>`,
       `Created by <@${setup.createdBy}>`,
-      setup.eligibilityRoleId ? `Eligibility: <@&${setup.eligibilityRoleId}>` : '',
-      unavailable ? `⚠️ Live readiness could not be verified. ${unavailable}` : '',
+      setup.eligibilityRoleId ? `Role needed to join: <@&${setup.eligibilityRoleId}>` : '',
+      unavailable ? `⚠️ Rat could not check the signups right now. ${unavailable}` : '',
       readiness,
       setup.status === 'roster_ready' ? 'Review and balance the roster here, then publish it to the signup channel.' : '',
       setup.status === 'published' && setup.resultMessageId

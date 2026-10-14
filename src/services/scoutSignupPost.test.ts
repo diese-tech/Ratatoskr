@@ -18,5 +18,5 @@ test('scout signup preview and public post share content but only the public pos
   assert.equal(posted.slice(posted.indexOf('\n') + 1), preview);
   assert.match(preview, /Vanaheim Scout Games/);
   assert.match(preview, /2 roles/);
-  assert.match(preview, /Eligibility: <@&silver-role>/);
+  assert.match(preview, /Role needed to join: <@&silver-role>/);
 });

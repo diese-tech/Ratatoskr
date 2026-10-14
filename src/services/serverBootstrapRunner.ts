@@ -11,6 +11,8 @@ import { yslGuildStructure, type GuildChannelSpec, type GuildRoleSpec } from '..
 import type { ManagedResource } from '../db/index.js';
 import type { ManagedResourceStore } from '../storage/index.js';
 import { STAFF_ROLES } from './divisions.js';
+import { savedLeagueErrorMessage } from './leaguePresentation.js';
+import { redactOperationalText } from './redactOperationalText.js';
 import {
   classifyMatch,
   currentServerLogicalKeys,
@@ -26,6 +28,13 @@ export type ServerBootstrapOptions = {
   apply: boolean;
   deleteObsolete: boolean;
 };
+
+export function serverSetupErrorMessage(message: string): string {
+  const duplicate = message.match(/^Role "([^"\n]+)" is ambiguous: (\d+) roles share that name/);
+  if (duplicate) return `Rat found ${duplicate[2]} Discord roles named “${redactOperationalText(duplicate[1]!)}”. Rename or remove the duplicate roles in Discord, then check the setup preview again.`;
+  if (/permission|access|50013|50001/i.test(message)) return 'Rat cannot change a required role or channel. Ask an admin to check its Discord permissions and role position.';
+  return 'Rat could not finish the server setup. Ask an admin to check the report and Discord before trying again.';
+}
 
 // Shared orchestration for Server Bootstrap v2 (#16): the ensure-or-adopt
 // and cleanup logic, extracted so both the standalone script
@@ -47,7 +56,16 @@ export async function runServerBootstrap(
   const { apply, deleteObsolete } = options;
 
   function logAction(action: string, detail: string) {
-    log(`${apply ? '[APPLY]' : '[DRY-RUN]'} ${action}: ${detail}`);
+    const labels: Record<string, string> = {
+      'role managed': 'Role already set up', 'role exists (adopting)': 'Use existing role', 'create role': 'Create role',
+      'category managed': 'Category already set up', 'category exists (adopting)': 'Use existing category', 'create category': 'Create category',
+      'channel managed': 'Channel already set up', 'channel exists (adopting)': 'Use existing channel', 'create channel': 'Create channel',
+    };
+    if (action.startsWith('stale managed')) {
+      log(`${apply ? 'Setup' : 'Preview'}: A saved role, category or channel is missing. Rat will check whether it needs replacing.`);
+      return;
+    }
+    log(`${apply ? 'Setup' : 'Preview'} · ${Object.hasOwn(labels, action) ? labels[action] : 'Needs review'}: ${detail}`);
   }
 
   async function resolveManagedRole(logicalKey: string): Promise<Role | undefined> {
@@ -174,7 +192,7 @@ export async function runServerBootstrap(
     if (match.outcome === 'ambiguous') {
       logAction(
         'category ambiguous',
-        `${spec.name}: ${match.candidates.length} candidates found, none adopted. Resolve manually; skipping this category and its channels this run.`,
+        `${spec.name}: ${match.candidates.length} matching categories found. Check duplicates in Discord. Rat left this category and its channels unchanged.`,
       );
       return null;
     }
@@ -265,7 +283,7 @@ export async function runServerBootstrap(
     if (match.outcome === 'ambiguous') {
       logAction(
         'channel ambiguous',
-        `${categoryName} / ${spec.name}: ${match.candidates.length} candidates found, none adopted. Resolve manually; skipping this channel this run.`,
+        `${categoryName} / ${spec.name}: ${match.candidates.length} matching channels found. Check duplicates and their categories in Discord. Rat left this channel unchanged.`,
       );
       return;
     }
@@ -315,7 +333,9 @@ export async function runServerBootstrap(
       resource.resourceType === 'role'
         ? guild.roles.cache.get(resource.discordResourceId)?.name
         : guild.channels.cache.get(resource.discordResourceId)?.name;
-    return `${resource.logicalKey} (${resource.resourceType}, discord id ${resource.discordResourceId}${current ? `, currently named "${current}"` : ', not found in Discord anymore'})`;
+    const type = resource.resourceType === 'role' ? 'role' : resource.resourceType === 'category' ? 'category'
+      : resource.resourceType === 'voice_channel' ? 'voice channel' : 'text channel';
+    return `${current ?? 'Missing item'} (${type}; Discord ID ${resource.discordResourceId}${current ? '' : '; already missing from Discord'})`;
   }
 
   async function runCleanup() {
@@ -323,9 +343,9 @@ export async function runServerBootstrap(
     const currentKeys = currentServerLogicalKeys(yslGuildStructure);
     const obsolete = detectObsoleteManagedResources(managed, currentKeys);
 
-    log('\n--- Cleanup preview ---');
+    log('\nOld roles and channels that could be removed:');
     if (obsolete.length === 0) {
-      log('No obsolete managed resources found.');
+      log('No old roles or channels need removing.');
       return;
     }
 
@@ -335,18 +355,18 @@ export async function runServerBootstrap(
 
     if (!deleteObsolete) {
       log(
-        '\nKeep Existing (default): the resources above were left untouched. ' +
-          'Re-run with --apply --delete-obsolete to remove exactly this set.',
+        '\nThe items above were kept. ' +
+          'To remove them, review this list first, then use `/server bootstrap apply delete_obsolete:true`.',
       );
       return;
     }
 
     if (!apply) {
-      log('\n--delete-obsolete requires --apply too; nothing was deleted in dry-run mode.');
+      log('\nThis is only a preview. Nothing was deleted.');
       return;
     }
 
-    log('\nDelete Obsolete: attempting to delete exactly the set previewed above.');
+    log('\nRemoving only the old items listed above.');
     const succeeded: ManagedResource[] = [];
     const failed: { resource: ManagedResource; error: string }[] = [];
 
@@ -370,17 +390,20 @@ export async function runServerBootstrap(
     for (const resource of succeeded) log(`  - ${describeObsolete(resource)}`);
 
     if (failed.length > 0) {
-      log(`\nFAILED to delete (${failed.length}) -- still active/managed, safe to retry:`);
-      for (const { resource, error } of failed) log(`  - ${describeObsolete(resource)}: ${error}`);
+      log(`\nCould not remove (${failed.length}). Rat keeps these on the list so removal can be tried again:`);
+      for (const { resource, error } of failed) {
+        console.error(redactOperationalText(`Server setup removal failed for ${resource.discordResourceId}: ${error}`));
+        log(`  - ${describeObsolete(resource)}: ${savedLeagueErrorMessage(error)}`);
+      }
     }
   }
 
   await guild.roles.fetch();
   await guild.channels.fetch();
 
-  log(`\nTarget guild: ${guild.name} (${guild.id})`);
-  log(apply ? 'MODE: APPLY — changes will be created/reconciled.' : 'MODE: DRY RUN — no Discord changes will be made.');
-  log('Existing unmatched roles/channels are preserved; restricted matching content is permission-reconciled.\n');
+  log(`\nServer: ${guild.name}`);
+  log(apply ? 'Setting up and repairing roles and channels.' : 'Preview only — no Discord changes will be made.');
+  log('Rat checks its standard roles, channels and permissions. Other roles and channels are kept.\n');
 
   const roleMap = new Map<string, Role>();
   for (const roleSpec of yslGuildStructure.roles) {
@@ -401,6 +424,6 @@ export async function runServerBootstrap(
   // populated managed_resources.
   await runCleanup();
 
-  log('\nBootstrap complete.');
-  if (!apply) log('Review the plan above, then rerun with --apply when ready.');
+  log('\nServer setup check complete.');
+  if (!apply) log('Review the list above, then use `/server bootstrap apply` when ready.');
 }

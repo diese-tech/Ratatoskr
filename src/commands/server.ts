@@ -6,8 +6,9 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { hasAccess } from '../services/authorization.js';
-import { runServerBootstrap } from '../services/serverBootstrapRunner.js';
+import { runServerBootstrap, serverSetupErrorMessage } from '../services/serverBootstrapRunner.js';
 import type { ManagedResourceStore } from '../storage/index.js';
+import { redactOperationalText } from '../services/redactOperationalText.js';
 
 // Guild ids with an in-flight `apply` run. A plain in-process Set is
 // sufficient (and never persisted) -- this only guards against two
@@ -80,7 +81,7 @@ export async function handleServerCommand(interaction: ChatInputCommandInteracti
   if (apply) {
     if (guildsRunningApply.has(interaction.guild.id)) {
       await interaction.editReply(
-        'A server bootstrap apply is already running for this server. Wait for it to finish before starting another.',
+        'Rat is already setting up this server. Wait for it to finish before starting again.',
       );
       return;
     }
@@ -93,6 +94,7 @@ export async function handleServerCommand(interaction: ChatInputCommandInteracti
     await runServerBootstrap(storage, interaction.guild, { apply, deleteObsolete }, (line) => lines.push(line));
   } catch (error) {
     errorMessage = (error as Error).message;
+    console.error(redactOperationalText(`Server setup stopped: ${errorMessage}`));
   } finally {
     if (apply) guildsRunningApply.delete(interaction.guild.id);
   }
@@ -101,12 +103,12 @@ export async function handleServerCommand(interaction: ChatInputCommandInteracti
   // it goes out as an attachment; the reply content is just a short summary
   // pointing at it.
   const attachment = new AttachmentBuilder(Buffer.from(lines.join('\n'), 'utf-8'), {
-    name: 'server-bootstrap-log.txt',
+    name: 'server-setup-report.txt',
   });
 
   const summary = errorMessage
-    ? `Server bootstrap ${apply ? 'apply' : 'plan'} stopped early: ${errorMessage}\nSee the attached log for what happened before the error.`
-    : `Server bootstrap ${apply ? 'apply' : 'plan'} complete. See the attached log for details.`;
+    ? `Server setup ${apply ? '' : 'preview '}stopped early. ${serverSetupErrorMessage(errorMessage)}\nCheck the attached report for any items Rat finished before stopping.`
+    : `Server setup ${apply ? '' : 'preview '}complete. See the attached report for details.`;
 
   await interaction.editReply({ content: summary, files: [attachment] });
 }

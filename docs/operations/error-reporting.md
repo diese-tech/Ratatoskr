@@ -1,5 +1,7 @@
 # Operational error reporting
 
+All Discord replies and staff alerts use plain English: what happened, whether changes were made when known, and what to do next. Technical error codes and stack traces stay in process logs. Users and staff see a shared support reference. An unknown failure never claims that nothing changed and never invites repeating an uncertain action. See the [command guide](command-reference.md) for everyday staff instructions.
+
 Ratatoskr sends concise actionable failures to the existing managed `staff-ops`
 channel. Detailed redacted error/stack data stays in Railway process logs. Private
 interaction replies and staff reports share a reference; search Railway for that

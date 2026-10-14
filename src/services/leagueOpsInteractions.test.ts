@@ -77,7 +77,7 @@ test('legacy confirmations acknowledge quickly but remain read-only despite dupl
       (db.prepare("SELECT count(*) count FROM league_jobs WHERE type='repair'").get() as { count: number }).count,
       0,
     );
-    assert.ok(replies.every(reply => reply[0]!.includes('read-only')));
+    assert.ok(replies.every(reply => reply[0]!.includes('only shows records')));
     beginDirtyLeagueAudit(db, {
       guildId: 'g',
       result: 'dirty',
@@ -88,7 +88,7 @@ test('legacy confirmations acknowledge quickly but remain read-only despite dupl
     });
     await handleLeagueAuditReviewButton(interaction(0), db, db);
     assert.equal(mutations, 0);
-    assert.match(replies[0]!.at(-1)!, /read-only/);
+    assert.match(replies[0]!.at(-1)!, /only shows records/);
     // No channel/client presentation path is supplied: duplicate/queue states
     // must only respond privately, never attempt a standalone staff alert.
   } finally {
@@ -110,7 +110,7 @@ test('stale component with no matching durable job fails closed before mutation'
       },
     } as unknown as ButtonInteraction;
     await handleLeagueAuditReviewButton(interaction, db, db);
-    assert.match(replies[0]!, /read-only/);
+    assert.match(replies[0]!, /only shows records/);
     assert.equal((db.prepare('SELECT count(*) count FROM league_jobs').get() as { count: number }).count, 0);
   } finally {
     db.close();
@@ -169,10 +169,10 @@ test('legacy recovery confirmations cannot bypass the private Fluxcord acknowled
     saveLeagueTransactionPreview(db, { guildId: 'g', actorUserId: 'admin', intentKey: 'repair-recovery:YSL-AUD-FIX-12345678', planFingerprint: fingerprint });
     await handleLeagueRepairRecoveryButton(interaction('stale'), db, db);
     assert.equal(events[0], 'ack');
-    assert.match(replies.at(-1)!, /read-only/);
+    assert.match(replies.at(-1)!, /only shows records/);
     assert.equal(executions, 0);
     await handleLeagueRepairRecoveryButton(interaction(approval, false), db, db);
-    assert.match(replies.at(-1)!, /Only league administrators/);
+    assert.match(replies.at(-1)!, /Only Allfather, Aesir and Valkyrie staff/);
     await handleLeagueRepairRecoveryButton(interaction(approval), db, db);
     await handleLeagueRepairRecoveryButton(interaction(approval), db, db);
     await new Promise((resolve) => setImmediate(resolve));

@@ -145,7 +145,7 @@ test('draft duplicates introduced during manual recovery cannot change protected
     const duplicate = [...f.gateway.rows('admin', 'Draft Picks')[5]!];
     duplicate[1] = 'The Sewer'; duplicate[3] = 2;
     f.gateway.rows('admin', 'Draft Picks').push(duplicate);
-    await assert.rejects(() => f.service.previewRecovery('admin', job.reference), /identity or status ownership are invalid/i);
+    await assert.rejects(() => f.service.previewRecovery('admin', job.reference), /player details or recorded moves.*need fixing/i);
     assert.equal(f.gateway.writes.length, 1);
   } finally { f.worker.stop(); f.db.close(); }
 });

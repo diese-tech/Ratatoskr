@@ -5,14 +5,14 @@ type Rows = (string | number | boolean | null)[][];
 export const DRAFT_PICK_FEATURE = 'feature:draft-picks';
 export function draftPickVerificationText(verification: PreparedAccountReplacementSheets['draftVerification']): string {
   switch (verification) {
-    case 'verified': return 'identity and move continuity checked';
-    case 'skipped:missing-tab': return 'tracking tab is missing; draft verification was skipped';
-    case 'skipped:empty-tab': return 'tracking tab is empty; draft verification was skipped';
-    case 'partial:unverified-slots': return 'tracking is incomplete; matched identity and move continuity checked; remaining slots are not verified';
+    case 'verified': return 'player and past moves checked';
+    case 'skipped:missing-tab': return 'Draft Picks is missing, so the player’s draft history could not be checked';
+    case 'skipped:empty-tab': return 'Draft Picks is empty, so the player’s draft history could not be checked';
+    case 'partial:unverified-slots': return 'draft records are incomplete; known player details and past moves were checked, but the other picks still need checking';
   }
 }
 export function draftPickHealthFinding(health: DraftPickHealth, checkedAt: Date): string {
-  return `${health.summary}\nNext: ${health.next}\nTracking checked: ${checkedAt.toISOString()}`;
+  return `${health.summary}\nNext: ${health.next}\nDraft picks checked: ${checkedAt.toISOString()}`;
 }
 export type DraftPickHealth = {
   status: 'ready' | 'partial' | 'empty-tab' | 'missing-tab' | 'invalid-schema' | 'invalid-range'
@@ -29,7 +29,7 @@ export class DraftPickTrackingError extends Error {
     this.status = health.httpStatus;
   }
 }
-const action = 'Use the approved Draft Picks setup runbook, then recheck tracking.';
+const action = 'Ask an admin to follow the approved Draft Picks setup guide, then check again.';
 const adminTabs = ['League Teams', 'Current Rosters', 'Player Name History', 'Transaction History'];
 function httpStatus(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
@@ -39,13 +39,13 @@ function httpStatus(error: unknown): number | undefined {
 function readFailure(error: unknown): DraftPickHealth {
   const status = httpStatus(error);
   const failures: Partial<Record<number, Pick<DraftPickHealth, 'status' | 'summary' | 'next'>>> = {
-    400: { status: 'invalid-request', summary: 'Draft tracking not verified: Sheets rejected the request (400).', next: 'Review the configured Admin workbook and range; this is not confirmed tab absence.' },
-    403: { status: 'permission-denied', summary: 'Draft tracking not verified: Admin workbook access denied (403).', next: 'Restore the bot service account’s existing workbook access, then recheck.' },
-    404: { status: 'workbook-unavailable', summary: 'Draft tracking not verified: Admin workbook unavailable (404).', next: 'Verify the configured Admin workbook ID and existing access, then recheck.' },
-    429: { status: 'quota', summary: 'Draft tracking not verified: Google Sheets quota reached (429).', next: 'Let the existing Sheets cooldown finish, then recheck.' },
-    503: { status: 'service-unavailable', summary: 'Draft tracking not verified: Google Sheets temporarily unavailable (503).', next: 'Recheck after the service recovers.' },
+    400: { status: 'invalid-request', summary: 'Draft picks not checked: Google Sheets could not read the requested cells.', next: 'Ask an admin to check which sheet and cells Rat is using. Do not create a new Draft Picks tab yet.' },
+    403: { status: 'permission-denied', summary: 'Draft picks not checked: Rat cannot open the Admin sheet.', next: 'Ask an admin to restore Rat’s access to the sheet, then check again.' },
+    404: { status: 'workbook-unavailable', summary: 'Draft picks not checked: Rat could not find or open the Admin sheet.', next: 'Ask an admin to check that Rat has the correct sheet and can open it, then check again.' },
+    429: { status: 'quota', summary: 'Draft picks not checked: Google Sheets asked Rat to wait.', next: 'Wait for Google Sheets to allow another check, then check again.' },
+    503: { status: 'service-unavailable', summary: 'Draft picks not checked: Google Sheets is temporarily unavailable.', next: 'Recheck after the service recovers.' },
   };
-  return { ...(failures[status ?? 0] ?? { status: 'read-failed', summary: 'Draft tracking not verified: required source could not be read.', next: 'Inspect the configured Admin workbook and retry a fresh read.' }), httpStatus: status };
+  return { ...(failures[status ?? 0] ?? { status: 'read-failed', summary: 'Draft picks not checked: Rat could not read all required records.', next: 'Ask an admin to check the Admin sheet, then check again.' }), httpStatus: status };
 }
 function isRangeError(error: unknown): boolean {
   const value = error as { message?: unknown; response?: { data?: { error?: { message?: unknown } } } } | null;
@@ -54,13 +54,13 @@ function isRangeError(error: unknown): boolean {
 }
 
 export function validateDraftPickTable(headers: Rows, rows: Rows, options: { allowCorrectedStatusOwner?: boolean } = {}): DraftPickHealth {
-  const invalid: DraftPickHealth = { status: 'invalid-schema', summary: 'Draft tracking not verified: columns, pick identity or status ownership are invalid.',
+  const invalid: DraftPickHealth = { status: 'invalid-schema', summary: 'Draft picks not checked: the columns, player details or recorded moves in Draft Picks need fixing.',
     next: 'Review row 5 and columns A–J; preserve existing IDs, account links and move status before repair.' };
   const populated = rows.filter(row => row.some(cell => String(cell ?? '').trim()));
   if (!headers.length && !populated.length)
-    return { status: 'empty-tab', summary: 'Draft tracking not verified: Draft Picks is empty.', next: action };
+    return { status: 'empty-tab', summary: 'Draft picks not checked: Draft Picks is empty.', next: action };
   if (DRAFT_PICK_HEADERS.some((header, index) => String(headers[0]?.[index] ?? '').trim() !== header)) return invalid;
-  if (!populated.length) return { status: 'empty-tab', summary: 'Draft tracking not verified: Draft Picks has no pick rows.', next: action };
+  if (!populated.length) return { status: 'empty-tab', summary: 'Draft picks not checked: Draft Picks has no players listed.', next: action };
   const ids = new Set<string>();
   const slots = new Set<string>();
   for (const row of populated) {
@@ -82,9 +82,9 @@ export function validateDraftPickTable(headers: Rows, rows: Rows, options: { all
   const unresolved = populated.filter(row => !String(row[5] ?? '').trim()).length;
   if (populated.length !== 96 || problems.length || unresolved
     || populated.some(row => String(row[8]).trim() === 'Unknown' || (String(row[9] ?? '').trim() && row[9] !== row[5])))
-    return { status: 'partial', summary: `Draft tracking incomplete: ${populated.length}/96 slots; ${unresolved} unresolved identities. Unmatched players are not verified.`,
-      next: 'Review the seed dry-run and correct unresolved IDs in column F before verifying tracking.' };
-  return { status: 'ready', summary: 'Draft tracking ready: 96 resolved top-four picks.', next: 'No setup action needed.' };
+    return { status: 'partial', summary: `Draft picks are incomplete: ${populated.length}/96 picks listed; ${unresolved} players still need matching to their Discord accounts. These players have not been checked.`,
+      next: 'Review the setup preview and fix missing or incorrect Discord IDs in column F, then check again.' };
+  return { status: 'ready', summary: 'Draft picks checked: all 96 top-four picks have matching player records.', next: 'No setup action needed.' };
 }
 
 export async function readDraftPickTracking(
@@ -104,10 +104,10 @@ export async function readDraftPickTracking(
         const metadata = await gateway.getWorkbookProperties(adminId);
         const tabs = new Set(metadata.sheets.map(sheet => sheet.title));
         if (adminTabs.some(tab => !tabs.has(tab)))
-          return { health: { status: 'wrong-workbook', summary: 'Draft tracking not verified: configured workbook lacks required Admin tabs.', next: 'Correct the Admin workbook configuration; do not seed this workbook.', httpStatus: 400 }, rows: null };
+          return { health: { status: 'wrong-workbook', summary: 'Draft picks not checked: Rat’s selected sheet is missing required league tabs.', next: 'Ask an admin to choose the correct Admin sheet. Do not add draft records here.', httpStatus: 400 }, rows: null };
         if (isRangeError(error)) return { health: tabs.has('Draft Picks')
-          ? { status: 'invalid-range', summary: 'Draft tracking not verified: Draft Picks exists, but its range was rejected (400).', next: 'Review the range/schema; do not recreate or overwrite the tab.', httpStatus: 400 }
-          : { status: 'missing-tab', summary: 'Draft tracking unavailable: Draft Picks tab is missing.', next: action, httpStatus: 400 }, rows: null };
+          ? { status: 'invalid-range', summary: 'Draft picks not checked: Draft Picks exists, but Rat could not read its cells.', next: 'Ask an admin to check the columns and cells Rat reads. Do not replace or overwrite Draft Picks.', httpStatus: 400 }
+          : { status: 'missing-tab', summary: 'Draft picks not checked: the Draft Picks tab is missing.', next: action, httpStatus: 400 }, rows: null };
       } catch (metadataError) { return { health: readFailure(metadataError), rows: null }; }
     }
     return { health: readFailure(error), rows: null };

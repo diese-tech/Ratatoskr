@@ -1,3 +1,5 @@
+import { redactOperationalText } from './redactOperationalText.js';
+export { redactOperationalText } from './redactOperationalText.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { ChannelType, PermissionFlagsBits, escapeMarkdown, type Client, type GuildTextBasedChannel } from 'discord.js';
 import type Database from 'better-sqlite3';
@@ -29,22 +31,6 @@ const OperationalErrorsEnvSchema = z.object({
   STAFF_OPS_CHANNEL_ID: z.string().min(1).optional(),
 });
 const operationalErrorsEnv = OperationalErrorsEnvSchema.parse(process.env);
-
-export function redactOperationalText(value: string): string {
-  let result = value;
-  for (const [name, secret] of Object.entries(process.env)) {
-    if (secret && secret.length >= 4 && /TOKEN|SECRET|PASSWORD|PRIVATE_KEY|API_KEY|DATABASE_URL|SERVICE_ACCOUNT/i.test(name)) {
-      result = result.replaceAll(secret, '[REDACTED]');
-    }
-  }
-  try {
-    const key = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON ?? '{}').private_key as unknown;
-    if (typeof key === 'string' && key.length >= 4)
-      for (const representation of [key, JSON.stringify(key).slice(1, -1)]) result = result.replaceAll(representation, '[REDACTED]');
-  } catch { /* A malformed credential must not break error reporting. */ }
-  return result.replace(/(https?:\/\/|postgres(?:ql)?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@')
-    .replace(/(authorization[=: ]+(?:bot|bearer)?\s*)[^\s,;]+/gi, '$1[REDACTED]');
-}
 
 function safeLog(value: unknown) {
   try { console.error(JSON.stringify(value)); } catch { /* The reporter must never replace the original failure. */ }
@@ -160,7 +146,8 @@ export async function reportOperationalError(
     context: { ...context, action: redactOperationalText(context.action), division: context.division ? redactOperationalText(context.division) : undefined,
       next: context.next ? redactOperationalText(context.next) : undefined },
     error: { name: redactOperationalText(failure.name), message: redactOperationalText(failure.message),
-      stack: redactOperationalText(failure.stack ?? ''), code: redactOperationalText(String(code ?? '')) } });
+      stack: redactOperationalText(failure.stack ?? ''), code: redactOperationalText(String(code ?? '')),
+      operationalCode: details?.code } });
   if (repeated && (report.staffDelivered || !options?.retryUndelivered)) {
     return { reference: report.reference, staffDelivered: report.staffDelivered, ...(report.details ? { details: report.details } : {}) };
   }
@@ -183,16 +170,23 @@ export async function reportOperationalError(
       ? `**What happened:** ${safe(details.summary)}`
       : [50001, 50013].includes(Number(code)) ? 'Discord denied access or permissions.'
         : [10003, 10008].includes(Number(code)) ? 'A required Discord channel or message is missing.'
-          : 'The operation failed or could not confirm Discord delivery.';
+          : 'Rat could not finish the action or confirm that its Discord post was sent.';
+    const actionName = context.action.startsWith('/') ? context.action
+      : context.action === 'League roster audit repair' ? 'fixing roster problems'
+      : context.action === 'League roster audit review' ? 'reviewing roster problems'
+      : /scout|inhouse/i.test(context.action) ? 'updating the game'
+      : /league|roster|transaction|account/i.test(context.action) ? 'updating the league records'
+      : 'that action';
     await channel.send({ content: [
-      `Ratatoskr could not finish **${safe(context.action)}**.`,
+      `Ratatoskr could not finish **${safe(actionName)}**.`,
       failureLine,
       details?.noChanges ? '**Changes:** No changes were made.' : '',
-      context.setupId ? `Setup #${context.setupId}${context.division ? ` (${safe(context.division)})` : ''}` : '',
+      context.setupId ? `Game #${context.setupId}${context.division ? ` (${safe(context.division)})` : ''}` : '',
       `Time: ${new Date().toISOString()}`,
       details ? `**What to do:** ${safe(details.next)}`
-        : safe(context.next ?? 'Review the matching Railway log and current setup state before retrying.'),
-      details ? `Error code: ${details.code}` : '',
+        : /reconciliation/i.test(context.action)
+          ? 'Check Discord roles, both roster sheets and the transaction post/history. Some changes may already have happened. Do not retry the command until they agree.'
+          : 'Check the saved action and current records or posts before trying anything again. Some changes may already have happened.',
       `Reference: ${report.reference}`,
     ].filter(Boolean).join('\n'), allowedMentions: { parse: [] },
       ...(options ? { nonce: createHash('sha256').update(options.reference).digest('hex').slice(0, 24), enforceNonce: true } : {}),
@@ -208,13 +202,12 @@ export async function reportOperationalError(
 export function operationalErrorGuidance(report: Report): string {
   const delivery = report.staffDelivered
     ? `Staff were notified in staff-ops. Reference: ${report.reference}.`
-    : `The staff report could not be confirmed. Ask a bot operator to check Railway logs with reference ${report.reference}.`;
-  if (!report.details) return delivery;
+    : `Rat could not confirm that staff were notified. Give staff reference ${report.reference} if you need help.`;
+  if (!report.details) return `Rat could not confirm the action finished. Check the saved action or posts with staff before trying again. ${delivery}`;
   return [
     `What happened: ${report.details.summary}`,
     report.details.noChanges ? 'Changes: No changes were made.' : '',
     `What to do: ${report.details.next}`,
-    `Error code: ${report.details.code}`,
     delivery,
   ].filter(Boolean).join('\n');
 }

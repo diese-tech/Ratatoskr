@@ -79,7 +79,7 @@ function replyWithIneligibleSummary(base: string, heading: string, lines: readon
   const render = (shown: readonly string[], hidden: number) => `${base}\n\n${[
     `**${heading} (${lines.length})**`,
     ...shown,
-    hidden ? `_${hidden} additional ineligible signup(s) omitted; see the working roster card._` : '',
+    hidden ? `_${hidden} additional player(s) who cannot join omitted; see the working roster card._` : '',
   ].filter(Boolean).join('\n')}`;
   const shown: string[] = [];
   for (const line of lines) {
@@ -172,12 +172,12 @@ export function buildScoutWorkingRosterView(
     : [];
   const ineligibleReserve = ineligibleLines.length ? [
     '',
-    `**Ineligible signups (${ineligibleLines.length})**`,
-    `_${ineligibleLines.length} additional ineligible signup(s) omitted._`,
+    `**Players who cannot join (${ineligibleLines.length})**`,
+    `_${ineligibleLines.length} additional player(s) who cannot join omitted._`,
   ] : [];
   appendBoundedCardSection(
     lines,
-    `**Unseated signups (${rolesByUser.size})**`,
+    `**Players waiting for a team (${rolesByUser.size})**`,
     eligibleLines,
     '_None_',
     (hidden) => `_${hidden} additional signup(s) are available through Seat player._`,
@@ -187,10 +187,10 @@ export function buildScoutWorkingRosterView(
   if (ineligibleLines.length) {
     appendBoundedCardSection(
       lines,
-      `**Ineligible signups (${ineligibleLines.length})**`,
+      `**Players who cannot join (${ineligibleLines.length})**`,
       ineligibleLines,
       '_None_',
-      (hidden) => `_${hidden} additional ineligible signup(s) omitted._`,
+      (hidden) => `_${hidden} additional player(s) who cannot join omitted._`,
       warningLines,
       contentLimit,
     );
@@ -333,7 +333,7 @@ async function showSeatPlayerPicker(
     const excluded = userIds.length === 0 ? ineligibleSignupLines(eligibility.ineligibleSignups, rostered) : [];
     await interaction.editReply({
       content: replyWithIneligibleSummary(
-        'No players on this page can join an open spot.', 'Ineligible signups', excluded,
+        'No players on this page can join an open spot.', 'Players who cannot join', excluded,
       ),
       components: [],
       allowedMentions: { parse: [] },
@@ -490,7 +490,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
       new ButtonBuilder().setCustomId(`scout:buildtwoback:${setupId}:${expectedVersion}`).setLabel('Back').setStyle(ButtonStyle.Secondary),
     );
     await interaction.editReply({
-      content: 'Build two games from all currently eligible signups? This recalculates both games and replaces any manual edits in the current one-game roster. You can then shuffle or swap players across either game before publishing.',
+      content: 'Split the current signups into two games? Rat will rebuild both teams, replacing your manual choices in the current game. You can shuffle or swap players again before posting the teams.',
       components: [row],
     });
     return true;
@@ -504,7 +504,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
     if (setup.workflow === 'inhouse') generated.slots = balanceInhouseRoster(generated.slots,
       inhouseDivisionHints(db, interaction.guild!, signups.map(s => s.userId)));
     if (!generated.feasible) {
-      await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'There are no longer enough compatible eligible signups to build two games.'));
+      await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'Two games need twenty players who can fill every play role. The current signups cannot fill both games yet.'));
       return true;
     }
     if (!expandScoutRosterToTwoGamesIfVersion(db, setup.id, expectedVersion, generated.slots)) {
@@ -661,14 +661,14 @@ async function handleScoutReviewStringSelectImpl(
         (signup) => signup.userId === selected && (signup.role === slot.role || signup.role === 'fill'),
       );
     if (!stillEligible) {
-      await interaction.editReply(buildScoutRosterReviewView(db, setupId, setup.version, slots, 'That player is no longer an eligible signup for this slot.'));
+      await interaction.editReply(buildScoutRosterReviewView(db, setupId, setup.version, slots, 'That player can no longer take this spot. Check their signup and access to the game.'));
       return true;
     }
     const outcome = replaceScoutRosterSlotIfVersion(
       db, setupId, expectedVersion, slotId, selected!, false, interaction.user.id,
     );
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Eligible signup seated.' : scoutRosterChangeFailure(outcome)));
+    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Player added to the team.' : scoutRosterChangeFailure(outcome)));
     return true;
   }
 
