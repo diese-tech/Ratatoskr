@@ -917,4 +917,24 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 36,
+    name: 'guild_role_inventory',
+    sql: `
+      CREATE TABLE guild_inventory_members (
+        guild_id TEXT NOT NULL, discord_id TEXT NOT NULL, display_name TEXT NOT NULL,
+        bot INTEGER NOT NULL CHECK(bot IN (0,1)), present INTEGER NOT NULL CHECK(present IN (0,1)),
+        role_ids_json TEXT NOT NULL CHECK(json_valid(role_ids_json)), observed_at TEXT NOT NULL,
+        PRIMARY KEY(guild_id,discord_id)
+      );
+      CREATE TABLE guild_inventory_roles (
+        guild_id TEXT NOT NULL, role_id TEXT NOT NULL, name TEXT NOT NULL,
+        present INTEGER NOT NULL CHECK(present IN (0,1)), observed_at TEXT NOT NULL,
+        PRIMARY KEY(guild_id,role_id)
+      );
+      CREATE TABLE guild_inventory_sync (
+        guild_id TEXT PRIMARY KEY, last_full_at TEXT NOT NULL, member_count INTEGER NOT NULL
+      );
+    `,
+  },
 ];

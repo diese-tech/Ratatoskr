@@ -15,6 +15,14 @@ type State = {
 };
 const sessions = new WeakMap<Client, Map<string, State>>();
 const detachedGuilds = new WeakMap<Guild, State>();
+type CompleteMemberListener = (guild: Guild, members: readonly AccountReplacementMember[]) => void;
+const completeListeners = new WeakMap<Client, Set<CompleteMemberListener>>();
+export function listenToCompleteLeagueMembers(client: Client, listener: CompleteMemberListener): () => void {
+  let listeners = completeListeners.get(client);
+  if (!listeners) { listeners = new Set(); completeListeners.set(client, listeners); }
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
 const TTL_MS = 60_000;
 const MAX_INTERACTIVE_WAIT_MS = 5_000;
 
@@ -121,10 +129,15 @@ function fetchComplete(guild: Guild, state: State, now: () => number): Promise<A
         || (typeof guild.memberCount === 'number' && fresh.size !== guild.memberCount)
         || fresh.some((member) => member.partial || (member.guild && member.guild.id !== guild.id)))
         throw new LeagueMemberSnapshotUnavailableError();
-      const members = fresh.filter((member) => !member.user.bot).map((member) => ({
+      const observed = fresh.map((member) => ({
         discordId: member.id, displayName: member.displayName, nickname: member.nickname,
         roleIds: [...member.roles.cache.keys()], guildId: guild.id, bot: member.user.bot,
       }));
+      for (const listener of completeListeners.get(guild.client) ?? []) {
+        try { listener(guild, observed); }
+        catch { console.error('Complete member observation failed; league reads remain available.'); }
+      }
+      const members = observed.filter(member => !member.bot);
       state.snapshot = { at: now(), attempt: state.counts.attempts, totalCount: fresh.size, members };
       return members;
     })().catch((error: unknown) => {

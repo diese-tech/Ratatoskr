@@ -30,6 +30,7 @@ import { runIsolatedStartupRecovery } from './services/startupRecovery.js';
 import { startLeagueAuditWorker } from './services/leagueAudit.js';
 import { handleInhouseRoleReaction, reconcileInhouseRoles, startInhouseRoleWorker } from './services/inhouseRoles.js';
 import { inhouseDivisionHints } from './services/inhouseBalance.js';
+import { installGuildRoleInventory } from './services/guildRoleInventory.js';
 
 // Opened before login: a database that can't be opened/migrated fails
 // startup immediately rather than letting the bot come online without
@@ -55,6 +56,7 @@ const client = new Client({
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 });
+const stopGuildRoleInventory = installGuildRoleInventory(client, db, env.DISCORD_GUILD_ID);
 
 const scoutCardDependencies: ScoutCardDependencies = {
   storage: storage.scoutReadinessCards,
@@ -83,6 +85,7 @@ async function shutdown() {
   stopLeagueAuditWorker?.();
   stopScoutNotificationWorker?.();
   stopInhouseRoles?.();
+  stopGuildRoleInventory();
   await client.destroy();
   await storage.close();
   process.exit(0);

@@ -10,7 +10,7 @@ Migration 35 adds an explicit workflow and permits a null division only for open
 
 ## Provisioning the permanent channel and opt-in post
 
-Use the existing authorized Railway service context after migration 35 is deployed. Confirm the owner's exact category, role/channel names and Unicode reaction before provisioning. The proposed names are Inhouse / #inhouses in Midgard with 🎮; live approval of these names remains separate from code delivery.
+Use the existing authorized Railway service context after migration 35 is deployed. The owner approved Inhouse / #inhouses in Midgard with 🎮 and the concise introduction in the setup tool. Ratatoskr seeds the first reaction and pins its owned post.
 
 Run the operator script with the actual deployed commit and persistent database path:
 
@@ -25,3 +25,9 @@ Creation is checkpointed in SQLite. A lost role/channel response can be adopted 
 ## Discord acceptance
 
 Verify the channel is in the approved permanent category and retains its privacy. React to the pinned post and confirm only the Inhouse role is added; unreact and confirm only that role is removed. Rejoin the role and inspect `/inhouse create`'s private preview. Check signups ping only Inhouse, non-role players can join, creator-only controls reject another host, and unsubscribing prevents confirmed management. With real participants, verify balanced/manual roster edits, publication, lobby-host actions and finish. Source integration tests and CI do not substitute for this live game acceptance.
+
+## Shared server inventory
+
+Migration 36 adds SQLite member/role observations and a last-complete-read checkpoint. Member join/leave/role/name and role create/update/delete events update this shared inventory, including bots, without extra Discord or Sheets requests. Existing validated startup/daily complete-member reads refresh it and detect offline departures. Incomplete, racing or failed reads do not replace the previous inventory. Observation failures are isolated from league member reads. IDs and display names remain stored for departed members, with presence false and no current roles.
+
+The Admin/public sheets retain their existing league-operation ownership. There is no new SYSTEM tab. The inventory records observed Discord state; Inhouse's subscription ledger separately retains reaction intent and failed-write recovery. Authorization always checks Discord directly instead of trusting the inventory snapshot.

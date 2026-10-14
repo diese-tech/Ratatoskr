@@ -114,7 +114,7 @@ export async function setupInhouses(guild: Guild, db: Database.Database, input: 
       if (!before || pageNumber === 9) throw new Error('Opt-in message history could not be fully checked. No duplicate post was sent.');
     }
     if (!message) message = await channel.send({
-      content: `**Optional inhouses**\nReact with ${config.emoji} to receive the <@&${role.id}> role and inhouse pings. Remove your reaction to remove the role.\n\nWith the role, use /inhouse create here to host. Only you can manage games you create. **Anyone can join a posted game**, even without this role. Teams use best-effort division balancing and can be adjusted manually.`,
+      content: `**Inhouses**\n\nReact ${config.emoji} for the <@&${role.id}> role and game pings. Unreact to opt out.\n\nGot the role? Use \`/inhouse create\` to host. Anyone can join, while hosts manage their own games.\n\nRat will try to balance teams by division. Tweak them as needed.`,
       components: [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder()
         .setCustomId(marker(config.provisioningRef)).setLabel('Optional inhouses').setStyle(ButtonStyle.Secondary).setDisabled(true))],
       allowedMentions: { parse: [], roles: [], users: [] },
