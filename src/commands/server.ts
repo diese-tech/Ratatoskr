@@ -107,7 +107,7 @@ export async function handleServerCommand(interaction: ChatInputCommandInteracti
   });
 
   const summary = errorMessage
-    ? `Server setup ${apply ? '' : 'preview '}stopped early. ${serverSetupErrorMessage(errorMessage)}\nCheck the attached report for any items Rat finished before stopping.`
+    ? `Server setup ${apply ? '' : 'preview '}stopped early. ${serverSetupErrorMessage(errorMessage)}\nThe attached report shows what Rat tried before stopping. Check Discord to see which changes were made.`
     : `Server setup ${apply ? '' : 'preview '}complete. See the attached report for details.`;
 
   await interaction.editReply({ content: summary, files: [attachment] });
