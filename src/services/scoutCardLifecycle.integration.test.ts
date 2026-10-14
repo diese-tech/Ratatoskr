@@ -17,13 +17,14 @@ import {
   handleScoutSignupReactionRemove,
   reconcileActiveScoutSignups,
   refreshScoutMemberReadiness,
+  reconcileWorkingScoutRoster,
 } from './scoutSignups.js';
 import { refreshScoutStatusCard as refreshScoutStatusCardWithDependencies } from './scoutCardLifecycle.js';
 import { refreshScoutStatusCard, refreshScoutStatusCardSafely, reconcileScoutStatusCards } from './scoutCardCompatibility.js';
 import { reportOperationalError } from './operationalErrors.js';
 import { createSqliteScoutLifecycleCleanupStore, createSqliteScoutReadinessCardStore, createSqliteScoutSignupStore } from '../storage/index.js';
 import { handleScoutReviewButton } from './scoutReview.js';
-import { handleScoutPublishButton, handleScoutPublishedSlotSelect, handleScoutPublishedUserSelect } from './scoutPublish.js';
+import { handleScoutPublishButton, handleScoutPublishedSlotSelect, handleScoutPublishedUserSelect, reconcileScoutPublishedDelivery } from './scoutPublish.js';
 import { handleScoutCancelButton } from './scoutCancel.js';
 import { handleScoutFinishButton, reconcileFinishedScoutPosts } from './scoutFinish.js';
 import { processDueScoutLifecycleCleanups } from './scoutLifecycleCleanup.js';
@@ -105,6 +106,56 @@ test('open inhouses fill, balance and publish with non-role participants while o
     await handleScoutFinishButton(finish, f.db);
     assert.equal(getScoutCompletion(f.db, ready.id)?.posts_reconciled, 1);
     assert.equal(listDivisionScoutLifecycleBlockers(f.db, 'guild', f.setup.divisionId).length, 0);
+  } finally { f.db.close(); }
+});
+
+test('inhouse reconciliation balances around manual players who did not react without moving their seats', async () => {
+  const f = fixture(':memory:', null, 'inhouse');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    await f.fill();
+    const original = listScoutRosterSlots(f.db, f.setup.id);
+    const fixed = original.filter(slot => slot.team === 'team_one' && ['solo', 'jungle'].includes(slot.role));
+    const upperUsers = new Set([...fixed.map(s => s.userId), ...original.filter(s =>
+      (s.team === 'team_two' && s.role === 'solo') || (s.team === 'team_one' && s.role === 'mid')).map(s => s.userId)]);
+    for (const slot of original) {
+      const roles = f.members.get(slot.userId).roles.cache;
+      roles.clear();
+      const division = upperUsers.has(slot.userId) ? 'division' : 'lower-division';
+      roles.set(division, { id: division });
+    }
+    for (const slot of fixed) {
+      f.db.prepare('UPDATE scout_roster_slots SET staff_assigned=1 WHERE setup_id=? AND user_id=?').run(f.setup.id, slot.userId);
+      f.db.prepare('DELETE FROM scout_signups WHERE setup_id=? AND user_id=?').run(f.setup.id, slot.userId);
+    }
+    const signups = listScoutSignups(f.db, f.setup.id);
+    let hinted: string[] = [];
+    await reconcileWorkingScoutRoster(createSqliteScoutSignupStore(f.db), f.setup.id, signups, 'refresh', undefined, undefined,
+      (ids: Iterable<string>) => { hinted = [...ids]; return inhouseDivisionHints(f.db, f.guild, hinted); });
+    assert.ok(fixed.every(slot => hinted.includes(slot.userId)));
+    const after = listScoutRosterSlots(f.db, f.setup.id);
+    for (const slot of fixed) assert.ok(after.some(s => s.userId === slot.userId && s.role === slot.role && s.team === slot.team));
+    assert.equal(after.filter(s => upperUsers.has(s.userId) && s.team === 'team_one').length, 2);
+    assert.equal(after.filter(s => upperUsers.has(s.userId) && s.team === 'team_two').length, 2);
+  } finally { f.db.close(); }
+});
+
+test('inhouse publication recovery never records a status card as the missing roster', async t => {
+  t.mock.method(console, 'error', () => {});
+  const f = fixture(':memory:', null, 'inhouse');
+  try {
+    await ensurePostedScoutSetup(f.client, f.db, f.setup);
+    await f.fill();
+    const ready = getScoutSetupById(f.db, f.setup.id)!;
+    f.rejectSend();
+    await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${ready.id}:${ready.version}`), f.db);
+    assert.equal(getScoutSetupById(f.db, ready.id)!.resultMessageId, null);
+    await refreshScoutStatusCard(f.client, f.db, ready.id);
+    await assert.rejects(reconcileScoutPublishedDelivery(f.client, f.db, ready.id), /delivery-uncertain/);
+    const pending = getScoutSetupById(f.db, ready.id)!;
+    assert.equal(pending.resultMessageId, null);
+    assert.equal(pending.signupPostReconciled, false);
+    assert.ok(pending.controlMessageId);
   } finally { f.db.close(); }
 });
 

@@ -441,7 +441,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
     );
     const outcome = await reconcileWorkingScoutRoster(
       createSqliteScoutSignupStore(db), setup.id, eligibility.eligibleSignups, 'refresh', interaction.user.id, expectedVersion,
-      inhouseDivisionHints(db, interaction.guild!, eligibility.eligibleSignups.map(s => s.userId)),
+      ids => inhouseDivisionHints(db, interaction.guild!, ids),
     );
     const rostered = new Set(listScoutRosterSlots(db, setup.id).map((slot) => slot.userId));
     const excluded = ineligibleSignupLines(eligibility.ineligibleSignups, rostered);

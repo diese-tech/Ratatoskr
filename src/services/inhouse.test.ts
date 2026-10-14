@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { openDatabase, createScoutSetup, getScoutSetupById, listDivisions,
   listDivisionScoutLifecycleBlockers } from '../db/index.js';
-import { beginInhouseConfiguration, bindInhouseResource } from '../db/repositories/inhouse.js';
+import { beginInhouseConfiguration, bindInhouseResource, setInhouseSubscription } from '../db/repositories/inhouse.js';
 import { handleInhouseRoleReaction, reconcileInhouseRoles, retryInhouseRoles } from './inhouseRoles.js';
 import { Collection, type Client, type Guild, type MessageReaction, type User } from 'discord.js';
 import { canManageScoutSetup } from './scoutAuthorization.js';
@@ -120,5 +120,27 @@ test('unrelated reactions and privileged role drift cannot grant the opt-in role
     f.role.permissions.bitfield = 8n;
     await assert.rejects(handleInhouseRoleReaction(f.client, f.db, f.reaction, f.user, true), /privileged/);
     assert.deepEqual([...f.roles], ['league-player']);
+  } finally { f.db.close(); }
+});
+
+test('a persistently failing member cannot starve other pending inhouse role changes', async t => {
+  const f = roleFixture();
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const visited: string[] = [];
+  const guild = await f.client.guilds.fetch('guild');
+  t.mock.method(guild.members, 'fetch', async ({ user }: { user: string }) => {
+    visited.push(user);
+    if (user === 'a-failing') throw { code: 50013 };
+    return f.member;
+  });
+  try {
+    setInhouseSubscription(f.db, 'guild', 'a-failing', true);
+    setInhouseSubscription(f.db, 'guild', 'player', true);
+    await retryInhouseRoles(f.client, f.db, 'guild', async () => {});
+    now += 60_001;
+    await retryInhouseRoles(f.client, f.db, 'guild', async () => {});
+    assert.ok(visited.includes('player'));
+    assert.ok(f.roles.has('optin-role'));
   } finally { f.db.close(); }
 });

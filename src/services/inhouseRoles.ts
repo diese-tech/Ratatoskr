@@ -62,7 +62,10 @@ export async function retryInhouseRoles(client: Client, db: Database.Database, g
   report: (error: unknown) => Promise<void>): Promise<void> {
   await locked(db, guildId, async () => {
     const pending = listInhouseSubscriptions(db, guildId)
-      .filter(row => row.pending && row.nextAttemptAt <= Date.now()).slice(0, 25);
+      .filter(row => row.pending && row.nextAttemptAt <= Date.now())
+      // A backed-off member must not be first forever once its cooldown ends.
+      // Unattempted and older pending changes get their own bounded turn.
+      .sort((a, b) => a.nextAttemptAt - b.nextAttemptAt || a.userId.localeCompare(b.userId)).slice(0, 25);
     for (const row of pending) {
       try { await synchronizeRole(client, db, guildId, row.userId); }
       catch (error) {

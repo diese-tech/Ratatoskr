@@ -112,7 +112,9 @@ async function findRecoverableResultMessage(client: Client, setup: ScoutSetup) {
   while (true) {
     const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     const found = messages.find((message) =>
-      message.author.id === client.user?.id && resultHasSetupControls(message, setup.id));
+      message.author.id === client.user?.id && resultHasSetupControls(message, setup.id)
+      && (setup.workflow !== 'inhouse' || (message.id !== setup.controlMessageId
+        && !JSON.stringify(message.components).includes(`"scout:status:${setup.id}"`))));
     if (found || messages.size < 100) return found;
     before = messages.last()?.id;
     if (!before) return undefined;
