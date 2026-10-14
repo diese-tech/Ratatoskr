@@ -22,6 +22,9 @@ import {
   resourcesForDivision,
 } from '../services/divisionScaffold.js';
 import { DIVISION_CHANNEL_TEMPLATE, getDivisionSpec, getDivisionTemplate, provisionDivision } from '../services/divisions.js';
+import { savedLeagueErrorMessage } from '../services/leaguePresentation.js';
+import { redactOperationalText } from '../services/redactOperationalText.js';
+import { scoutGameStatusLabel } from '../services/scoutGamePresentation.js';
 
 const choices = divisions.map((division) => ({ name: division.name, value: division.key }));
 
@@ -131,10 +134,10 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const result = await provisionDivision(storage, guild, divisionKey);
     const reactivationNote = result.reactivatedFromArchived
-      ? `\n\nNote: ${result.division} was archived; provisioning restored its normal visibility, and its status is active again.`
+      ? `\n\nNote: ${result.division} was hidden. Its normal visibility is restored and it is active again.`
       : '';
     await interaction.editReply(
-      `**${result.division}** is provisioned.\nCreated: ${result.created.length}\nReused/reconciled: ${result.reused.length}${reactivationNote}`,
+      `**${result.division}** is set up.\nCreated: ${result.created.length}\nExisting items checked or repaired: ${result.reused.length}${reactivationNote}`,
     );
     return;
   }
@@ -201,8 +204,8 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
         `Division manager role: ${managerRoleManaged ? 'yes' : 'no'}`,
         `Captain role: ${captainRoleManaged ? 'yes' : 'no'}`,
         `Category: ${category ? 'yes' : 'no'}`,
-        `Lifecycle status: ${record?.status ?? 'not yet provisioned'}`,
-        `Missing channels: ${missingChannels.length ? missingChannels.map((channel) => channel.key).join(', ') : 'none'}`,
+        `Status: ${record?.status === 'active' ? 'Active' : record?.status === 'archived' ? 'Hidden' : record?.status === 'deleted' ? 'Deleted' : 'Not set up yet'}`,
+        `Missing channels: ${missingChannels.length ? missingChannels.map((channel) => getDivisionTemplate(division).channels.find(item => item.key === channel.key)!.name).join(', ') : 'none'}`,
       ].join('\n'),
     });
     return;
@@ -214,9 +217,9 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
       await interaction.reply({
         content: [
           `Cannot ${subcommand} **${division.name}** while it has active scout setups:`,
-          ...blockers.map((setup) => `- Setup #${setup.id}: <t:${setup.startAt}:F> (${setup.status.replaceAll('_', ' ')})`),
+          ...blockers.map((setup) => `- Game #${setup.id}: <t:${setup.startAt}:F> (${scoutGameStatusLabel(setup.status)})`),
           '',
-          'Cancel open/roster-ready setups from scout-ops. Pending posting/publication must finish recovery before retrying.',
+          'Cancel games still accepting signups or waiting for teams to be posted in scout-ops. If Rat is still finishing a post, wait for it to finish before trying again.',
         ].join('\n'),
         flags: MessageFlags.Ephemeral,
       });
@@ -352,8 +355,11 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
     ];
     if (failed.length > 0) {
       summary.push(
-        `FAILED to remove (${failed.length}) -- still active/managed, safe to retry:`,
-        ...failed.map(({ name, error }) => `- ${name}: ${error}`),
+        `Could not remove (${failed.length}). These items remain; check access before trying their removal again:`,
+        ...failed.map(({ name, error }) => {
+          console.error(redactOperationalText(`Division removal failed for ${name}: ${error}`));
+          return `- ${name}: ${savedLeagueErrorMessage(error)}`;
+        }),
       );
     }
 

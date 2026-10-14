@@ -4,13 +4,15 @@ This document summarizes Ratatoskr's operational surface. The runtime command re
 
 Run `/help` in Discord for a private, plain-English quickstart covering every shipped command.
 
+See [the command guide](command-reference.md) for exact commands, who can use them, confirmation steps, and a Discord copy/paste guide.
+
 For role assignment, including how division Manager and Captain access work, see [`roles-and-permissions.md`](roles-and-permissions.md).
 
 ## Scout games
 
-- `/scout config` — admins bind `#scout-ops` and configure additional scout staff roles, timezone, five required role emoji, and optional Fill.
+- `/scout config` — admins choose `#scout-ops`, extra scout staff, the time zone, five role emojis, and optional Fill.
 - `/scout create division:<division>` — authorized staff or that division's managers/captains create a setup from `#scout-ops`; Ratatoskr posts it to the selected division's managed signup channel.
-- `/scout cancel division:<division>` — the same managers select and confirm cancellation from `#scout-ops`.
+- `/scout cancel` — the same staff/managers choose a game and confirm cancellation from `#scout-ops`.
 - Public signup posts contain information and reactions only. Durable review/cancel controls live in `#scout-ops`; published replacement and swap controls live in the division results channel. Every handler rechecks division authorization and channel scope.
 
 See [`scout-workflow.md`](scout-workflow.md) for the complete flow.

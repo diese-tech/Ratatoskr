@@ -28,6 +28,7 @@ import {
   markLeagueAuditRepairReconciliationRequired,
 } from '../db/repositories/leagueAuditRepairs.js';
 import { createOrGetLeagueReconciliationTicket } from '../db/repositories/leagueOperations.js';
+import { leagueActionLabel } from './leaguePresentation.js';
 
 export type LeagueAuditRepairAction = 'use-discord-name' | 'use-league-name' | 'use-roster-name' | 'sync-public-roster' | 'mark-inactive';
 export type LeagueAuditResolutionAction = LeagueAuditRepairAction | 'repair-roles';
@@ -43,8 +44,8 @@ export function previewLeagueAuditResolution(loaded: LoadedLeagueSnapshot, findi
   const snapshot = { ...loaded.snapshot, discordMembers: [...loaded.snapshot.discordMembers].sort((a, b) => a.discordId.localeCompare(b.discordId))
     .map(member => ({ ...member, roleIds: [...member.roleIds].sort() })) };
   return { fingerprint: createHash('sha256').update(JSON.stringify({ finding, action, plan, sources: loaded.sources, snapshot })).digest('hex'),
-    description: 'playerIds' in plan ? `${action}: ${plan.players.join(' / ')}\n${plan.publicChanges.map(c => `${c.division} / ${c.group}: ${c.from || 'empty'} → ${c.to || 'empty'}`).join('\n')}`
-      : `${action}: account ${plan.discordId}; add managed roles ${plan.add.join(', ') || 'none'}; remove ${plan.remove.join(', ') || 'none'}.` };
+    description: 'playerIds' in plan ? `${leagueActionLabel(action)}: ${plan.players.join(' / ')}\n${plan.publicChanges.map(c => `${c.division} / ${c.group}: ${c.from || 'empty'} → ${c.to || 'empty'}`).join('\n')}`
+      : `${leagueActionLabel(action)}: Discord account ${plan.discordId}; roles to add ${plan.add.join(', ') || 'none'}; roles to remove ${plan.remove.join(', ') || 'none'}.` };
 }
 
 export class LeagueAuditRepairStaleError extends LeagueAuditRepairNoWriteError {

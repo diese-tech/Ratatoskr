@@ -46,13 +46,13 @@ test('a failed post-repair refresh does not claim that a source error is a remai
   );
 
   assert.match(reply, /repair completed/i);
-  assert.match(reply, /could not refresh/i);
-  assert.match(reply, /will retry/i);
+  assert.match(reply, /could not update/i);
+  assert.match(reply, /check again automatically/i);
   assert.match(reply, /YSL-AUD-FIX-A78754D3/);
   assert.doesNotMatch(reply, /1 issue remain/i);
 });
 
-test('review issues opens one human-readable finding at a time with private pagination', () => {
+test('view roster problems opens one human-readable finding at a time with private pagination', () => {
   const findings = [
     'Little Monsters VD\nDiscord name now: “DilliD (Soka)”\nCurrent Rosters sheet: “DilliD (Soka)”\nPlayer Name History sheet: “DilliD”\nRequired: update the managed roster sheets to the Discord name. Previous names stay in history.',
     'Morty — Discord division: Svartalfheim, Alfheim; expected: Svartalfheim. Make the division role match.',
@@ -61,7 +61,7 @@ test('review issues opens one human-readable finding at a time with private pagi
 
   const view = buildLeagueAuditReviewView(findings, 1, 'YSL-AUD-1234');
 
-  assert.equal(view.title, 'League Roster Audit — Discord roles');
+  assert.equal(view.title, 'Roster problems — Discord roles');
   assert.match(view.description, /Morty/);
   assert.match(view.footer, /Issue 2 of 3/);
   assert.deepEqual(view.actions, [

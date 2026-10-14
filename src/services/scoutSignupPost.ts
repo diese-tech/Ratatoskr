@@ -20,8 +20,8 @@ export function renderScoutSignupPost(input: ScoutSignupPostInput): string {
   lines.push('');
   lines.push('React with the role(s) you want to play.');
   lines.push(`You may select **${roleLimitPhrase(input.roleLimit)}**.`);
-  if (input.workflow === 'inhouse') lines.push('Anyone can join. Teams use best-effort division balancing; the host can adjust them.');
-  if (input.eligibilityRoleId) lines.push(`Eligibility: <@&${input.eligibilityRoleId}>`);
+  if (input.workflow === 'inhouse') lines.push('Anyone can join. Rat tries to balance teams by division; the host can change them.');
+  if (input.eligibilityRoleId) lines.push(`Role needed to join: <@&${input.eligibilityRoleId}>`);
   if (input.note?.trim()) {
     lines.push('');
     lines.push(input.note.trim());

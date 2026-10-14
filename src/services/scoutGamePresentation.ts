@@ -2,6 +2,12 @@ export function scoutGameName(setup: { workflow?: 'scout' | 'inhouse'; divisionD
   return setup.workflow === 'inhouse' ? 'Inhouse' : `${setup.divisionDisplayName} Scout`;
 }
 
+export function scoutGameStatusLabel(status: string): string {
+  const labels: Record<string, string> = { posting: 'Rat is finishing the signup post', open: 'Accepting signups',
+    roster_ready: 'Teams ready to post', published: 'Teams posted', cancelled: 'Cancelled' };
+  return Object.hasOwn(labels, status) ? labels[status]! : 'Check the game’s latest status';
+}
+
 /** Only used for rejected edits that did not write a player change. */
 export function scoutRosterChangeFailure(outcome: string): string {
   const reasons: Record<string, string> = {

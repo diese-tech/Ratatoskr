@@ -5,6 +5,7 @@ import { hasAccess } from './authorization.js';
 import { leagueJobWorkerFor } from './leagueJobWorker.js';
 import { LeagueJobBlockedError } from './leagueJobWorker.js';
 import { previewRegisteredLeagueRepairRecovery } from './leagueRepairRecovery.js';
+import { leagueActionLabel, savedLeagueErrorMessage } from './leaguePresentation.js';
 
 export async function handleLeagueRepairRecoveryButton(
   interaction: ButtonInteraction,
@@ -15,19 +16,19 @@ export async function handleLeagueRepairRecoveryButton(
   if (prefix !== 'league-recovery' || !['list', 'preview', 'confirm', 'recheck'].includes(action ?? '')) return false;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   if (!interaction.guild) {
-    await interaction.editReply('League recovery is only available in the league server.');
+    await interaction.editReply('Unfinished actions can only be checked in the league server.');
     return true;
   }
   const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
   if (!hasAccess(member, 'OPERATIONS')) {
-    await interaction.editReply('Only league administrators can reconcile operations.');
+    await interaction.editReply('Only Allfather, Aesir and Valkyrie staff can check unfinished league actions.');
     return true;
   }
   const worker = leagueJobWorkerFor(scope, interaction.guild.id);
   if (action === 'recheck') {
     const job = worker.enqueue('audit', { trigger: 'scheduled' }, 'full-audit');
     await interaction.editReply(
-      `Fresh Discord and Sheets check queued: ${job.reference}. Use Review issues on the refreshed panel to preview Discord-name sheet repairs.`,
+      `A new Discord and roster-sheet check is waiting to start: ${job.reference}. Use View roster problems on the updated League Status message to review any fixes.`,
     );
     return true;
   }
@@ -35,7 +36,7 @@ export async function handleLeagueRepairRecoveryButton(
     const repairs = listIncompleteLeagueAuditRepairs(db).filter((repair) => repair.guildId === interaction.guild!.id);
     if (!repairs.length) {
       await interaction.editReply(
-        'No interrupted audit repairs remain. Use Review issues for current roster differences.',
+        'No unfinished roster fixes remain. Use View roster problems to check current differences.',
       );
       return true;
     }
@@ -47,7 +48,7 @@ export async function handleLeagueRepairRecoveryButton(
         .setDisabled(repair.status !== 'reconciliation_required'),
     );
     await interaction.editReply({
-      content: `These are interrupted repair records. Review each against fresh Discord and Sheets state before explicitly closing it. No interrupted mutation will be replayed. Showing ${buttons.length} of ${repairs.length}; reopen this list after closing records to see the remaining entries.`,
+      content: `These fixes were interrupted. Check each one against Discord and the sheets before closing it. Rat will not run the old change again. Showing ${buttons.length} of ${repairs.length}; reopen this list after closing records to see the remaining entries.`,
       components: Array.from({ length: Math.ceil(buttons.length / 5) }, (_, index) =>
         new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(index * 5, index * 5 + 5)),
       ),
@@ -56,11 +57,11 @@ export async function handleLeagueRepairRecoveryButton(
     return true;
   }
   if (!target) {
-    await interaction.editReply('The recovery reference is missing. Open Review operations again.');
+    await interaction.editReply('The action reference is missing. Open View unfinished fixes again.');
     return true;
   }
   if (action === 'confirm') {
-    await interaction.editReply('Legacy recovery is read-only. Open Review League Ops to inspect fresh convergence and explicitly acknowledge reconciliation.');
+    await interaction.editReply('This view only shows records. Use Open league tools to check that Discord and the sheets agree, then review the history before closing the action.');
     return true;
   }
   let preview;
@@ -68,20 +69,20 @@ export async function handleLeagueRepairRecoveryButton(
     preview = await previewRegisteredLeagueRepairRecovery(scope, interaction.guild.id, target);
   } catch (error) {
     if (!(error instanceof LeagueJobBlockedError)) throw error;
-    await interaction.editReply(error.message);
+    await interaction.editReply(savedLeagueErrorMessage(error.message));
     return true;
   }
   if (preview.findings.length) worker.enqueue('audit', { trigger: 'scheduled' }, 'full-audit');
   await interaction.editReply({
     content: [
       `Operation: ${preview.repair.reference}`,
-      `Original repair: ${preview.repair.action}`,
-      `Original finding:\n${preview.repair.finding}`,
-      `Recorded failure: ${preview.repair.errorMessage ?? 'Interrupted; outcome unknown.'}`,
+      `Earlier fix: ${leagueActionLabel(preview.repair.action)}`,
+      `Earlier problem:\n${preview.repair.finding}`,
+      `What happened: ${savedLeagueErrorMessage(preview.repair.errorMessage ?? 'Interrupted; outcome unknown.')}`,
       preview.findings.length
-        ? `Current findings: ${preview.findings.length}. Resolve them from Review issues before closing this record.`
-        : 'Fresh Discord, private roster, name history and public roster values agree. No current roster repair is needed.',
-      'Confirm only after reviewing the recorded operation and name history. This records your reconciliation acknowledgement; it does not replay the old mutation or declare its historical write successful.',
+        ? `Current problems: ${preview.findings.length}. Fix them from Open league tools before closing this action.`
+        : 'Discord and both roster sheets agree, including the player’s names. No new roster fix is needed.',
+      'Review the saved action and name history first. Closing it records that today’s records agree. It does not run the old change again or say the old attempt succeeded.',
     ]
       .join('\n\n')
       .slice(0, 1950),
@@ -91,7 +92,7 @@ export async function handleLeagueRepairRecoveryButton(
           .setCustomId(
             `league-recovery:confirm:${target}:${Buffer.from(preview.fingerprint, 'hex').toString('base64url')}`,
           )
-          .setLabel('Confirm reconciled')
+          .setLabel('Close checked action')
           .setDisabled(true)
           .setStyle(ButtonStyle.Primary),
       ),

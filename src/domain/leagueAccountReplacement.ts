@@ -97,10 +97,10 @@ export function buildLeagueAccountReplacementPlan(input: AccountReplacementPlanI
     }],
     roles: [roleChange(target, [team.teamRoleId, team.divisionRoleId]),
       ...(input.oldMember ? [roleChange(input.oldMember, [])] : [])],
-    manualReview: ['Review captain/staff access manually; only configured team, division and Free Agent roles are managed.',
+    manualReview: ['Check captain and staff access yourself. Rat only changes the team, division and Free Agent roles listed here.',
       ...[target, ...(input.oldMember ? [input.oldMember] : [])].flatMap((member) => {
         const unmanaged = member.roleIds.filter((id) => id !== input.guildId && !managedRoleIds.includes(id)).sort();
-        return unmanaged.length ? [`Account ${member.discordId}: leave unmapped access roles ${unmanaged.join(', ')} for manual review.`] : [];
+        return unmanaged.length ? [`Account ${member.discordId}: these other roles stay unchanged and need staff review: ${unmanaged.join(', ')}.`] : [];
       })],
     preservedHistory: { nameRows: snapshot.names.filter((row) => row.discordId === oldDiscordId && row.sheetRow !== oldNameBefore.sheetRow)
       .map((row) => ({ ...row })), transactions: 'unchanged', accountObservations: 'distinct' },

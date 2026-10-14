@@ -283,7 +283,7 @@ test('creation shows open seats and reactions promote the same working card in p
     assert.match(cardDisplayText(ready), /Created by <@staff>/);
     assert.equal(f.sent.filter((entry) => entry.channel === 'ops' && entry.payload.allowedMentions.users.length).length, 0);
     await f.react('extra-solo', 'solo');
-    assert.match(cardDisplayText(ready), /Unseated signups \(1\)/);
+    assert.match(cardDisplayText(ready), /Players waiting for a team \(1\)/);
     await f.react('support-0', 'support', true);
     assert.match(cardDisplayText(ready), /9\/10 seated/);
     assert.match(cardDisplayText(ready), /needs Support/);
@@ -301,7 +301,7 @@ test('an open Scout Ops card is one embed with its working roster and controls',
     assert.match(embed.title, /Vanaheim Scout · collecting signups/);
     assert.match(embed.description, /Start: <t:/);
     assert.match(embed.description, /0\/10 seated/);
-    assert.match(embed.description, /Unseated signups \(0\)/);
+    assert.match(embed.description, /Players waiting for a team \(0\)/);
     assert.match(embed.description, /Created by <@staff>/);
     assert.ok(card.components.flatMap((row: any) => row.toJSON().components)
       .some((component: any) => component.custom_id === `scout:cancel:${f.setup.id}:0`));
@@ -666,7 +666,7 @@ for (const code of [10008, 50013]) test(`cancellation of an old missing or inacc
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.signupPostReconciled, code === 10008);
     assert.match(cardDisplayText(f.ops.all.first()!), /cancelled/, 'the staff card closes even while public cleanup must retry');
     if (code === 50013) {
-      assert.match(cardDisplayText(f.ops.all.first()!), /public post cleanup is pending/);
+      assert.match(cardDisplayText(f.ops.all.first()!), /Rat still needs to update its signup post/);
       assert.equal(f.ops.all.first()!.components[0].toJSON().components[0].label, 'Retry updating posts');
     }
   } finally { f.db.close(); }
@@ -695,13 +695,13 @@ test('working card explains why an unseated signup is ineligible', async () => {
     await f.react('support-player', 'support');
 
     const card = f.ops.all.first()!;
-    assert.match(cardDisplayText(card), /Unseated signups \(0\)/);
-    assert.match(cardDisplayText(card), /Ineligible signups \(1\)/);
+    assert.match(cardDisplayText(card), /Players waiting for a team \(0\)/);
+    assert.match(cardDisplayText(card), /Players who cannot join \(1\)/);
     assert.match(cardDisplayText(card), /<@support-player> · Support — missing <@&eligible>/);
   } finally { f.db.close(); }
 });
 
-test('long ineligible signup lists keep a reason and omission marker within embed limits', async () => {
+test('long player(s) who cannot join lists keep a reason and omission marker within embed limits', async () => {
   const f = fixture(':memory:', 'eligible');
   try {
     await ensurePostedScoutSetup(f.client, f.db, f.setup);
@@ -717,11 +717,11 @@ test('long ineligible signup lists keep a reason and omission marker within embe
     assert.equal(card.embeds.length, 1);
     assert.ok(card.embeds[0].description.length <= 4_096);
     assert.match(cardDisplayText(card), /missing <@&eligible>/);
-    assert.match(cardDisplayText(card), /additional ineligible signup\(s\) omitted/);
+    assert.match(cardDisplayText(card), /additional player\(s\) who cannot join omitted/);
   } finally { f.db.close(); }
 });
 
-test('Seat player and Refresh draft explain excluded ineligible signups', async () => {
+test('Seat player and Refresh draft explain excluded player(s) who cannot joins', async () => {
   const f = fixture(':memory:', 'eligible');
   try {
     await ensurePostedScoutSetup(f.client, f.db, f.setup);
@@ -760,7 +760,7 @@ test('ineligible explanations stay within Discord reply limits', async () => {
       interaction.editReply = async (payload: any) => replies.push(payload);
       await handleScoutReviewButton(interaction as ButtonInteraction, f.db);
       assert.ok(replies.at(-1).content.length <= 2_000);
-      assert.match(replies.at(-1).content, /additional ineligible signup/);
+      assert.match(replies.at(-1).content, /additional player\(s\) who cannot join/);
     }
   } finally { f.db.close(); }
 });
@@ -772,7 +772,7 @@ test('two-game draft renders both complete games and publication collapses Ops t
     await handleScoutReviewButton(f.interaction(`scout:buildtwoconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`) as ButtonInteraction, f.db);
     const card = f.ops.all.first()!;
     assert.equal((cardDisplayText(card).match(/10\/10 seated/g) ?? []).length, 2);
-    assert.match(cardDisplayText(card), /Unseated signups \(0\)/);
+    assert.match(cardDisplayText(card), /Players waiting for a team \(0\)/);
     await handleScoutPublishButton(f.interaction(`scout:publishconfirm:${f.setup.id}:${getScoutSetupById(f.db, f.setup.id)!.version}`) as ButtonInteraction, f.db);
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.status, 'published');
     assert.match(cardDisplayText(card), /Scout filled/);
@@ -1082,7 +1082,7 @@ test('eligibility gain can trigger readiness and a missing role shows an actiona
     await refreshScoutMemberReadiness(
       f.client, f.signupDependencies, 'guild', { eligibilityRoleId: 'eligible' },
     );
-    assert.match(cardDisplayText(f.ops.all.first()!), /Live eligibility could not be verified/);
+    assert.match(cardDisplayText(f.ops.all.first()!), /Rat could not check who can join right now/);
     assert.ok(!cardDisplayText(f.ops.all.first()!).includes('A complete roster can be formed'));
     assert.equal(listScoutSignups(f.db, f.setup.id).length, 10);
   } finally { f.db.close(); }
@@ -1127,7 +1127,7 @@ test('eligibility warning plus a large working roster stays within Discord limit
     );
 
     const embed = f.ops.all.first()!.embeds[0];
-    assert.match(embed.description, /Live eligibility could not be verified/);
+    assert.match(embed.description, /Rat could not check who can join right now/);
     assert.ok(embed.description.length <= 4_096);
   } finally { f.db.close(); }
 });

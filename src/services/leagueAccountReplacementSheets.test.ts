@@ -19,7 +19,7 @@ test('saved formatted draft rows remain recoverable after raw numeric reads with
   await assert.rejects(() => f.sheets.verifyAccountReplacement(prepared), /draft slot or move status changed/i);
   f.gateway.rows('admin', 'Draft Picks')[5]![2] = 1;
   f.gateway.rows('admin', 'Draft Picks')[5]![5] = 123456789012345680;
-  await assert.rejects(() => f.sheets.verifyAccountReplacement(prepared), /identity or status ownership are invalid/i);
+  await assert.rejects(() => f.sheets.verifyAccountReplacement(prepared), /player details or recorded moves.*need fixing/i);
 });
 
 test('account replacement guards and writes only its existing roster/name cells, preserves draft status and historical IDs', async () => {

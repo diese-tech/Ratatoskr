@@ -37,7 +37,7 @@ test('working Scout Ops view shows partial assignments, OPEN seats, unseated rol
   assert.match(view.content, /Solo: <@solo>/);
   assert.match(view.content, /Solo: <@manual> \*\(manual, off-role\)\*/);
   assert.match(view.content, /Jungle: \*\*OPEN\*\*/);
-  assert.match(view.content, /Unseated signups \(1\)/);
+  assert.match(view.content, /Players waiting for a team \(1\)/);
   assert.match(view.content, /<@waiting> · Jungle, Support/);
   const controls = view.components.flatMap((row) => row.toJSON().components);
   assert.deepEqual(controls.map((control) => 'label' in control ? control.label : undefined), [
@@ -76,6 +76,6 @@ test('working Scout Ops view reserves room for summaries and warnings within Dis
 
   assert.ok(view.content.length <= 2_000);
   assert.match(view.content, /additional signup/);
-  assert.match(view.content, /additional ineligible signup/);
+  assert.match(view.content, /additional player\(s\) who cannot join/);
   assert.match(view.content, /need staff attention/);
 });

@@ -44,9 +44,25 @@ test('league audit controls produce human-readable staff support context', () =>
   assert.match(context('league-audit:confirm:YSL-AUD-1234:0:repair-roles').next ?? '', /review the issue again/i);
 });
 
-test('a safe league-sheet input error gives staff and the administrator an actionable report', async (t) => {
+test('game roster presentation and recovery alerts identify game updates rather than league changes', async (t) => {
   const f = fixture();
   t.mock.method(console, 'error', () => undefined);
+  try {
+    for (const action of ['Availability roster presentation', 'Coordination roster presentation', 'Published roster recovery']) {
+      await reportOperationalError(f.client, f.db, { guildId: 'guild', action, setupId: 12 }, Error('post response lost'));
+      const content = f.sent.at(-1).content;
+      assert.match(content, /could not finish \*\*updating the game\*\*/);
+      assert.match(content, /Game #12/);
+      assert.doesNotMatch(content, /updating the league records/);
+    }
+    assert.equal(f.sent.length, 3);
+  } finally { f.db.close(); }
+});
+
+test('a safe league-sheet input error gives staff and the administrator an actionable report', async (t) => {
+  const f = fixture();
+  const logs: string[] = [];
+  t.mock.method(console, 'error', (value: string) => logs.push(value));
   const replies: any[] = [];
   const interaction: any = {
     client: f.client,
@@ -70,10 +86,11 @@ test('a safe league-sheet input error gives staff and the administrator an actio
       assert.match(content, /column A/);
       assert.match(content, /No changes were made/);
       assert.match(content, /move the existing row values one column left/i);
-      assert.match(content, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
+      assert.doesNotMatch(content, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
       assert.doesNotMatch(content, /failed or could not confirm Discord delivery/i);
     }
     assert.match(f.sent[0].content, /Reference:/);
+    assert.ok(logs.some(value => value.includes('LEAGUE_SHEET_MISSING_DISCORD_ID')));
   } finally { f.db.close(); }
 });
 
@@ -125,12 +142,17 @@ test('unexpected failure acknowledges privately before staff lookup and reports 
     await handleInteractionError(interaction, f.db, new Error('first failure'), 'guild');
     assert.equal(f.sent.length, 1);
     assert.ok(replies[0].content.includes('Staff were notified'));
-    assert.match(f.sent[0].content, /Setup #12/);
+    for (const content of [f.sent[0].content, replies[0].content]) {
+      assert.match(content, /Some changes may already have happened/);
+      assert.match(content, /do not repeat it/);
+      assert.doesNotMatch(content, /before trying|retry|try again/i);
+    }
+    assert.match(f.sent[0].content, /Game #12/);
     expired = true; acknowledged = false; interaction.deferred = false;
     interaction.customId = 'scout:editpick:swapfirst:13:3';
     await handleInteractionError(interaction, f.db, new Error('second failure'), 'guild');
     assert.equal(f.sent.length, 2);
-    assert.match(f.sent[1].content, /Setup #13/);
+    assert.match(f.sent[1].content, /Game #13/);
   } finally { f.db.close(); }
 });
 
@@ -152,8 +174,8 @@ test('a delivered league reconciliation ticket is marked alerted and gives staff
     'guild',
   );
   assert.ok(getLeagueReconciliationTicket(f.db, 'YSL-REC-TEST')?.alertedAt);
-  assert.match(f.sent[0].content, /League sheet reconciliation/);
-  assert.match(f.sent[0].content, /Ratatoskr made no changes/);
+  assert.match(f.sent[0].content, /updating the league records/);
+  assert.match(f.sent[0].content, /Check Discord roles, both roster sheets/);
   f.db.close();
 });
 
@@ -172,10 +194,10 @@ test('a delivered immediate transaction reconciliation alert is not retried on r
   const error = Object.assign(new Error('Discord rollback failed.'), { reference: 'YSL-TRX-TEST' });
   await handleInteractionError(interaction, f.db, error, 'guild');
   assert.ok(getLeagueTransaction(f.db, 'YSL-TRX-TEST')?.reconciliationAlertedAt);
-  assert.match(f.sent[0].content, /League transaction reconciliation/);
-  assert.match(f.sent[0].content, /Discord rollback failed/);
-  assert.match(f.sent[0].content, /reconcile them manually/);
-  assert.match(f.sent[0].content, /do not retry/i);
+  assert.match(f.sent[0].content, /updating the league records/);
+  assert.match(f.sent[0].content, /Some changes may already have happened/);
+  assert.doesNotMatch(f.sent[0].content, /rollback/);
+  assert.match(f.sent[0].content, /do not repeat/i);
   f.db.close();
 });
 
@@ -452,7 +474,7 @@ for (const failure of ['public', 'players', 'denied', 'failure', 'missing', 'wro
       const report = await reportOperationalError(f.client, f.db, { guildId: 'guild', action: 'Swap' }, new Error('original failure'));
       assert.equal(report.staffDelivered, false);
       assert.equal(f.sent.length, 0);
-      assert.match(operationalErrorGuidance(report), /could not be confirmed.*Railway/);
+      assert.match(operationalErrorGuidance(report), /could not confirm.*staff.*reference/);
       assert.ok(report.reference);
     } finally { f.db.close(); }
   });

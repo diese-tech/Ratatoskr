@@ -25,7 +25,7 @@ function payload(view: LeagueAuditReviewView): InteractionReplyOptions & Interac
     embeds: [
       new EmbedBuilder()
         .setTitle(view.title)
-        .setDescription(`${view.description}\n\nLegacy review is read-only. Use Review League Ops on the current status card to preview and confirm a resolution.`)
+        .setDescription(`${view.description}\n\nThis view only shows records. Use Open league tools on the latest League Status message to preview and confirm changes.`)
         .setFooter({ text: view.footer })
         .setColor(0xc43c35),
     ],
@@ -91,7 +91,7 @@ export async function handleLeagueAuditReviewButton(
   if (!parsed) return false;
   if (!interaction.guild) {
     await interaction.reply({
-      content: 'League audit review is only available in the YSL server.',
+      content: 'Roster review is only available in the YSL server.',
       flags: MessageFlags.Ephemeral,
     });
     return true;
@@ -100,23 +100,23 @@ export async function handleLeagueAuditReviewButton(
   else await interaction.deferUpdate();
   const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
   if (!hasAccess(member, 'OPERATIONS')) {
-    await interaction.editReply({ content: 'Only league administrators can review or resolve roster audit issues.' });
+    await interaction.editReply({ content: 'Only Allfather, Aesir and Valkyrie staff can review or fix roster problems.' });
     return true;
   }
   if (parsed.action === 'confirm') {
-    await interaction.editReply({ content: 'Legacy review is read-only. Reopen Review League Ops on the current status card for a fresh preview and explicit confirmation.', embeds: [], components: [] });
+    await interaction.editReply({ content: 'This view only shows records. Use Open league tools on the latest League Status message to preview and confirm changes.', embeds: [], components: [] });
     return true;
   }
   const state = getLeagueAuditState(db, interaction.guild.id);
   if (!state || state.result === 'clean' || state.runReference !== parsed.reference) {
     await interaction.editReply({
-      content: 'This audit card is out of date. Use the current League Ops Status panel.',
+      content: 'This message is out of date. Use the latest League Status message.',
     });
     return true;
   }
   const finding = state.findings[parsed.page];
   if (!finding) {
-    await interaction.editReply({ content: 'That issue is no longer in the active audit.' });
+    await interaction.editReply({ content: 'That problem is no longer in the latest roster check.' });
     return true;
   }
   if (parsed.action === 'resolve') {

@@ -13,14 +13,19 @@ Tracked in [issue174](https://github.com/diese-tech/Ratatoskr/issues/174). Playe
 
 Existing integration checks still verify permissions, confirmation, competing changes, private replies, preserved history and recovery. Their text expectations follow the revised messages. The new result formatter is checked for both known and unknown internal outcomes.
 
-## Remaining review
+## Reviewed in the second pass
 
-- Public working-roster and status cards, including readiness and terminal states. Review all dynamic values, omission markers and notification failure guidance.
-- League Ops screens: readable operation states and repair/account-change choices; no raw payloads or stored state names.
-- Shared error notices and human-facing service validation: keep technical details in logs and provide a useful next step plus a support reference.
-- Division/season/server setup replies and attachments: simplify setup progress, repair summaries and failure explanations.
-- Staff guides and the canonical command reference in issue145. Technical deployment/developer documentation can retain necessary implementation details.
-- Live Discord wording/layout checks, distinct from automated and CI checks.
+- Public working-roster and status cards, including signups, readiness, replacements and finished/cancelled games. Omission markers and unavailable-player explanations use plain English.
+- League Status and private league tools: readable action states and repair/account-change choices, confirmation and expired-control instructions. Stored names and states are unchanged; display labels do not authorize actions.
+- Shared error notices: technical codes and traces stay in logs. Unknown saved failures do not appear verbatim; known causes such as missing current-name records receive readable explanations. Locally generated validation text is checked separately from historical/external errors.
+- Division/season/server replies and setup reports: readable states, actual channel names, setup progress and failure summaries. The alert message prefix/reference format is preserved for delivery recovery and cleanup.
+- [Command guide](command-reference.md): every registered root/subcommand, arguments, actual permissions/channel restrictions, preview/confirmation steps, game tools, and Discord copy/paste instructions. Technical deployment/developer documentation retains necessary implementation details.
+
+The source inventory reviewed 595 display expressions across 39 files, with separate checks of strings built in rendering functions and dynamic error/action/state paths. Approved intro and public transaction scripts were inspected and preserved. Credentials remain redacted; the standalone redactor does not load staff-alert settings into server setup.
+
+## Live check still pending
+
+Verify the new labels and message layout in Discord independently of tests/CI. The browser currently shows a sign-in page, so human Inhouse reaction-add/remove, the private create preview and visual acceptance have not been performed. A real game remains a separate acceptance check; do not create a public test game or replay a league transaction to manufacture evidence.
 
 ## Approved text to preserve
 

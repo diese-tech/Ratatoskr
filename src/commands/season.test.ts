@@ -241,12 +241,12 @@ test('/season create can provision and activate the next season while retaining 
   try {
     await handleSeasonCommand(firstCreate.interaction, db);
     assert.equal(getActiveSeason(db, 'guild')?.seasonNumber, 1);
-    assert.match(String(firstCreate.replies[0]), /Season 1 \(YSL Season 1\) is provisioned and now active\./);
+    assert.match(String(firstCreate.replies[0]), /Season 1 \(YSL Season 1\) is set up and now active\./);
 
     await handleSeasonCommand(close.interaction, db);
     await handleSeasonCommand(nextCreate.interaction, db);
 
-    assert.match(String(nextCreate.replies[0]), /Season 2 \(YSL Season 2\) is provisioned and now active\./);
+    assert.match(String(nextCreate.replies[0]), /Season 2 \(YSL Season 2\) is set up and now active\./);
     assert.equal(getSeasonByNumber(db, 'guild', 1)?.status, 'archived');
     assert.equal(getActiveSeason(db, 'guild')?.seasonNumber, 2);
   } finally {
@@ -378,9 +378,9 @@ test('/season status without a number selects the active season and reports a st
   try {
     await handleSeasonCommand(interaction, db);
     assert.match(String(replies[0]?.content), /^\*\*Season 5 status\*\*/);
-    assert.match(String(replies[0]?.content), /Lifecycle status: active/);
-    assert.match(String(replies[0]?.content), /Category: stale/);
-    assert.equal(String(replies[0]?.content).match(/: missing/g)?.length, 5);
+    assert.match(String(replies[0]?.content), /Status: Active/);
+    assert.match(String(replies[0]?.content), /Category: Missing or changed/);
+    assert.equal(String(replies[0]?.content).match(/: Missing$/gm)?.length, 5);
   } finally {
     db.close();
   }
@@ -431,14 +431,14 @@ test('/season status reports present, missing, and stale resources for a numbere
       replies[0]?.content,
       [
         '**Season 4 status**',
-        'Lifecycle status: inactive',
-        'Category: present',
+        'Status: Not active',
+        'Category: Present',
         'Channels:',
-        '- banned-content: present',
-        '- schedule: stale',
-        '- standings: misparented',
-        '- rosters: missing',
-        '- transactions: missing',
+        '- banned-content: Present',
+        '- schedule: Missing or changed',
+        '- standings: In the wrong category',
+        '- rosters: Missing',
+        '- transactions: Missing',
       ].join('\n'),
     );
     assert.deepEqual(db.serialize(), before, 'status must not mutate season or managed-resource state');

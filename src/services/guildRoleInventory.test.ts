@@ -56,7 +56,7 @@ test('incomplete member reads preserve inventory and a complete catch-up records
     await readLeagueMembers(f.guild);
     const before = getGuildRoleInventory(f.db, 'guild');
     f.members.delete('a');
-    await assert.rejects(readLeagueMembers(f.guild), /incomplete/);
+    await assert.rejects(readLeagueMembers(f.guild), /could not check every Discord member/);
     assert.deepEqual(getGuildRoleInventory(f.db, 'guild'), before);
     (f.guild as any).memberCount = 1;
     await readLeagueMembers(f.guild);

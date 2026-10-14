@@ -67,12 +67,12 @@ async function harness() {
     runtime.dispatch({ customId: id, actorId, guildId, kind, channelId: 'c', messageId: 'm', inputs });
   const click = (label: string, actor = 'admin', guild = 'g') => dispatch(buttonId(edits.at(-1), label), actor, guild);
   const preview = async () => {
-    await click('Operations'); await click('Inspect operation'); await click('Fresh transaction preview');
+    await click('Saved actions'); await click('View action'); await click('Preview player change');
     assert.equal(confirmations, 0);
     // The click finishes while external proof reads remain pending.
-    assert.ok(JSON.stringify(edits.at(-1)).includes('Checking fresh league state'));
-    release(); await until(() => JSON.stringify(edits.at(-1)).includes('Review the freshly computed transaction'));
-    await click('Review confirmation'); await click('Confirm this reviewed operation');
+    assert.ok(JSON.stringify(edits.at(-1)).includes('Checking the latest league records'));
+    release(); await until(() => JSON.stringify(edits.at(-1)).includes('Review these player changes'));
+    await click('Continue to confirmation'); await click('Confirm changes');
   };
   return { runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
     expire: () => { now += 11 * 60_000; }, count: () => confirmations, close: () => runtime.stopSweeper() };
@@ -94,8 +94,8 @@ test('real Fluxcord flow releases slow preview work, requires modal confirmation
 test('private Fluxcord controls reject another actor, another guild and revoked authorization before queueing', async () => {
   const h = await harness();
   try {
-    await h.click('Operations', 'other');
-    await h.click('Operations', 'admin', 'other-guild');
+    await h.click('Saved actions', 'other');
+    await h.click('Saved actions', 'admin', 'other-guild');
     assert.equal(h.copies.length, 2);
     await h.preview();
     h.deny();
@@ -111,7 +111,7 @@ test('expired Fluxcord modal cannot resume an old approval', async () => {
     await h.preview(); h.expire();
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.equal(h.count(), 0);
-    assert.ok(JSON.stringify(h.edits.at(-1)).includes('Reopen Review League Ops'));
+    assert.ok(JSON.stringify(h.edits.at(-1)).includes('Use Open league tools'));
   } finally { h.release(); h.close(); }
 });
 

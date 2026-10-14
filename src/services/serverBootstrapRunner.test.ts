@@ -1,8 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { Collection, type Guild } from 'discord.js';
 import type { ManagedResourceStore } from '../storage/index.js';
-import { runServerBootstrap } from './serverBootstrapRunner.js';
+import { runServerBootstrap, serverSetupErrorMessage } from './serverBootstrapRunner.js';
+
+test('duplicate server roles explain the Discord fix without sending staff to a roster sheet', () => {
+  const message = serverSetupErrorMessage('Role "Allfather" is ambiguous: 2 roles share that name in this guild. Resolve manually before running bootstrap.');
+  assert.match(message, /2 Discord roles named “Allfather”/);
+  assert.match(message, /Rename or remove.*in Discord/);
+  assert.doesNotMatch(message, /League Teams|ambiguous|bootstrap/);
+});
+
+test('server setup can load before staff alert settings are configured', () => {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
+    "await import('./src/services/serverBootstrapRunner.ts');"], {
+    cwd: process.cwd(), env: { ...process.env, STAFF_OPS_CHANNEL_ID: '' }, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test('server bootstrap dry-run awaits asynchronous storage without writing Discord or persistence', async () => {
   let reads = 0;
@@ -59,6 +75,8 @@ test('server bootstrap dry-run awaits asynchronous storage without writing Disco
 
   assert.ok(reads > 0);
   assert.equal(discordCreates, 0);
-  assert.match(log.join('\n'), /MODE: DRY RUN/);
-  assert.match(log.at(-1) ?? '', /Review the plan above/);
+  assert.match(log.join('\n'), /Preview only/);
+  assert.match(log.at(-1) ?? '', /Review the list above/);
+  assert.match(log.at(-1) ?? '', /\/server bootstrap apply/);
+  assert.match(log.at(-1) ?? '', /npm run guild:apply/);
 });
