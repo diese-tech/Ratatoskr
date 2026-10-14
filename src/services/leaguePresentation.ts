@@ -30,7 +30,7 @@ export function savedLeagueErrorMessage(message: string | null | undefined): str
     return 'Player Name History needs exactly one current name for this player. Ask staff to check that sheet and the saved action.';
   if (/more than one current roster assignment|exactly one Current Rosters assignment/i.test(message))
     return 'This player needs one current team entry. Check Current Rosters for missing or duplicate entries.';
-  if (/permission|authorization|access.*(denied|revoked)|not editable|role hierarchy/i.test(message))
+  if (/permission|authorization|access.*(denied|revoked)|not editable|role hierarchy|privileged|integration-owned/i.test(message))
     return 'The person or Rat no longer has the access needed for this action. Ask an admin to check permissions.';
   if (/429|quota|rate.?limit|throttl|cooldown|asked.*wait/i.test(message))
     return 'Discord or Google Sheets asked Rat to wait. Check the saved action’s status with staff; do not repeat it.';
@@ -46,11 +46,27 @@ export function savedLeagueErrorMessage(message: string | null | undefined): str
   return 'This problem needs staff review. Some changes may already have happened. Ask staff to check the records and any saved action; do not repeat it.';
 }
 
-/** Locally generated validation messages may already be readable. Historical
- * and external failures must use savedLeagueErrorMessage instead. */
+/** Validation failures also come from role checks and saved-action review.
+ * Unrecognized text must never be presumed suitable for a private reply. */
+const readableLeagueValidationMessages = new Set([
+  'A trade requires two different players.',
+  'Cross-division trades are not supported.',
+  'Both players are already on the same team.',
+  'The outgoing player cannot replace themselves.',
+  'That player is still in the YSL server. Use `/transaction drop` or `/transaction self-drop`.',
+  'The selected replacement is not a free agent.',
+  'Cross-division replacements are not supported.',
+  'The selected replacement does not have the Free Agent role.',
+  'The selected player is not a free agent.',
+  'Cross-division pickups are not supported.',
+  'The selected player does not have the Free Agent role.',
+  'League name cannot be blank.',
+  'That player is not currently in the Discord server.',
+  'This saved action was not found in this server. Check its reference.',
+  'Confirm that both Discord accounts belong to the same player.',
+]);
 export function leagueValidationMessage(message: string): string {
-  return /snapshot|reconcil|fingerprint|canonical|managed|hierarchy|payload|mutation|durable|gateway|schema|linkage|attest|convergence/i.test(message)
-    ? savedLeagueErrorMessage(message) : message;
+  return readableLeagueValidationMessages.has(message) ? message : savedLeagueErrorMessage(message);
 }
 
 /** Only for a typed repair failure that guarantees no external write occurred. */

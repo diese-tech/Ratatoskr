@@ -45,7 +45,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
         const message = error instanceof LeagueMutationValidationError ? leagueValidationMessage(error.message)
           : error instanceof LeagueAuditRepairNoWriteError ? leagueRepairNoWriteMessage(error.message)
           : error instanceof LeagueJobBlockedError ? savedLeagueErrorMessage(error.message)
-          : 'Rat could not finish this review. Open league tools from the latest League Status message. If you already confirmed, check Saved actions before trying again.';
+          : 'Rat could not finish this review. Open league tools from the latest League Status message and ask staff to check Saved actions. If you already confirmed, do not repeat the action.';
         job.mutate(data => { data.notice = leagueOpsText(message); });
       } finally { job.mutate(data => { data.busy = false; }); }
     });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { leagueActionLabel, leagueStatusLabel, savedLeagueErrorMessage, leagueRepairNoWriteMessage } from './leaguePresentation.js';
+import { leagueActionLabel, leagueStatusLabel, savedLeagueErrorMessage, leagueRepairNoWriteMessage, leagueValidationMessage } from './leaguePresentation.js';
 
 test('stored actions and uncertain writes have readable display names and safe unknown fallbacks', () => {
   assert.equal(leagueActionLabel('repair-roles'), 'Fix Discord roles');
@@ -35,5 +35,18 @@ test('known no-write repair failures explain fresh-preview recovery without sugg
     assert.match(guidance, /No changes were made/);
     assert.match(guidance, /fresh preview before approving/);
     assert.doesNotMatch(guidance, /may already|do not repeat|SQLITE|private-value/);
+  }
+});
+
+test('unmatched technical validation messages use safe guidance rather than leaking into private replies', () => {
+  for (const message of [
+    'Role is privileged, integration-owned, or not editable.',
+    'Only a proven pre-write blocked transaction can receive a fresh preview.',
+    'UNRECOGNIZED_DETAIL token=private-value',
+  ]) {
+    const guidance = leagueValidationMessage(message);
+    assert.doesNotMatch(guidance, /privileged|integration-owned|not editable|proven pre-write|UNRECOGNIZED_DETAIL|private-value/);
+    assert.match(guidance, /admin|staff/i);
+    assert.doesNotMatch(guidance, /before trying|try again/i);
   }
 });
