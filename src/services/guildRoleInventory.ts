@@ -18,7 +18,9 @@ export function installGuildRoleInventory(client: Client, db: Database.Database,
   };
   const update = (_old: GuildMember | PartialGuildMember, value: GuildMember) => member(value);
   const departure = (value: GuildMember | PartialGuildMember) => {
-    if (value.guild.id === guildId) safely(() => observeInventoryDeparture(db, guildId, value.id, at()));
+    if (value.guild.id === guildId) safely(() => observeInventoryDeparture(db, guildId, { discordId: value.id,
+      displayName: typeof value.displayName === 'string' ? value.displayName : undefined,
+      bot: typeof value.user?.bot === 'boolean' ? value.user.bot : undefined }, at()));
   };
   const role = (value: Role) => {
     if (value.guild.id === guildId) safely(() => observeInventoryRole(db, guildId, value, at()));

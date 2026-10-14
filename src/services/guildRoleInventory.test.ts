@@ -83,3 +83,23 @@ test('inventory write failures cannot abort league member reads or leave a parti
     assert.equal(getGuildRoleInventory(f.db, 'guild').members.length, 1);
   } finally { f.stop(); f.db.close(); }
 });
+
+test('departures before the first complete read retain available identity and survive later catch-up', async () => {
+  const f = fixture();
+  try {
+    const departing = f.member('departing', ['inhouse'], true);
+    departing.displayName = 'Known name';
+    f.events.emit('guildMemberRemove', departing);
+    const absent = getGuildRoleInventory(f.db, 'guild').members.find(m => m.discordId === 'departing');
+    assert.equal(absent?.displayName, 'Known name');
+    assert.equal(absent?.bot, true);
+    assert.equal(absent?.present, false);
+    assert.deepEqual(absent?.roleIds, []);
+    f.events.emit('guildMemberRemove', { id: 'departing', guild: f.guild });
+    await readLeagueMembers(f.guild);
+    const retained = getGuildRoleInventory(f.db, 'guild').members.find(m => m.discordId === 'departing');
+    assert.equal(retained?.displayName, 'Known name');
+    assert.equal(retained?.bot, true);
+    assert.equal(retained?.present, false);
+  } finally { f.stop(); f.db.close(); }
+});

@@ -9,9 +9,13 @@ export function observeInventoryMember(db: Database.Database, guildId: string, m
       present=1,role_ids_json=excluded.role_ids_json,observed_at=excluded.observed_at`)
     .run(guildId, member.discordId, member.displayName, Number(member.bot), JSON.stringify([...new Set(member.roleIds)].sort()), at);
 }
-export function observeInventoryDeparture(db: Database.Database, guildId: string, discordId: string, at: string) {
-  db.prepare(`UPDATE guild_inventory_members SET present=0,role_ids_json='[]',observed_at=?
-    WHERE guild_id=? AND discord_id=?`).run(at, guildId, discordId);
+export function observeInventoryDeparture(db: Database.Database, guildId: string,
+  member: { discordId: string; displayName?: string; bot?: boolean }, at: string) {
+  db.prepare(`INSERT INTO guild_inventory_members VALUES(?,?,?,?,0,'[]',?)
+    ON CONFLICT(guild_id,discord_id) DO UPDATE SET present=0,role_ids_json='[]',observed_at=excluded.observed_at,
+      display_name=COALESCE(?,guild_inventory_members.display_name),bot=COALESCE(?,guild_inventory_members.bot)`)
+    .run(guildId, member.discordId, member.displayName ?? member.discordId, Number(member.bot ?? false), at,
+      member.displayName ?? null, member.bot === undefined ? null : Number(member.bot));
 }
 export function observeInventoryRole(db: Database.Database, guildId: string, role: InventoryRole, at: string) {
   db.prepare(`INSERT INTO guild_inventory_roles VALUES(?,?,?,1,?)
