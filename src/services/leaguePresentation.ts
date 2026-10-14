@@ -35,6 +35,8 @@ export function savedLeagueErrorMessage(message: string | null | undefined): str
   if (/429|quota|rate.?limit|throttl|cooldown|asked.*wait/i.test(message))
     return 'Discord or Google Sheets asked Rat to wait. Check the saved action’s status with staff; do not repeat it.';
   if (/503|temporarily unavailable/i.test(message)) return 'Discord or Google Sheets was temporarily unavailable.';
+  if (/Only a proven pre-write blocked transaction can receive a fresh preview\./.test(message))
+    return 'Rat cannot show a new preview for this saved action. Ask staff to check its status and records; do not repeat it.';
   if (/preview|fingerprint|changed.*(writing|confirmation)|source changed/i.test(message))
     return 'The information changed after the preview. Check the latest records before approving another action.';
   if (/current.name|Player Name History/i.test(message)) return 'The player’s name records need checking in Player Name History.';
