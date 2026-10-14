@@ -23,11 +23,24 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       {
         usage: '/scout create',
         description:
-          'From scout-ops, authorized staff choose a division, time, signup limit, note, and optional eligibility role, then post the game to that division\'s signup channel. Fill can cover any missing role. A second setup at the same time requires confirmation, and twenty eligible players can build two games. When a roster is ready, its Scout Ops panel pings the creator once; Review roster opens private controls to Shuffle, edit across games, and Publish. Published rosters provide Swap and Replace player controls in the signup channel. Players manually post match screenshots in the results channel.',
+          'Staff: run this in scout-ops. Choose the division, time and how many roles each player can pick. You can add a note or require a Discord role to join. Fill means any open role. Confirm before posting another game at the same time. With twenty players who can join, build two games. Rat pings the creator when teams are ready. Use Review roster to Shuffle, edit and Publish. After posting teams, use Swap or Replace player to make changes. Post match screenshots in the results channel.',
       },
       {
         usage: '/scout cancel',
-        description: 'From scout-ops, view active postings you can manage across divisions, choose a posting, then confirm cancellation. Published rosters use their Swap or Replace player controls instead.',
+        description: 'Staff: run this in scout-ops. Pick a game you can manage, then confirm cancellation. If teams are already posted, use Swap or Replace player instead.',
+      },
+    ],
+  },
+  {
+    title: '🎮 Inhouse Commands',
+    entries: [
+      {
+        usage: '/inhouse create',
+        description: 'React 🎮 to the pinned message in inhouses to get the Inhouse role and game pings. Unreact to remove the role. With the role, run this command in inhouses to host. Anyone can join. Hosts manage only their own games. Rat tries to balance teams by division; you can change them yourself.',
+      },
+      {
+        usage: '/inhouse cancel',
+        description: 'In inhouses, pick one of your games and confirm cancellation. You need the Inhouse role. Once teams are posted, use the game controls to change players or finish the game.',
       },
     ],
   },
@@ -58,7 +71,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       {
         usage: 'Give both `Captain` + the division role',
         description:
-          "`<Division> Captain` (e.g. Vanaheim Captain) is granted automatically, never assigned by hand. Give a player the server-wide `Captain` role AND their division role (e.g. `Vanaheim`), and Ratatoskr adds `<Division> Captain` within moments. Assigning `<Division> Captain` directly will be removed again on the next role change, since the two prerequisite roles aren't both present. Full details: `docs/operations/roles-and-permissions.md`.",
+          "Give the player both `Captain` and their division role, such as `Vanaheim`. Rat then adds `Vanaheim Captain`. Do not give the division Captain role by hand: Rat removes it if the player does not have both required roles.",
       },
     ],
   },
@@ -68,7 +81,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       {
         usage: '/transaction trade | drop | self-drop | pickup | rename | departure',
         description:
-          'Allfather, Aesir and Valkyrie staff preview roster changes, then confirm them with confirm:true. Rename sets the requested Discord server nickname and syncs league records while preserving aliases/history. Drop, self-drop, and departure may include a same-division replacement. Self-drops record the current-and-next-season suspension without Free Agent status. Ratatoskr verifies Discord and both roster sheets, records the operator, and posts completed moves in transactions.',
+          'Allfather, Aesir and Valkyrie staff: run once to see the changes, then run the same command with confirm:true to approve. Rename changes the Discord server nickname and league records, keeping old names. Drop, self-drop and departure can include a replacement from the same division. Self-drop suspends the player for this season and the next; it does not make them a Free Agent. Rat checks Discord and both roster sheets, records who approved it, then posts the completed move in transactions.',
       },
     ],
   },
@@ -91,8 +104,8 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
           'Previews the active season. Re-run with the season number and confirm:true to archive it. Discord channels stay unchanged.',
       },
       {
-        usage: '/scout config [operations_channel:<#scout-ops>] [timezone:<IANA zone>] [bind_emoji:true]',
-        description: 'Binds the Scout Ops control channel and sets additional all-division scout staff, the game-time timezone, five required role emojis, and optional Fill.',
+        usage: '/scout config [operations_channel:<#scout-ops>] [timezone:<time zone>] [bind_emoji:true]',
+        description: 'Choose the scout-ops channel, extra staff who can manage all divisions, the time zone and signup emojis for each role. Fill is optional.',
       },
       {
         usage: '/server bootstrap plan',

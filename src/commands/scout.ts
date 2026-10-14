@@ -37,7 +37,7 @@ export const scoutCommand = new SlashCommandBuilder()
   .addSubcommand((subcommand) =>
     subcommand
       .setName('cancel')
-      .setDescription('Choose an active scouting posting to cancel.'),
+      .setDescription('Choose a scouting game to cancel.'),
   )
   .addSubcommand((subcommand) =>
     subcommand
@@ -53,13 +53,13 @@ export const scoutCommand = new SlashCommandBuilder()
       .addBooleanOption((option) =>
         option
           .setName('bind_emoji')
-          .setDescription('Bind five role emojis and optional Fill.')
+          .setDescription('Choose signup emojis for the five play roles and optional Fill.')
           .setRequired(false),
       )
       .addChannelOption((option) =>
         option
           .setName('operations_channel')
-          .setDescription('Bind the staff control channel inside the manually created Scout Operations category.')
+          .setDescription('Choose the staff channel in the Scout Operations category.')
           .addChannelTypes(ChannelType.GuildText)
           .setRequired(false),
       ),
@@ -74,7 +74,7 @@ function renderScoutConfig(config: ScoutConfig): {
     : 'None';
   const emoji = SCOUT_SIGNUP_ROLES.map((role) => {
     const emojiId = config.emojiByRole[role];
-    const missing = role === 'fill' ? 'not bound (optional)' : 'not bound';
+    const missing = role === 'fill' ? 'not set (optional)' : 'not set';
     return `${SCOUT_SIGNUP_ROLE_LABELS[role]}: ${emojiId ? `<:role:${emojiId}>` : missing}`;
   }).join('\n');
 
@@ -87,11 +87,11 @@ function renderScoutConfig(config: ScoutConfig): {
 
   return {
     content: [
-      '**Scout configuration**',
+      '**Scout settings**',
       `Timezone: \`${config.timezone}\``,
       `Additional scout staff: ${staffRoles}`,
-      'Built-in access: Allfather, Aesir, Franchise Representative, and the selected division\'s Manager and Captain.',
-      `Operations channel: ${config.operationsChannelId ? `<#${config.operationsChannelId}>` : 'not bound'}`,
+      'Who can manage games: Allfather, Aesir, Valkyrie, Franchise Representative, extra scout staff, and that division\'s Manager and Captain.',
+      `Staff channel: ${config.operationsChannelId ? `<#${config.operationsChannelId}>` : 'not set'}`,
       '',
       emoji,
       '',
@@ -132,7 +132,7 @@ export async function handleScoutCommand(
   const timezone = interaction.options.getString('timezone');
   if (timezone && !isValidScoutTimezone(timezone)) {
     await interaction.reply({
-      content: 'That is not a valid IANA timezone. Try a value such as `America/New_York`.',
+      content: 'That time zone was not found. Choose one from the list, such as `America/New_York`.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -196,7 +196,7 @@ export async function handleScoutConfigRoleSelect(
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const { hasAccess } = await import('../services/authorization.js');
   if (!hasAccess(member, 'ADMIN')) {
-    await interaction.reply({ content: 'You do not have permission to change scout configuration.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'You do not have permission to change scout settings. Only Allfather and Aesir staff can do that.', flags: MessageFlags.Ephemeral });
     return true;
   }
 

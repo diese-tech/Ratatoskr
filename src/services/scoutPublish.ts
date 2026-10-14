@@ -1,4 +1,5 @@
 import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
+import { scoutRosterChangeFailure } from './scoutGamePresentation.js';
 import { reportOperationalError, operationalErrorGuidance } from './operationalErrors.js';
 import {
   ActionRowBuilder,
@@ -254,7 +255,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       publishedOrigin,
     );
     if (!setup) {
-      await interaction.editReply({ content: 'You do not have permission to manage this scout result.' });
+      await interaction.editReply({ content: 'You do not have permission to manage this game.' });
       return true;
     }
     if (await rejectFinishedScout(interaction, db, setupId)) return true;
@@ -264,7 +265,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       return true;
     }
     if (setup.version !== expectedVersion) {
-      await interaction.editReply({ content: 'This roster view is stale. Open the current roster controls again.', components: [] });
+      await interaction.editReply({ content: 'The roster changed since you opened it. Open the game’s latest roster controls and try again.', components: [] });
       return true;
     }
     if (parts[1] === 'publishback') {
@@ -290,7 +291,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
         eligibleSignups, new Set(slots.map((slot) => slot.userId)), target.role,
       ).find((item) => item.userId === userId);
       if (!target || !member || !isScoutUserEligible(member.roles.cache.keys(), setup.eligibilityRoleId) || !candidate) {
-        await interaction.editReply({ content: 'That replacement candidate is no longer eligible or unseated.', components: [] });
+        await interaction.editReply({ content: 'That player can no longer take this spot. They may already be on a team or have lost access to this game.', components: [] });
         return true;
       }
       const outcome = replacePublishedScoutRosterCandidateIfVersion(db, {
@@ -298,7 +299,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
         allowExplicitMember: false, now: Math.floor(Date.now() / 1_000),
       });
       if (outcome !== 'updated') {
-        await interaction.editReply({ content: `No replacement was made (${outcome}).`, components: [] });
+        await interaction.editReply({ content: scoutRosterChangeFailure(outcome), components: [] });
         return true;
       }
       await finishPublishedUpdate(interaction, db, setupId);
@@ -320,12 +321,12 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       const names = await resolveScoutPlayerNames(interaction.guild!, slots.map((slot) => slot.userId));
       const menu = new StringSelectMenuBuilder()
         .setCustomId(`scout:publishedpick:${setupId}:${expectedVersion}`)
-        .setPlaceholder('Published slot to replace')
+        .setPlaceholder('Choose a player to replace')
         .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder()
           .setLabel(formatScoutSlotLabel(slot, names.get(slot.userId)))
           .setValue(String(slot.id))));
       await interaction.editReply({
-        content: 'Choose the published roster slot to replace.',
+        content: 'Choose the player to replace on the posted teams.',
         components: [new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(menu)],
       });
       return true;
@@ -336,12 +337,12 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       const names = await resolveScoutPlayerNames(interaction.guild!, slots.map((slot) => slot.userId));
       const menu = new StringSelectMenuBuilder()
         .setCustomId(`scout:publishedswapfirst:${setupId}:${expectedVersion}`)
-        .setPlaceholder('First published player')
+        .setPlaceholder('First player to swap')
         .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder()
           .setLabel(formatScoutSlotLabel(slot, names.get(slot.userId)))
           .setValue(String(slot.id))));
       await interaction.editReply({
-        content: 'Choose the first published player to swap.',
+        content: 'Choose the first player to swap on the posted teams.',
         components: [new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(menu)],
       });
       return true;
@@ -356,7 +357,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     const ineligible = preflightSlots.filter((slot) => !eligibleUserIds.has(slot.userId));
     if (ineligible.length) {
       await interaction.editReply({
-        content: `Publishing is blocked because these players no longer satisfy the eligibility role: ${ineligible.map((slot) => `<@${slot.userId}>`).join(', ')}`,
+        content: `These players can no longer join this game. Replace them before posting teams: ${ineligible.map((slot) => `<@${slot.userId}>`).join(', ')}`,
         components: [],
         allowedMentions: { parse: [] },
       });
@@ -368,7 +369,7 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
       }));
     if (claim.status !== 'claimed') {
       await interaction.editReply({
-        content: claim.status === 'withdrawals' ? 'Publishing is blocked by one or more withdrawn signups.' : 'That publish confirmation is stale or already completed.',
+        content: claim.status === 'withdrawals' ? 'Publishing is blocked by one or more withdrawn signups.' : 'The teams changed since you opened this confirmation, or they were already posted. Open the game’s latest roster controls.',
         components: [],
       });
       return true;
@@ -407,13 +408,13 @@ export async function handleScoutPublishButton(interaction: ButtonInteraction, d
     } catch (error) {
       const report = await reportOperationalError(interaction.client, db, { guildId: setup.guildId, setupId, action: 'Scout publication' }, error);
       await interaction.editReply({
-        content: `Publishing was interrupted after the database claim. Ratatoskr kept the authoritative publish state for safe recovery: ${operationalErrorGuidance(report)}`,
+        content: `Rat saved your approval, but could not finish posting the teams. The post may already be there. Do not publish again; staff need to check it first. ${operationalErrorGuidance(report)}`,
         components: [],
       });
       return true;
     }
     await refreshScoutStatusCardSafely(interaction.client, db, setup.id);
-    await interaction.editReply({ content: `Scout roster published: ${resultMessage.url}`, components: [] });
+    await interaction.editReply({ content: `Teams posted: ${resultMessage.url}`, components: [] });
     return true;
   });
 }
@@ -433,7 +434,7 @@ export async function handleScoutPublishedSlotSelect(
     return withPublishedDivisionGuard(interaction, db, setupId, async () => {
       const setup = await authorized(interaction, db, setupId, 'published', 'private-continuation');
       if (!setup || setup.version !== version || await rejectFinishedScout(interaction, db, setupId)) {
-        if (!setup || setup.version !== version) await interaction.editReply({ content: 'This roster view is stale.', components: [] });
+        if (!setup || setup.version !== version) await interaction.editReply({ content: 'The roster changed since you opened it. Open the game’s latest roster controls and try again.', components: [] });
         return true;
       }
       const slots = listScoutRosterSlots(db, setupId);
@@ -446,7 +447,7 @@ export async function handleScoutPublishedSlotSelect(
         eligibleSignups, new Set(slots.map((slot) => slot.userId)), target.role,
       ).find((item) => item.userId === userId);
       if (!target || !member || !isScoutUserEligible(member.roles.cache.keys(), setup.eligibilityRoleId) || !candidate) {
-        await interaction.editReply({ content: 'That replacement candidate is no longer eligible or unseated.', components: [] });
+        await interaction.editReply({ content: 'That player can no longer take this spot. They may already be on a team or have lost access to this game.', components: [] });
         return true;
       }
       if (candidate.offRole) {
@@ -467,7 +468,7 @@ export async function handleScoutPublishedSlotSelect(
         allowExplicitMember: false, now: Math.floor(Date.now() / 1_000),
       });
       if (outcome !== 'updated') {
-        await interaction.editReply({ content: `No replacement was made (${outcome}).`, components: [] });
+        await interaction.editReply({ content: scoutRosterChangeFailure(outcome), components: [] });
         return true;
       }
       await finishPublishedUpdate(interaction, db, setupId);
@@ -492,7 +493,7 @@ export async function handleScoutPublishedSlotSelect(
       return true;
     }
     if (setup.version !== version) {
-      await interaction.editReply({ content: 'This roster view is stale. Open the current roster controls again.', components: [] });
+      await interaction.editReply({ content: 'The roster changed since you opened it. Open the game’s latest roster controls and try again.', components: [] });
       return true;
     }
     if (parts[1] === 'publishedswapfirst') {
@@ -532,7 +533,7 @@ export async function handleScoutPublishedSlotSelect(
       if (!swapPublishedScoutRosterSlotsIfVersion(
         db, setupId, version, firstSlotId, slotId, interaction.user.id,
       )) {
-        await interaction.editReply({ content: 'That result view was stale; no swap was made.', components: [] });
+        await interaction.editReply({ content: 'The roster changed since you opened it. No players were swapped. Open the game’s latest roster controls and try again.', components: [] });
         return true;
       }
       await finishPublishedUpdate(interaction, db, setupId);
@@ -600,7 +601,7 @@ export async function handleScoutPublishedUserSelect(
       return true;
     }
     if (setup.version !== version) {
-      await interaction.editReply({ content: 'This roster view is stale. Open the current roster controls again.', components: [] });
+      await interaction.editReply({ content: 'The roster changed since you opened it. Open the game’s latest roster controls and try again.', components: [] });
       return true;
     }
     const userId = interaction.values[0]!;
@@ -633,7 +634,7 @@ export async function handleScoutPublishedUserSelect(
       allowExplicitMember: true, now: Math.floor(Date.now() / 1_000),
     });
     if (outcome !== 'updated' || !oldSlot) {
-      await interaction.editReply({ content: `No replacement was made (${outcome}).`, components: [] });
+      await interaction.editReply({ content: scoutRosterChangeFailure(outcome), components: [] });
       return true;
     }
     await finishPublishedUpdate(interaction, db, setupId);
@@ -712,7 +713,7 @@ async function finishPublishedUpdate(interaction: MessageComponentInteraction, d
     await reconcileScoutRosterUpdateLocked(interaction.client, db, setupId);
   } catch (error) {
     const report = await reportOperationalError(interaction.client, db, { guildId: interaction.guildId!, setupId, action: 'Published roster recovery', next: 'Roster change saved; inspect pending Discord edit or notice before retrying a player change.' }, error);
-    await interaction.editReply({ content: `The roster change is saved; Discord update or notice delivery is pending recovery. Do not repeat the player change. ${operationalErrorGuidance(report)}`, components: [] });
+    await interaction.editReply({ content: `The player change is saved, but Rat could not finish updating the Discord post or sending its notice. Do not make the player change again. ${operationalErrorGuidance(report)}`, components: [] });
     return;
   }
   await refreshScoutStatusCardSafely(interaction.client, db, setupId);
@@ -721,7 +722,7 @@ async function finishPublishedUpdate(interaction: MessageComponentInteraction, d
 
 async function rejectFinishedScout(interaction: MessageComponentInteraction, db: Database.Database, setupId: number): Promise<boolean> {
   if (!getScoutCompletion(db, setupId)) return false;
-  await interaction.editReply({ content: 'This scout is finished. The roster is kept for history and player edits are closed.', components: [] });
+  await interaction.editReply({ content: 'This game is finished. The roster is kept for history; players can no longer be changed.', components: [] });
   return true;
 }
 
