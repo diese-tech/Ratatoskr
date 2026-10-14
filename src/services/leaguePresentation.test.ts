@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { leagueActionLabel, leagueStatusLabel, savedLeagueErrorMessage } from './leaguePresentation.js';
+import { leagueActionLabel, leagueStatusLabel, savedLeagueErrorMessage, leagueRepairNoWriteMessage } from './leaguePresentation.js';
 
 test('stored actions and uncertain writes have readable display names and safe unknown fallbacks', () => {
   assert.equal(leagueActionLabel('repair-roles'), 'Fix Discord roles');
@@ -23,4 +23,17 @@ test('saved failures retain the historical name-record cause without showing raw
   assert.match(unknown, /Some changes may already have happened/);
   assert.match(unknown, /do not repeat it/);
   assert.doesNotMatch(unknown, /try|retry|again/i);
+});
+
+test('known no-write repair failures explain fresh-preview recovery without suggesting uncertain writes', () => {
+  for (const message of [
+    'This issue changed since this review page opened. Review the refreshed audit before trying again.',
+    'The repair source changed since this review page opened. Review a fresh preview and explicitly confirm it before trying again.',
+    'SQLITE_CONSTRAINT token=private-value',
+  ]) {
+    const guidance = leagueRepairNoWriteMessage(message);
+    assert.match(guidance, /No changes were made/);
+    assert.match(guidance, /fresh preview before approving/);
+    assert.doesNotMatch(guidance, /may already|do not repeat|SQLITE|private-value/);
+  }
 });

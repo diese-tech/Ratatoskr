@@ -44,6 +44,21 @@ test('league audit controls produce human-readable staff support context', () =>
   assert.match(context('league-audit:confirm:YSL-AUD-1234:0:repair-roles').next ?? '', /review the issue again/i);
 });
 
+test('game roster presentation and recovery alerts identify game updates rather than league changes', async (t) => {
+  const f = fixture();
+  t.mock.method(console, 'error', () => undefined);
+  try {
+    for (const action of ['Availability roster presentation', 'Coordination roster presentation', 'Published roster recovery']) {
+      await reportOperationalError(f.client, f.db, { guildId: 'guild', action, setupId: 12 }, Error('post response lost'));
+      const content = f.sent.at(-1).content;
+      assert.match(content, /could not finish \*\*updating the game\*\*/);
+      assert.match(content, /Game #12/);
+      assert.doesNotMatch(content, /updating the league records/);
+    }
+    assert.equal(f.sent.length, 3);
+  } finally { f.db.close(); }
+});
+
 test('a safe league-sheet input error gives staff and the administrator an actionable report', async (t) => {
   const f = fixture();
   const logs: string[] = [];

@@ -7,7 +7,7 @@ import { leagueOpsText, type LeagueOpsIssue, type LeagueOpsOperation, type Leagu
 import { LeagueAuditRepairNoWriteError } from './leagueAuditResolution.js';
 import type { AccountReplacementPreview } from './leagueAccountReplacement.js';
 import { draftPickVerificationText } from './draftPickTracking.js';
-import { leagueActionLabel, leagueStatusLabel, savedLeagueErrorMessage, leagueValidationMessage } from './leaguePresentation.js';
+import { leagueActionLabel, leagueStatusLabel, savedLeagueErrorMessage, leagueValidationMessage, leagueRepairNoWriteMessage } from './leaguePresentation.js';
 
 export type LeagueOpsPanelData = { snapshot: LeagueOpsSnapshot; page: number; selectedIssue?: LeagueOpsIssue;
   selectedOperation?: LeagueOpsOperation; replacement?: AccountReplacementPreview; transaction?: ReviewTransactionPreview;
@@ -43,7 +43,8 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
       try { const changes = await work(); job.mutate(data => { Object.assign(data, changes); }); }
       catch (error) {
         const message = error instanceof LeagueMutationValidationError ? leagueValidationMessage(error.message)
-          : error instanceof LeagueJobBlockedError || error instanceof LeagueAuditRepairNoWriteError ? savedLeagueErrorMessage(error.message)
+          : error instanceof LeagueAuditRepairNoWriteError ? leagueRepairNoWriteMessage(error.message)
+          : error instanceof LeagueJobBlockedError ? savedLeagueErrorMessage(error.message)
           : 'Rat could not finish this review. Open league tools from the latest League Status message. If you already confirmed, check Saved actions before trying again.';
         job.mutate(data => { data.notice = leagueOpsText(message); });
       } finally { job.mutate(data => { data.busy = false; }); }

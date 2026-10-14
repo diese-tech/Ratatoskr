@@ -174,7 +174,7 @@ export async function reportOperationalError(
     const actionName = context.action.startsWith('/') ? context.action
       : context.action === 'League roster audit repair' ? 'fixing roster problems'
       : context.action === 'League roster audit review' ? 'reviewing roster problems'
-      : /scout|inhouse/i.test(context.action) ? 'updating the game'
+      : /scout|inhouse/i.test(context.action) || /^(Availability roster presentation|Coordination roster presentation|Published roster recovery)$/.test(context.action) ? 'updating the game'
       : /league|roster|transaction|account/i.test(context.action) ? 'updating the league records'
       : 'that action';
     await channel.send({ content: [

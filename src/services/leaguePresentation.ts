@@ -52,3 +52,10 @@ export function leagueValidationMessage(message: string): string {
   return /snapshot|reconcil|fingerprint|canonical|managed|hierarchy|payload|mutation|durable|gateway|schema|linkage|attest|convergence/i.test(message)
     ? savedLeagueErrorMessage(message) : message;
 }
+
+/** Only for a typed repair failure that guarantees no external write occurred. */
+export function leagueRepairNoWriteMessage(message: string): string {
+  const reason = /changed since this review page opened/i.test(message)
+    ? 'The records changed after this review opened.' : 'Rat could not prepare this repair.';
+  return `${reason} No changes were made. Open league tools from the latest League Status message, check the roster problems and review a fresh preview before approving a fix.`;
+}
