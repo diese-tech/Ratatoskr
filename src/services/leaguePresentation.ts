@@ -27,23 +27,23 @@ export function leagueStatusLabel(status: string): string {
 export function savedLeagueErrorMessage(message: string | null | undefined): string {
   if (!message || message === 'No saved error.') return 'No problem was recorded.';
   if (/exactly one current[- ]name record|multiple current name records/i.test(message))
-    return 'Player Name History needs exactly one current name for this player. Check that sheet before trying the fix again.';
+    return 'Player Name History needs exactly one current name for this player. Ask staff to check that sheet and the saved action.';
   if (/more than one current roster assignment|exactly one Current Rosters assignment/i.test(message))
     return 'This player needs one current team entry. Check Current Rosters for missing or duplicate entries.';
   if (/permission|authorization|access.*(denied|revoked)|not editable|role hierarchy/i.test(message))
     return 'The person or Rat no longer has the access needed for this action. Ask an admin to check permissions.';
   if (/429|quota|rate.?limit|throttl|cooldown|asked.*wait/i.test(message))
-    return 'Discord or Google Sheets asked Rat to wait. Check the action’s status before trying anything again.';
+    return 'Discord or Google Sheets asked Rat to wait. Check the saved action’s status with staff; do not repeat it.';
   if (/503|temporarily unavailable/i.test(message)) return 'Discord or Google Sheets was temporarily unavailable.';
   if (/preview|fingerprint|changed.*(writing|confirmation)|source changed/i.test(message))
     return 'The information changed after the preview. Check the latest records before approving another action.';
   if (/current.name|Player Name History/i.test(message)) return 'The player’s name records need checking in Player Name History.';
   if (/ambiguous|inactive team|League Teams/i.test(message)) return 'Rat cannot choose the correct team or role. Ask staff to check League Teams.';
   if (/roster audit|Current Rosters|roster.*(mismatch|does not match)/i.test(message))
-    return 'The roster records do not agree. Review the current roster problems before trying another player change.';
+    return 'The roster records do not agree. Ask staff to review the current roster problems and the saved action.';
   if (/delivery|partial|interrupted|outcome unknown/i.test(message))
     return 'Rat could not confirm how far this action got. Some changes may already have happened. Check the records and posts; do not run it again.';
-  return 'This problem needs staff review. Ask staff to check the records and any saved action before trying again.';
+  return 'This problem needs staff review. Some changes may already have happened. Ask staff to check the records and any saved action; do not repeat it.';
 }
 
 /** Locally generated validation messages may already be readable. Historical

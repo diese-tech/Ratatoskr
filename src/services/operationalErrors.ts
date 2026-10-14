@@ -185,8 +185,8 @@ export async function reportOperationalError(
       `Time: ${new Date().toISOString()}`,
       details ? `**What to do:** ${safe(details.next)}`
         : /reconciliation/i.test(context.action)
-          ? 'Check Discord roles, both roster sheets and the transaction post/history. Some changes may already have happened. Do not retry the command until they agree.'
-          : 'Check the saved action and current records or posts before trying anything again. Some changes may already have happened.',
+          ? 'Check Discord roles, both roster sheets and the transaction post/history with staff. Some changes may already have happened. Do not repeat the command.'
+          : 'Some changes may already have happened. Ask staff to check the saved action and current records or posts; do not repeat it.',
       `Reference: ${report.reference}`,
     ].filter(Boolean).join('\n'), allowedMentions: { parse: [] },
       ...(options ? { nonce: createHash('sha256').update(options.reference).digest('hex').slice(0, 24), enforceNonce: true } : {}),
@@ -203,7 +203,7 @@ export function operationalErrorGuidance(report: Report): string {
   const delivery = report.staffDelivered
     ? `Staff were notified in staff-ops. Reference: ${report.reference}.`
     : `Rat could not confirm that staff were notified. Give staff reference ${report.reference} if you need help.`;
-  if (!report.details) return `Rat could not confirm the action finished. Check the saved action or posts with staff before trying again. ${delivery}`;
+  if (!report.details) return `Rat could not confirm the action finished. Some changes may already have happened. Ask staff to check the saved action or posts; do not repeat it. ${delivery}`;
   return [
     `What happened: ${report.details.summary}`,
     report.details.noChanges ? 'Changes: No changes were made.' : '',

@@ -20,4 +20,7 @@ test('saved failures retain the historical name-record cause without showing raw
   assert.ok(!unknown.includes('SQLITE'));
   assert.ok(!unknown.includes('private-value'));
   assert.ok(!unknown.includes('No changes'));
+  assert.match(unknown, /Some changes may already have happened/);
+  assert.match(unknown, /do not repeat it/);
+  assert.doesNotMatch(unknown, /try|retry|again/i);
 });

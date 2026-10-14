@@ -33,7 +33,7 @@ export function serverSetupErrorMessage(message: string): string {
   const duplicate = message.match(/^Role "([^"\n]+)" is ambiguous: (\d+) roles share that name/);
   if (duplicate) return `Rat found ${duplicate[2]} Discord roles named “${redactOperationalText(duplicate[1]!)}”. Rename or remove the duplicate roles in Discord, then check the setup preview again.`;
   if (/permission|access|50013|50001/i.test(message)) return 'Rat cannot change a required role or channel. Ask an admin to check its Discord permissions and role position.';
-  return 'Rat could not finish the server setup. Ask an admin to check the report and Discord before trying again.';
+  return 'Rat could not finish the server setup. Ask an admin to check the report and Discord.';
 }
 
 // Shared orchestration for Server Bootstrap v2 (#16): the ensure-or-adopt

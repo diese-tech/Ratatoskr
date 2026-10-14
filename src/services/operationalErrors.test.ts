@@ -127,6 +127,11 @@ test('unexpected failure acknowledges privately before staff lookup and reports 
     await handleInteractionError(interaction, f.db, new Error('first failure'), 'guild');
     assert.equal(f.sent.length, 1);
     assert.ok(replies[0].content.includes('Staff were notified'));
+    for (const content of [f.sent[0].content, replies[0].content]) {
+      assert.match(content, /Some changes may already have happened/);
+      assert.match(content, /do not repeat it/);
+      assert.doesNotMatch(content, /before trying|retry|try again/i);
+    }
     assert.match(f.sent[0].content, /Game #12/);
     expired = true; acknowledged = false; interaction.deferred = false;
     interaction.customId = 'scout:editpick:swapfirst:13:3';
@@ -177,7 +182,7 @@ test('a delivered immediate transaction reconciliation alert is not retried on r
   assert.match(f.sent[0].content, /updating the league records/);
   assert.match(f.sent[0].content, /Some changes may already have happened/);
   assert.doesNotMatch(f.sent[0].content, /rollback/);
-  assert.match(f.sent[0].content, /do not retry/i);
+  assert.match(f.sent[0].content, /do not repeat/i);
   f.db.close();
 });
 
