@@ -43,7 +43,7 @@ export function scoutCancelButton(setupId: number, version: number): ButtonBuild
 
 export function scoutCancelButtonRow(setupId: number, version: number, retry = false) {
   const button = scoutCancelButton(setupId, version);
-  if (retry) button.setLabel('Retry post cleanup');
+  if (retry) button.setLabel('Retry updating posts');
   return new ActionRowBuilder<ButtonBuilder>().addComponents(button);
 }
 
@@ -170,7 +170,7 @@ async function showCancellationPage(
   const page = Math.max(0, Math.min(requestedPage, pages - 1));
   const format = new Intl.DateTimeFormat('en-US', { timeZone: config?.timezone ?? 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
   const menu = new StringSelectMenuBuilder().setCustomId(workflow === 'inhouse' ? 'scout:cancelpick:inhouse' : 'scout:cancelpick:all')
-    .setPlaceholder('Choose an active scout posting')
+    .setPlaceholder('Choose a game to cancel')
     .addOptions(setups.slice(page * 25, (page + 1) * 25).map((setup) => new StringSelectMenuOptionBuilder()
       .setLabel(`${setup.divisionDisplayName.slice(0, 35)} — ${format.format(setup.startAt * 1000)}`.slice(0, 100))
       .setDescription(setup.status === 'roster_ready' ? 'Roster ready' : 'Accepting signups')
@@ -247,7 +247,7 @@ export async function handleScoutCancelButton(
   else await interaction.deferUpdate();
   const setup = await canManageScoutOperationsSetup(interaction, db, setupId);
   if (!setup) {
-    await interaction.editReply({ content: 'You do not have permission to cancel this scout setup.' });
+    await interaction.editReply({ content: 'You do not have permission to cancel this game.' });
     return true;
   }
 
@@ -279,7 +279,7 @@ export async function handleScoutCancelButton(
       await interaction.editReply({
         content: error
           ? `This setup is cancelled, but its post still could not be repaired: ${error}`
-          : 'That Scout was already cancelled; its signup post is now reconciled.',
+          : 'That game was already cancelled. Its signup post is now up to date.',
       });
       return true;
     }
@@ -298,7 +298,7 @@ export async function handleScoutCancelButton(
       () => cancelScoutSetupIfVersion(db, setup.id, expectedVersion));
     if (outcome !== 'cancelled') {
       await interaction.editReply({
-        content: outcome === 'published' ? publishedDirection(getScoutSetupById(db, setup.id) ?? setup) : 'That cancellation was stale or already applied.',
+        content: outcome === 'published' ? publishedDirection(getScoutSetupById(db, setup.id) ?? setup) : 'The game changed since you opened this confirmation, or it was already cancelled. Check its latest status card.',
         components: [],
       });
       return true;
@@ -306,10 +306,10 @@ export async function handleScoutCancelButton(
 
     const postError = await reconcileCancelledScoutSignupPost(interaction.client, db, setup);
     if (!postError) {
-      await interaction.editReply({ content: 'Scout setup cancelled.', components: [] });
+      await interaction.editReply({ content: 'Game cancelled.', components: [] });
     } else {
       await interaction.editReply({
-        content: `The Scout was cancelled, but its original post could not be updated: ${postError}. Ratatoskr will retry automatically after restart; you can also use this button to retry now.`,
+        content: `The game was cancelled, but Rat could not update its original post: ${postError}. Ratatoskr will retry automatically after restart; you can also use this button to retry now.`,
         components: [scoutCancelButtonRow(setup.id, setup.version)],
       });
     }

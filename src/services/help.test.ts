@@ -43,7 +43,7 @@ test('scout help explains the complete current workflow in plain language', () =
   for (const expected of [
     '/scout create',
     '/scout cancel',
-    'eligibility role',
+    'require a Discord role to join',
     'Fill',
     'same time',
     'two games',

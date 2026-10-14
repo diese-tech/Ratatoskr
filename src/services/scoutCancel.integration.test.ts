@@ -92,7 +92,7 @@ test('selection and confirmation recheck access, setup versions and publication 
     await select();
     assert.match(f.replies.at(-1).content, /changed/);
     await handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${setup.id}:0`), f.db);
-    assert.match(f.replies.at(-1).content, /stale/);
+    assert.match(f.replies.at(-1).content, /changed since you opened/);
     f.db.prepare("UPDATE scout_setups SET status = 'published' WHERE id = ?").run(setup.id);
     await handleScoutCancelButton(f.interaction(`scout:cancelconfirm:${setup.id}:1`), f.db);
     assert.match(f.replies.at(-1).content, /cannot be cancelled/);

@@ -1,4 +1,4 @@
-import { scoutGameName } from './scoutGamePresentation.js';
+import { scoutGameName, scoutRosterChangeFailure } from './scoutGamePresentation.js';
 import { refreshScoutStatusCardSafely } from './scoutCardCompatibility.js';
 import { formatScoutSlotLabel, resolveScoutPlayerNames } from './scoutPlayerNames.js';
 import {
@@ -318,7 +318,7 @@ async function showSeatPlayerPicker(
 ) {
   const setup = getScoutSetupById(db, setupId)!;
   if (setup.version !== version) {
-    await interaction.editReply({ content: 'That working roster changed. Use the current Scout Ops controls.' });
+    await interaction.editReply({ content: 'The roster changed since you opened it. Open the game’s latest roster controls and try again.' });
     return;
   }
   const eligibility = await classifyScoutSignups(
@@ -333,7 +333,7 @@ async function showSeatPlayerPicker(
     const excluded = userIds.length === 0 ? ineligibleSignupLines(eligibility.ineligibleSignups, rostered) : [];
     await interaction.editReply({
       content: replyWithIneligibleSummary(
-        'There are no eligible unseated signups on that page.', 'Ineligible signups', excluded,
+        'No players on this page can join an open spot.', 'Ineligible signups', excluded,
       ),
       components: [],
       allowedMentions: { parse: [] },
@@ -361,7 +361,7 @@ async function showSeatPlayerPicker(
         .setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(start + 25 >= userIds.length),
     ));
   }
-  await interaction.editReply({ content: `Choose an eligible unseated signup (page ${page + 1}).`, components: rows });
+  await interaction.editReply({ content: `Choose a player who can join and is not already on a team (page ${page + 1}).`, components: rows });
 }
 
 function selectRow(menu: StringSelectMenuBuilder | UserSelectMenuBuilder) {
@@ -390,7 +390,7 @@ async function showEditPicker(
     .setPlaceholder(action === 'role' ? 'First player to exchange' : 'Slot to replace')
     .addOptions(slots.map((slot) => new StringSelectMenuOptionBuilder().setLabel(formatScoutSlotLabel(slot, names.get(slot.userId))).setValue(String(slot.id))));
   await interaction.editReply({
-    content: action === 'role' ? 'Choose the first occupied slot in the role exchange.' : 'Choose the roster slot to replace.',
+    content: action === 'role' ? 'Choose the first player to swap.' : 'Choose the roster slot to replace.',
     components: [selectRow(menu)],
   });
 }
@@ -408,7 +408,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
   else await interaction.deferUpdate();
   const setup = await authorized(interaction, db, setupId);
   if (!setup) {
-    await interaction.editReply({ content: 'You do not have permission to review this division roster.' });
+    await interaction.editReply({ content: 'You do not have permission to review this game’s teams.' });
     return true;
   }
 
@@ -433,7 +433,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
   if (parts[1] === 'refresh') {
     const expectedVersion = Number(parts[3]);
     if (!Number.isInteger(expectedVersion) || expectedVersion !== setup.version) {
-      await interaction.editReply({ content: 'That working roster changed. Use the current Scout Ops controls.' });
+      await interaction.editReply({ content: 'The roster changed since you opened it. Open the game’s latest roster controls and try again.' });
       return true;
     }
     const eligibility = await classifyScoutSignups(
@@ -446,10 +446,10 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
     const rostered = new Set(listScoutRosterSlots(db, setup.id).map((slot) => slot.userId));
     const excluded = ineligibleSignupLines(eligibility.ineligibleSignups, rostered);
     const result = outcome === 'stale'
-      ? 'The working roster changed during refresh. No stale update was applied.'
-      : outcome === 'unchanged' ? 'The working roster is already current.' : 'Working roster refreshed.';
+      ? 'The roster changed while Rat was checking it. Nothing was changed by this refresh.'
+      : outcome === 'unchanged' ? 'The teams are already up to date.' : 'Teams updated from the latest signups.';
     await interaction.editReply({
-      content: replyWithIneligibleSummary(result, 'Ineligible signups excluded', excluded),
+      content: replyWithIneligibleSummary(result, 'These players cannot join', excluded),
       allowedMentions: { parse: [] },
     });
     return true;
@@ -466,14 +466,14 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
     const member = await interaction.guild!.members.fetch(userId).catch(() => undefined);
     const eligible = member && isScoutUserEligible(member.roles.cache.keys(), setup.eligibilityRoleId);
     if (!eligible) {
-      await interaction.editReply({ content: 'That player is no longer eligible. No seat was changed.', components: [] });
+      await interaction.editReply({ content: 'That player can no longer join this game. No team spot was changed.', components: [] });
       return true;
     }
     const outcome = seatScoutRosterSlotIfVersion(db, {
       setupId, expectedVersion, gameNumber, team, role, userId,
       actorUserId: interaction.user.id, confirmOffRole: true,
     });
-    await interaction.editReply({ content: outcome === 'updated' ? 'Player seated.' : `No change was made (${outcome}).`, components: [] });
+    await interaction.editReply({ content: outcome === 'updated' ? 'Player seated.' : scoutRosterChangeFailure(outcome), components: [] });
     return true;
   }
 
@@ -508,7 +508,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
       return true;
     }
     if (!expandScoutRosterToTwoGamesIfVersion(db, setup.id, expectedVersion, generated.slots)) {
-      await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'That confirmation was stale; no change was made.'));
+      await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'The teams changed since you opened the confirmation. No change was made.'));
       return true;
     }
     await interaction.editReply(await reviewViewWithExpansion(interaction, db, setup.id, 'Two-game roster built.'));
@@ -539,7 +539,7 @@ async function handleScoutReviewButtonImpl(interaction: ButtonInteraction, db: D
   }
   if (!replaceScoutRosterIfVersion(db, setup.id, expectedVersion, generated.result.slots)) {
     const latest = getScoutSetupById(db, setup.id)!;
-    await interaction.editReply(buildScoutRosterReviewView(db, setup.id, latest.version, listScoutRosterSlots(db, setup.id), 'That view was stale; showing the current roster.'));
+    await interaction.editReply(buildScoutRosterReviewView(db, setup.id, latest.version, listScoutRosterSlots(db, setup.id), 'The teams changed since you opened them. Here is the latest roster.'));
     return true;
   }
   const updated = getScoutSetupById(db, setup.id)!;
@@ -559,11 +559,11 @@ async function handleScoutReviewStringSelectImpl(
     await interaction.deferUpdate();
     const setup = await authorized(interaction, db, setupId);
     if (!setup) {
-      await interaction.editReply({ content: 'You do not have permission to edit this division roster.', components: [] });
+      await interaction.editReply({ content: 'You do not have permission to change this game’s teams.', components: [] });
       return true;
     }
     if (setup.version !== expectedVersion) {
-      await interaction.editReply({ content: 'That working roster changed. Use the current Scout Ops controls.', components: [] });
+      await interaction.editReply({ content: 'The roster changed since you opened it. Open the game’s latest roster controls and try again.', components: [] });
       return true;
     }
     const userId = parts[1] === 'seatplayer' ? interaction.values[0] : parts[4];
@@ -576,7 +576,7 @@ async function handleScoutReviewStringSelectImpl(
       eligibleSignups.some((signup) => signup.userId === userId) &&
       !listScoutRosterSlots(db, setupId).some((slot) => slot.userId === userId);
     if (!stillEligible) {
-      await interaction.editReply({ content: 'That player is no longer an eligible unseated signup.', components: [] });
+      await interaction.editReply({ content: 'That player can no longer join an open spot. They may already be on a team or have lost access to this game.', components: [] });
       return true;
     }
     if (parts[1] === 'seatplayer') {
@@ -623,7 +623,7 @@ async function handleScoutReviewStringSelectImpl(
       setupId, expectedVersion, gameNumber, team, role, userId,
       actorUserId: interaction.user.id, confirmOffRole: false,
     });
-    await interaction.editReply({ content: outcome === 'updated' ? 'Player seated.' : `No change was made (${outcome}).`, components: [] });
+    await interaction.editReply({ content: outcome === 'updated' ? 'Player seated.' : scoutRosterChangeFailure(outcome), components: [] });
     return true;
   }
   if (parts[0] !== 'scout' || parts[1] !== 'editpick') return false;
@@ -634,7 +634,7 @@ async function handleScoutReviewStringSelectImpl(
   await interaction.deferUpdate();
   const setup = await authorized(interaction, db, setupId);
   if (!setup) {
-    await interaction.editReply({ content: 'You do not have permission to edit this division roster.' });
+    await interaction.editReply({ content: 'You do not have permission to change this game’s teams.' });
     return true;
   }
   const selected = interaction.values[0];
@@ -647,7 +647,7 @@ async function handleScoutReviewStringSelectImpl(
       db, setupId, expectedVersion, pair[0]!.id, pair[1]!.id, false, interaction.user.id,
     );
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Players swapped between teams.' : 'That view was stale; no change was made.'));
+    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Players swapped between teams.' : 'The teams changed since you opened them. No change was made.'));
     return true;
   }
 
@@ -668,7 +668,7 @@ async function handleScoutReviewStringSelectImpl(
       db, setupId, expectedVersion, slotId, selected!, false, interaction.user.id,
     );
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Eligible signup seated.' : `No change was made (${outcome}).`));
+    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Eligible signup seated.' : scoutRosterChangeFailure(outcome)));
     return true;
   }
 
@@ -691,7 +691,7 @@ async function handleScoutReviewStringSelectImpl(
       db, setupId, expectedVersion, originalSourceId, sourceId, true, interaction.user.id,
     );
     const latest = getScoutSetupById(db, setupId)!;
-    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Role assignments exchanged and marked as staff overrides.' : 'That view was stale; no change was made.'));
+    await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), changed ? 'Players swapped. Rat will keep this manual change when updating the teams.' : 'The teams changed since you opened them. No change was made.'));
     return true;
   }
   if (action === 'replacefirst') {
@@ -707,12 +707,12 @@ async function handleScoutReviewStringSelectImpl(
       const candidateNames = await resolveScoutPlayerNames(interaction.guild!, eligible);
       components.push(selectRow(new StringSelectMenuBuilder()
         .setCustomId(`scout:editpick:eligible:${setupId}:${expectedVersion}:${sourceId}`)
-        .setPlaceholder('Eligible signup replacement')
+        .setPlaceholder('Choose a player from signups')
         .addOptions(eligible.map((userId) => new StringSelectMenuOptionBuilder().setLabel(candidateNames.get(userId)!).setValue(userId)))));
     }
     components.push(selectRow(new UserSelectMenuBuilder()
       .setCustomId(`scout:edituser:explicit:${setupId}:${expectedVersion}:${sourceId}`)
-      .setPlaceholder('Or choose an explicit staff substitute')));
+      .setPlaceholder('Or choose another player')));
     await interaction.editReply({ content: `Choose who should take ${formatScoutSlotLabel(source, names.get(source.userId))}.`, components });
     return true;
   }
@@ -732,7 +732,7 @@ async function handleScoutReviewUserSelectImpl(
   await interaction.deferUpdate();
   const setup = await authorized(interaction, db, setupId);
   if (!setup) {
-    await interaction.editReply({ content: 'You do not have permission to edit this division roster.' });
+    await interaction.editReply({ content: 'You do not have permission to change this game’s teams.' });
     return true;
   }
   const selectedUserId = interaction.values[0]!;
@@ -742,14 +742,14 @@ async function handleScoutReviewUserSelectImpl(
     return true;
   }
   if (!isScoutUserEligible(selectedMember.roles.cache.keys(), setup.eligibilityRoleId)) {
-    await interaction.editReply({ content: 'That player does not hold this setup\'s eligibility role.' });
+    await interaction.editReply({ content: 'That player does not have the Discord role required to join this game.' });
     return true;
   }
   const outcome = replaceScoutRosterSlotIfVersion(
     db, setupId, expectedVersion, slotId, selectedUserId, true, interaction.user.id,
   );
   const latest = getScoutSetupById(db, setupId)!;
-  await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Staff substitute seated and marked as an override.' : `No change was made (${outcome}).`));
+  await interaction.editReply(buildScoutRosterReviewView(db, setupId, latest.version, listScoutRosterSlots(db, setupId), outcome === 'updated' ? 'Substitute added. Rat will keep this manual choice when updating the teams.' : scoutRosterChangeFailure(outcome)));
   return true;
 }
 

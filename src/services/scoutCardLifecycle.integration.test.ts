@@ -667,7 +667,7 @@ for (const code of [10008, 50013]) test(`cancellation of an old missing or inacc
     assert.match(cardDisplayText(f.ops.all.first()!), /cancelled/, 'the staff card closes even while public cleanup must retry');
     if (code === 50013) {
       assert.match(cardDisplayText(f.ops.all.first()!), /public post cleanup is pending/);
-      assert.equal(f.ops.all.first()!.components[0].toJSON().components[0].label, 'Retry post cleanup');
+      assert.equal(f.ops.all.first()!.components[0].toJSON().components[0].label, 'Retry updating posts');
     }
   } finally { f.db.close(); }
 });
@@ -733,13 +733,13 @@ test('Seat player and Refresh draft explain excluded ineligible signups', async 
     seat.editReply = async (payload: any) => replies.push(payload);
 
     await handleScoutReviewButton(seat as ButtonInteraction, f.db);
-    assert.match(replies.at(-1).content, /no eligible unseated signups/i);
+    assert.match(replies.at(-1).content, /No players on this page can join an open spot/i);
     assert.match(replies.at(-1).content, /<@support-player> · Support — missing <@&eligible>/);
 
     const refresh = f.interaction(`scout:refresh:${f.setup.id}:${version}`);
     refresh.editReply = async (payload: any) => replies.push(payload);
     await handleScoutReviewButton(refresh as ButtonInteraction, f.db);
-    assert.match(replies.at(-1).content, /working roster is already current/i);
+    assert.match(replies.at(-1).content, /teams are already up to date/i);
     assert.match(replies.at(-1).content, /<@support-player> · Support — missing <@&eligible>/);
   } finally { f.db.close(); }
 });
@@ -800,11 +800,11 @@ test('recovered published cards expose player edits and finishing durably closes
     const edit = f.interaction(manage[0].custom_id);
     edit.editReply = async (payload: any) => replies.push(payload);
     await handleScoutPublishButton(edit, f.db);
-    assert.match(replies.at(-1).content, /first published player/i, 'existing private roster editor opens directly from Scout Ops');
+    assert.match(replies.at(-1).content, /first player to swap on the posted teams/i, 'existing private roster editor opens directly from Scout Ops');
     const replace = f.interaction(manage[1].custom_id);
     replace.editReply = async (payload: any) => replies.push(payload);
     await handleScoutPublishButton(replace, f.db);
-    assert.match(replies.at(-1).content, /slot to replace/i, 'published replacement opens from the canonical Scout Ops card');
+    assert.match(replies.at(-1).content, /player to replace on the posted teams/i, 'published replacement opens from the canonical Scout Ops card');
     const copiedFinish = f.interaction(finish[0].custom_id);
     copiedFinish.message = { id: 'copied-finish-control' };
     copiedFinish.editReply = async (payload: any) => replies.push(payload);
@@ -977,7 +977,7 @@ test('private Finish cleanup retry reconciles posts without finishing the Scout 
     assert.equal(getScoutCompletion(f.db, f.setup.id)?.finished_at, firstCompletion.finished_at);
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.version, finishedVersion);
     assert.equal(listScoutEvents(f.db, f.setup.id).filter((event) => event.eventType === 'scout_finished').length, 1);
-    assert.match(retryReplies.at(-1).content, /Scout finished/);
+    assert.match(retryReplies.at(-1).content, /Game finished/);
   } finally { f.db.close(); }
 });
 

@@ -158,7 +158,7 @@ test('published Swap opens a private selector with exactly one acknowledgement',
   const f = publishedFixture();
   try {
     assert.equal(await handleScoutPublishButton(f.interaction(`scout:publishedswap:${f.setup.id}:0`) as unknown as ButtonInteraction, f.db), true);
-    assert.match(f.replies.at(-1).content, /first published player/i);
+    assert.match(f.replies.at(-1).content, /first player to swap on the posted teams/i);
     assert.equal(getScoutSetupById(f.db, f.setup.id)?.version, 0);
   } finally { f.db.close(); }
 });
@@ -170,7 +170,7 @@ test('ambiguous published edit retains canonical replacement for recovery', asyn
     f.failEdit(true);
     await handleScoutPublishedUserSelect(f.privateInteraction(`scout:publisheduser:${f.setup.id}:0:${slot.id}`, ['replacement']) as unknown as UserSelectMenuInteraction, f.db);
     assert.equal(listScoutRosterSlots(f.db, f.setup.id).find((s) => s.id === slot.id)?.userId, 'replacement');
-    assert.match(f.replies.at(-1).content, /saved.*pending|pending.*saved/i);
+    assert.match(f.replies.at(-1).content, /saved.*could not finish/i);
   } finally { f.db.close(); }
 });
 
@@ -279,7 +279,7 @@ for (const gameCount of [1, 2]) {
       await handleScoutPublishedSlotSelect(
         f.privateInteraction(secondMenu.custom_id, [String(selected.id)]) as unknown as StringSelectMenuInteraction, f.db,
       );
-      assert.match(f.replies.at(-1).content, /stale/);
+      assert.match(f.replies.at(-1).content, /changed since you opened/);
       assert.equal(getScoutSetupById(f.db, f.setup.id)!.version, swappedVersion);
       assert.deepEqual(listScoutRosterSlots(f.db, f.setup.id), swapped);
     } finally { f.db.close(); }
@@ -345,7 +345,7 @@ test('published off-role replacement keeps private warning, cancel, confirm, and
       .filter((notification) => notification.kind === 'replacement_notice').length, 1);
 
     await handleScoutPublishButton(f.privateInteraction(confirm) as unknown as ButtonInteraction, f.db);
-    assert.match(f.replies.at(-1).content, /stale/);
+    assert.match(f.replies.at(-1).content, /changed since you opened/);
     assert.equal(getScoutSetupById(f.db, f.setup.id)!.version, 1);
     assert.equal(listDueScoutNotifications(f.db, Number.MAX_SAFE_INTEGER)
       .filter((notification) => notification.kind === 'replacement_notice').length, 1);
@@ -378,7 +378,7 @@ test('published off-role confirmation rechecks eligibility after its private war
     f.setIneligible(candidate);
     await handleScoutPublishButton(f.privateInteraction(confirm) as unknown as ButtonInteraction, f.db);
 
-    assert.match(f.replies.at(-1).content, /no longer eligible/);
+    assert.match(f.replies.at(-1).content, /can no longer take this spot/);
     assert.notEqual(listScoutRosterSlots(f.db, f.setup.id).find((slot) => slot.id === target.id)?.userId, candidate);
     assert.equal(getScoutSetupById(f.db, f.setup.id)!.version, 0);
     assert.equal(listDueScoutNotifications(f.db, Number.MAX_SAFE_INTEGER)
@@ -566,7 +566,7 @@ test('a partial working roster can exchange any two occupied slots', async (t) =
     );
 
     const after = listScoutRosterSlots(f.db, f.setup.id);
-    assert.match(f.replies.at(-1).content, /Role assignments exchanged/);
+    assert.match(f.replies.at(-1).content, /Players swapped.*keep this manual change/);
     assert.equal(after.find((slot) => slot.id === first.id)?.userId, second.userId);
     assert.equal(after.find((slot) => slot.id === second.id)?.userId, first.userId);
     assert.equal(getScoutSetupById(f.db, f.setup.id)!.status, 'open');

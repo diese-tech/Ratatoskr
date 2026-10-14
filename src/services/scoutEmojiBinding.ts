@@ -86,8 +86,8 @@ function bindingMessage(state: ScoutEmojiBindingState, warning?: string): string
   const assigned = state.emojiIds.map((emojiId, index) => `${SCOUT_SIGNUP_ROLE_LABELS[SCOUT_SIGNUP_ROLES[index]!]}: <:role:${emojiId}>`);
   const nextRole = SCOUT_SIGNUP_ROLES[state.emojiIds.length];
   return [
-    '**Scout role emoji binding**',
-    `Only <@${state.userId}> can complete this binding. It expires in 15 minutes.`,
+    '**Choose signup emojis**',
+    `Only <@${state.userId}> can choose these emojis. You have 15 minutes.`,
     warning ? `⚠️ ${warning}` : undefined,
     assigned.length ? assigned.join('\n') : undefined,
     nextRole ? `React to this message with this server's custom emoji for **${SCOUT_SIGNUP_ROLE_LABELS[nextRole]}**.` : undefined,
@@ -119,7 +119,7 @@ export async function startScoutEmojiBinding(
   const state = createScoutEmojiBindingState(interaction.guild.id, interaction.user.id);
   let message;
   if (options.publicFollowUp) {
-    await interaction.editReply({ content: 'Scout configuration saved. The emoji binding prompt is posted below.' });
+    await interaction.editReply({ content: 'Scout settings saved. Choose the signup emojis in the message below.' });
     message = await interaction.followUp({ content: bindingMessage(state), fetchReply: true });
   } else {
     if (interaction.deferred || interaction.replied) await interaction.editReply({ content: bindingMessage(state) });
@@ -133,7 +133,7 @@ export async function startScoutEmojiBinding(
     if (!binding || binding.expiresAt > Date.now()) return;
     liveBindings.delete(message.id);
     void message.edit({
-      content: 'Scout role emoji binding expired. Run `/scout config bind_emoji:true` to start again.',
+      content: 'Time ran out for choosing emojis. Run `/scout config bind_emoji:true` to start again.',
       components: [],
     }).catch(() => undefined);
   }, BINDING_TTL_MS).unref();
@@ -153,7 +153,7 @@ export async function tryHandleScoutEmojiBinding(
   if (binding.expiresAt <= Date.now()) {
     liveBindings.delete(message.id);
     await message.edit({
-      content: 'Scout role emoji binding expired. Run `/scout config bind_emoji:true` to start again.',
+      content: 'Time ran out for choosing emojis. Run `/scout config bind_emoji:true` to start again.',
       components: [],
     });
     return true;
@@ -209,12 +209,12 @@ export async function handleScoutFillSkipButton(
   const binding = liveBindings.get(interaction.message.id);
   if (!binding || binding.expiresAt <= Date.now()) {
     liveBindings.delete(interaction.message.id);
-    await interaction.update({ content: 'Scout role emoji binding expired. Run `/scout config bind_emoji:true` to start again.', components: [] });
+    await interaction.update({ content: 'Time ran out for choosing emojis. Run `/scout config bind_emoji:true` to start again.', components: [] });
     return true;
   }
   const result = skipScoutFillEmojiBinding(binding.state, interaction.user.id);
   if (result.outcome === 'ignored-user') {
-    await interaction.reply({ content: 'Only the admin who started this binding can skip Fill.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'Only the admin who started choosing emojis can skip Fill.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (result.outcome !== 'complete' || !result.emojiByRole) return true;

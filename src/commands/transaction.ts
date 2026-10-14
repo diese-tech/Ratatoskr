@@ -68,7 +68,7 @@ export const transactionCommand = new SlashCommandBuilder()
     .setName('pickup')
     .setDescription('Add a division free agent to an active team.')
     .addUserOption((option) => option.setName('player').setDescription('Free agent joining the team.').setRequired(true))
-    .addRoleOption((option) => option.setName('team').setDescription('Division-suffixed team role receiving the player.').setRequired(true))
+    .addRoleOption((option) => option.setName('team').setDescription('Team role for the player to join; choose the one for their division.').setRequired(true))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('rename')

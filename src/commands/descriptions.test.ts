@@ -40,14 +40,14 @@ test('every slash command, subcommand, and option uses readable English', () => 
   assert.equal(scoutCreate.description, 'Set up and post a scouting game for a division.');
   assert.equal(child(scoutCreate, 'division').description, 'Division whose signup channel will receive signups and rosters.');
   const scoutCancel = child(scout, 'cancel');
-  assert.equal(scoutCancel.description, 'Choose an active scouting posting to cancel.');
+  assert.equal(scoutCancel.description, 'Choose a scouting game to cancel.');
   const scoutConfig = child(scout, 'config');
   assert.equal(scoutConfig.description, 'Set scout staff roles, timezone, and signup emojis.');
   assert.equal(child(scoutConfig, 'timezone').description, 'Timezone used to read game times, such as America/New_York.');
-  assert.equal(child(scoutConfig, 'bind_emoji').description, 'Bind five role emojis and optional Fill.');
+  assert.equal(child(scoutConfig, 'bind_emoji').description, 'Choose signup emojis for the five play roles and optional Fill.');
   assert.equal(
     child(scoutConfig, 'operations_channel').description,
-    'Bind the staff control channel inside the manually created Scout Operations category.',
+    'Choose the staff channel in the Scout Operations category.',
   );
 
   const division = asCommand(divisionCommand);
@@ -91,6 +91,6 @@ test('every slash command, subcommand, and option uses readable English', () => 
   const transaction = asCommand(transactionCommand);
   assert.equal(transaction.description, 'Process approved YSL roster changes.');
   assert.equal(child(transaction, 'trade').description, 'Swap two players between teams in the same division.');
-  assert.equal(child(child(transaction, 'pickup'), 'team').description, 'Division-suffixed team role receiving the player.');
+  assert.equal(child(child(transaction, 'pickup'), 'team').description, 'Team role for the player to join; choose the one for their division.');
   assert.equal(child(transaction, 'rename').description, "Preview or confirm a player's Discord nickname and league name change.");
 });

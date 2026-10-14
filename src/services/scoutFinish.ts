@@ -14,13 +14,13 @@ import { reportOperationalError, operationalErrorGuidance } from './operationalE
 export function scoutFinishButtonRow(setupId: number, version: number, retry = false, workflow?: 'scout' | 'inhouse') {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder()
     .setCustomId(`scout:finish:${setupId}:${version}`)
-    .setLabel(retry ? 'Retry post cleanup' : workflow === 'inhouse' ? 'Finish inhouse' : 'Finish scout').setStyle(ButtonStyle.Secondary));
+    .setLabel(retry ? 'Retry updating posts' : workflow === 'inhouse' ? 'Finish inhouse' : 'Finish scout').setStyle(ButtonStyle.Secondary));
 }
 
 function privateScoutFinishRetryButtonRow(setupId: number, version: number) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder()
     .setCustomId(`scout:finishretry:${setupId}:${version}`)
-    .setLabel('Retry post cleanup').setStyle(ButtonStyle.Secondary));
+    .setLabel('Retry updating posts').setStyle(ButtonStyle.Secondary));
 }
 
 async function finishPost(
@@ -104,7 +104,7 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
   // authorization and the original division/channel identity still apply.
   const setup = await canManageScoutOperationsSetup(interaction, db, Number(id), false);
   if (!setup || (action === 'finish' && interaction.message.id !== setup.controlMessageId)) {
-    await interaction.editReply({ content: 'You do not have permission to finish this scout from this channel.', components: [] });
+    await interaction.editReply({ content: 'You cannot finish this game here. Use its latest game controls; you must have permission to manage it.', components: [] });
     return true;
   }
   const release = tryAcquireDivisionOperation(db, setup.guildId, setup.divisionKey);
@@ -120,16 +120,16 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
     const existing = getScoutCompletion(db, setup.id);
     if (action === 'finishretry' && (!existing || setup.version !== Number(version))) {
       await refreshScoutStatusCardSafely(interaction.client, db, setup.id);
-      await interaction.editReply({ content: 'This cleanup retry is stale. Use the current Scout Ops card.', components: [] });
+      await interaction.editReply({ content: 'These controls are out of date. Open the game’s latest status card to retry updating its posts.', components: [] });
       return true;
     }
     if (!existing && setup.version !== Number(version)) {
       await refreshScoutStatusCardSafely(interaction.client, db, setup.id);
-      await interaction.editReply({ content: 'This roster view is stale. Use the current Scout Ops card.', components: [] });
+      await interaction.editReply({ content: 'The roster changed since you opened it. Use the game’s latest status card.', components: [] });
       return true;
     }
     if (setup.status !== 'published') {
-      await interaction.editReply({ content: 'Only published scouts can be finished. Use Cancel setup for an open posting.', components: [] });
+      await interaction.editReply({ content: 'Teams must be posted before you can finish a game. To stop signups instead, use Cancel setup.', components: [] });
       return true;
     }
     if (action === 'finish' && !existing) {
@@ -142,19 +142,19 @@ export async function handleScoutFinishButton(interaction: ButtonInteraction, db
     }
     if (action === 'finishretry') {
       const error = await reconcileFinishedScoutPost(interaction.client, db, setup.id);
-      await interaction.editReply({ content: error ? `Scout finished in the records. Discord post cleanup is pending. ${error}` : 'Scout finished. The roster and signup history are retained; player edits are closed.',
+      await interaction.editReply({ content: error ? `The game is marked as finished, but Rat still needs to update its Discord posts. ${error}` : 'Game finished. The roster and signups are kept for history; players can no longer be changed.',
         components: error ? [privateScoutFinishRetryButtonRow(setup.id, setup.version)] : [] });
       return true;
     }
     const outcome = finishScoutSetupIfVersion(db, setup.id, Number(version), interaction.user.id);
     if (outcome !== 'finished' && outcome !== 'already_finished') {
       await interaction.editReply({ content: outcome === 'pending'
-        ? 'Publication or a roster update is still pending. Let recovery complete before finishing this scout.'
-        : 'This scout changed. Use the current Scout Ops card.', components: [] });
+        ? 'Rat still needs to finish posting or updating the teams. Wait for that to finish before ending the game.'
+        : 'This game changed. Use its latest status card.', components: [] });
       return true;
     }
     const error = await reconcileFinishedScoutPost(interaction.client, db, setup.id);
-    await interaction.editReply({ content: error ? `Scout finished in the records. Discord post cleanup is pending. ${error}` : 'Scout finished. The roster and signup history are retained; player edits are closed.',
+    await interaction.editReply({ content: error ? `The game is marked as finished, but Rat still needs to update its Discord posts. ${error}` : 'Game finished. The roster and signups are kept for history; players can no longer be changed.',
       components: error ? [privateScoutFinishRetryButtonRow(setup.id, getScoutSetupById(db, setup.id)!.version)] : [] });
     return true;
   } finally { release(); }

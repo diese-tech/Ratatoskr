@@ -291,7 +291,7 @@ function previewView(draft: ScoutCreateDraft, error?: string) {
 
   const roleMenu = new RoleSelectMenuBuilder()
     .setCustomId(`${CUSTOM_ID_PREFIX}eligibility:${draft.id}`)
-    .setPlaceholder('Eligible role (optional)')
+    .setPlaceholder('Require a role to join (optional)')
     .setMinValues(0)
     .setMaxValues(1);
   if (draft.eligibilityRoleId) roleMenu.setDefaultRoles(draft.eligibilityRoleId);
@@ -339,7 +339,7 @@ export async function handleScoutCreateCommand(
   const scope = await resolveScope(interaction.guild, interaction.user.id, interaction.channelId, divisionKey, db);
   if (!scope) {
     await interaction.reply({
-      content: 'Run `/scout create` from the configured `scout-ops` channel after an admin binds it and repairs this division with `/division add`.',
+      content: 'Run `/scout create` in scout-ops. If it is not set up yet, ask an admin to choose that channel with `/scout config` and check the division with `/division add`.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -361,7 +361,7 @@ export async function handleScoutCreateCommand(
   }
   if (!scope.division.roleId) {
     await interaction.reply({
-      content: 'This division has no managed ping role. An admin should run `/division add` to repair it.',
+      content: 'Rat cannot find the role to ping for this division. Ask an admin to run `/division add` to fix it.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -413,7 +413,7 @@ export async function handleInhouseCreateCommand(interaction: ChatInputCommandIn
   }
   const channel = await guild.channels.fetch(inhouse.channelId);
   if (!channel || channel.type !== ChannelType.GuildText || channel.parentId !== inhouse.categoryId) {
-    await interaction.reply({ content: 'The permanent inhouse channel binding needs an admin review.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'The inhouse channel has changed or is missing. Ask an admin to check its setup.', flags: MessageFlags.Ephemeral });
     return;
   }
   const config = getScoutConfig(db, guild.id);
@@ -454,7 +454,7 @@ function overlapConfirmationView(draft: ScoutCreateDraft, overlaps: ReturnType<t
       '**Another setup from you is scheduled for this same time.**',
       ...existing,
       '',
-      'This creates a separate signup pool. It is not the two-game shared-roster option.',
+      'Players will sign up for this new game separately. To split one signup list into two games, use Build 2 games instead.',
     ].join('\n'),
     components: [row],
   };
@@ -467,7 +467,7 @@ export async function handleScoutCreateRoleSelect(
   if (!interaction.customId.startsWith(`${CUSTOM_ID_PREFIX}eligibility:`)) return false;
   const draft = getLiveDraft(interaction.customId.slice(`${CUSTOM_ID_PREFIX}eligibility:`.length));
   if (draft?.workflow === 'inhouse') {
-    await interaction.reply({ content: 'Inhouses are open to everyone; an eligibility role cannot be added.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'Anyone can join an inhouse. You cannot require a role to join.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (!draft || !(await recheckDraftAccess(interaction, draft, db))) {
@@ -523,7 +523,7 @@ export async function handleScoutCreateModal(
   const draft = getLiveDraft(interaction.customId.slice(`${CUSTOM_ID_PREFIX}details:`.length));
   if (!draft || !(await recheckDraftAccess(interaction, draft, db))) {
     await interaction.reply({
-      content: 'This private scout setup expired, restarted, or you no longer have access. Run `/scout create` again.',
+      content: 'This game setup is no longer available, or your access has changed. Start again with `/scout create` or `/inhouse create` in its game channel.',
       flags: MessageFlags.Ephemeral,
     });
     return true;
@@ -538,7 +538,7 @@ export async function handleScoutCreateModal(
   let error: string | undefined;
   if (!parsed.ok) error = parsed.message;
   else if (!Number.isInteger(roleLimit) || roleLimit < 1 || roleLimit > 5) {
-    error = 'The per-player role limit must be a whole number from 1 through 5.';
+    error = 'Enter a whole number from 1 to 5 for how many roles each player can pick.';
   }
 
   if (error) draft.startAt = null;
@@ -638,7 +638,7 @@ async function handleScoutCreateButtonLocked(
     const report = await reportOperationalError(interaction.client, db, { guildId: draft.guildId, action: 'Save Scout setup' }, error);
     draft.posting = false;
     await interaction.editReply({
-      content: `Ratatoskr could not save this scout setup: ${operationalErrorGuidance(report)}`,
+      content: `Rat could not save this game setup. ${operationalErrorGuidance(report)}`,
       components: [],
     });
     return true;
@@ -662,8 +662,8 @@ async function handleScoutCreateButtonLocked(
     draft.posting = false;
     await interaction.editReply({
       content: postDeletionConfirmed
-        ? `Ratatoskr could not post and seed the scout signup reactions: ${operationalErrorGuidance(report)}`
-        : `Ratatoskr could not finish seeding the scout signup reactions and could not confirm cleanup of the post. The setup remains pending so startup recovery can finish it safely: ${operationalErrorGuidance(report)}`,
+        ? `Rat could not finish adding the signup reactions and removed the unfinished post. ${operationalErrorGuidance(report)}`
+        : `Rat could not finish adding the signup reactions. The post may still be there. The game is saved so Rat can finish it after restarting. Do not create it again. ${operationalErrorGuidance(report)}`,
       components: [],
     });
     return true;
