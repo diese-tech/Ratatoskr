@@ -151,6 +151,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     const issues = data.snapshot.issues.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
     return view({}, container({ color: 0x2f6844 }, text({ title: 'League tools · Roster problems' },
       data.snapshot.issues.length ? `${data.snapshot.issues.length} roster problems. Choose one to review.` : 'No roster problems found.'),
+      text('For a new trade, drop or pickup, use /transaction. These tools fix disagreements in existing records and check saved actions.'),
       ...issues.flatMap(issue => [text(leagueOpsText(issue.finding, 450)), row({}, kit.Button({ label: 'View problem', disabled: data.busy, onClick: event => {
         event.mutate(d => { d.selectedIssue = issue; d.notice = ''; }); event.ui.go('issue');
       } }))]),

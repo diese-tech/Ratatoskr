@@ -121,7 +121,7 @@ export function leagueFixLabel(action: string | undefined): string {
 }
 export function leagueFixExplanation(action: string | undefined): string {
   switch (action) {
-    case 'repair-roles': return 'Rat reads Current Rosters and Player Name History in the Admin workbook, then updates the player’s Discord team, division and Free Agent roles to match those sheets. This changes Discord roles; the sheets stay the same.';
+    case 'repair-roles': return 'Rat reads Current Rosters and Player Name History in the Admin workbook, then updates the player’s Discord team, division and Free Agent roles to match those sheets. This changes Discord roles; the sheets stay the same. Use this only when the sheets already show the correct assignment. For a new trade, drop or pickup, use /transaction instead.';
     case 'use-discord-name': return 'This copies the player’s current Discord name to the roster sheets and public roster. The old name stays in history.';
     case 'sync-public-roster': return 'This updates the affected team’s public player list to match the roster sheets.';
     case 'mark-inactive': return 'This marks the departed free agent inactive and removes them from the public free-agent list.';

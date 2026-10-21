@@ -8,6 +8,8 @@ The old read-only issue/recovery routes remain compatible with existing messages
 
 Optional `ROLE_NIFLHEIM_FREE_AGENT_ID` recognizes the separate manually managed Niflheim free-agent pool. Untracked members with that exact role and the general Free Agent role need no synthetic roster/name record. Existing tracked identities and team conflicts still require review.
 
+Normal roster moves start with an approved `/transaction` action. The bot updates Discord, the roster sheets and history for that action, then verifies the results. Routine checks report disagreements without automatically changing either side. **Set Discord roles from roster sheets** is a repair for an already-correct sheet assignment, not a new roster move.
+
 ## Operator workflow
 
 - **Roster problems:** paginated current findings. An absent rostered account has separate account-replacement, departure and self-drop guidance. Replacement requires the exact old/new IDs and an explicit `SAME PLAYER` ownership attestation. Departures and self-drops continue through their existing transaction commands.
