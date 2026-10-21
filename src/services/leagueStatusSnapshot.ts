@@ -19,7 +19,7 @@ export function buildLeagueStatusSnapshot(input: {
     : input.result === 'error' || pending ? 'Roster status is not confirmed.' : 'No roster problems or unfinished actions.';
   return {
     title: `League Status · ${clear ? 'All clear' : input.result === 'error' ? 'Check incomplete' : pending ? 'Checking' : 'Needs attention'}`,
-    description: [input.result === 'error' ? 'The latest check could not finish. Previous results may have changed.' : pending ? 'Waiting for the first full roster check.' : '',
+    description: [input.result === 'error' ? 'The latest check could not finish. No roster changes were made by this check. Previous results may have changed.' : pending ? 'Waiting for the first full roster check.' : '',
       summary,
       `Draft records: ${draft === 'ready' ? 'up to date' : draft === 'attention' ? 'needs attention' : 'not checked yet'}.`].filter(Boolean).join('\n'),
     footer: `Last roster check: ${leagueEasternTime(input.lastFullAt)}`,
