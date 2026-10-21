@@ -110,7 +110,7 @@ export function leagueEasternTime(value: string | Date | null | undefined): stri
 
 export function leagueFixLabel(action: string | undefined): string {
   switch (action) {
-    case 'repair-roles': return 'Make Discord roles match roster';
+    case 'repair-roles': return 'Set Discord roles from roster sheets';
     case 'use-discord-name': return 'Update sheets to Discord name';
     case 'use-league-name': return 'Use name from name history';
     case 'use-roster-name': return 'Use name from team roster';
@@ -121,7 +121,7 @@ export function leagueFixLabel(action: string | undefined): string {
 }
 export function leagueFixExplanation(action: string | undefined): string {
   switch (action) {
-    case 'repair-roles': return 'This changes the player’s Discord team, division and Free Agent roles to match the roster sheets.';
+    case 'repair-roles': return 'Rat reads Current Rosters and Player Name History in the Admin workbook, then updates the player’s Discord team, division and Free Agent roles to match those sheets. This changes Discord roles; the sheets stay the same.';
     case 'use-discord-name': return 'This copies the player’s current Discord name to the roster sheets and public roster. The old name stays in history.';
     case 'sync-public-roster': return 'This updates the affected team’s public player list to match the roster sheets.';
     case 'mark-inactive': return 'This marks the departed free agent inactive and removes them from the public free-agent list.';

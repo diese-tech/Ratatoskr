@@ -73,10 +73,10 @@ export function buildLeagueAuditResolutionView(
   if (categoryFor(finding) === 'Discord roles') {
     return {
       title: 'Resolve Discord roles',
-      description: `${finding}\n\nRat can make the team, division and Free Agent roles match the league sheets. No changes have been made.`,
+      description: `${finding}\n\nRat reads Current Rosters and Player Name History in the Admin workbook and sets Discord team, division and Free Agent roles from those sheets. The sheets stay the same. No changes have been made.`,
       footer: `Issue ${page + 1}`,
       actions: [
-        { id: `league-audit:choice:${reference}:${page}:repair-roles`, label: 'Match league sheets', disabled: false },
+        { id: `league-audit:choice:${reference}:${page}:repair-roles`, label: 'Set Discord roles from roster sheets', disabled: false },
         back,
       ],
     };

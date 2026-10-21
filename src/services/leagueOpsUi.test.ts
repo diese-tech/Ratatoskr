@@ -107,9 +107,9 @@ test('cancelled previews release the panel for another issue and old modals cann
     await h.setIssues([{ key: 'first', finding: 'One — Discord division: none; expected: Vanaheim. Make the division role match.' },
       { key: 'second', finding: 'Two — Discord division: none; expected: Vanaheim. Make the division role match.' }]);
     await h.click('View problem');
-    await h.click('Make Discord roles match roster');
+    await h.click('Set Discord roles from roster sheets');
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
-    await h.click('Make Discord roles match roster');
+    await h.click('Set Discord roles from roster sheets');
     const oldModal = h.modals.at(-1)!.custom_id;
     await h.click('Roster problems');
     // Pick the second issue using its separately rendered control.
@@ -122,9 +122,9 @@ test('cancelled previews release the panel for another issue and old modals cann
     };
     visit(h.edits.at(-1));
     await h.dispatch(ids[1]!);
-    await h.click('Make Discord roles match roster');
+    await h.click('Set Discord roles from roster sheets');
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for second'));
-    await h.click('Make Discord roles match roster');
+    await h.click('Set Discord roles from roster sheets');
     await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.deepEqual(h.repairConfirmations, []);
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
