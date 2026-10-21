@@ -80,7 +80,7 @@ export function leagueValidationMessage(message: string, outcome: 'read-only' | 
 export function leagueRepairNoWriteMessage(message: string): string {
   const reason = /changed since this review page opened/i.test(message)
     ? 'The records changed after this review opened.' : 'Rat could not prepare this repair.';
-  return `${reason} No changes were made. Open league tools from the latest League Status message, check the roster problems and review a fresh preview before approving a fix.`;
+  return `${reason} No changes were made. Review and fix from the latest League Status message, check the roster problems and review a fresh preview before approving a fix.`;
 }
 
 /** A roster check only reads sources; its outcome must not imply a saved write. */

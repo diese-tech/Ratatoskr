@@ -288,7 +288,7 @@ export async function refreshLeagueOpsPanel(
         .slice(-8)
         .map(
           (job) =>
-            `${job.reference}: ${leagueActionLabel(job.type)} · ${job.status === 'BLOCKED_REVIEW' ? (job.type === 'transaction' ? 'Review a new preview before approving' : 'Open league tools to review the saved problem') : job.status === 'RECONCILIATION_REQUIRED' ? (job.result && typeof job.result === 'object' && 'pendingDelivery' in job.result ? 'Player change saved; Rat still needs to finish its post or history' : 'Some changes may already have happened. Check the records; do not run it again') : job.status === 'RETRYING' ? 'Rat will try again automatically' : 'Open league tools to check what happened'}`,
+            `${job.reference}: ${leagueActionLabel(job.type)} · ${job.status === 'BLOCKED_REVIEW' ? (job.type === 'transaction' ? 'Review a new preview before approving' : 'Review and fix to review the saved problem') : job.status === 'RECONCILIATION_REQUIRED' ? (job.result && typeof job.result === 'object' && 'pendingDelivery' in job.result ? 'Player change saved; Rat still needs to finish its post or history' : 'Some changes may already have happened. Check the records; do not run it again') : job.status === 'RETRYING' ? 'Rat will try again automatically' : 'Review and fix to check what happened'}`,
         )
         .join('\n');
   const additionalProblems = mutationProblems.filter((reference) => !jobs.some((job) => job.reference === reference));

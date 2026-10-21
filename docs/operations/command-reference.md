@@ -110,7 +110,7 @@ Both arguments are required; names must be 1–32 characters. Rat changes the se
 
 ## League tools
 
-Use **Open league tools** on the latest **League Status** message in staff-ops. These are private buttons, not extra slash commands. League staff can review roster problems, check saved actions and preview fixes. Nothing changes until confirmation. For a player changing Discord accounts, verify that both accounts belong to the same person before typing `SAME PLAYER`. For an interrupted action, check Discord, sheets and history before typing `HISTORY REVIEWED` to close it. Rat does not run the old change again.
+Use **Review and fix** on the latest **League Status** message in staff-ops. These are private buttons, not extra slash commands. League staff can review roster problems, check saved actions and preview fixes. Nothing changes until confirmation. For a player changing Discord accounts, verify that both accounts belong to the same person before typing `SAME PLAYER`. For an interrupted action, check Discord, sheets and history before typing `HISTORY REVIEWED` to close it. Rat does not run the old change again.
 
 ## Discord copy/paste guide
 
@@ -154,4 +154,4 @@ Run once for a preview, then run the same command with `confirm:true`.
 `/transaction pickup player:<player> team:<team role>` — Add a Free Agent to a team — League staff
 `/transaction rename player:<player> league_name:<name>` — Change nickname and league records — League staff
 Drop, self-drop and departure can include `replacement:<player>` from the same division.
-Check saved actions through **Open league tools** in staff-ops. Do not repeat a saved change or unfinished post.
+Check saved actions through **Review and fix** in staff-ops. Do not repeat a saved change or unfinished post.

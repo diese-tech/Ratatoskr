@@ -73,7 +73,7 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
         sessions.set(handle.sessionId, { actor: interaction.user.id, messageId: handle.messageId });
         await handle.redraw(data => { data.snapshot = snapshot; });
       } catch {
-        await interaction.editReply('League tools are unavailable, or your staff access changed. Use View roster problems on the latest League Status message to check the records without changing them.');
+        await interaction.editReply('League tools are unavailable, or your staff access changed. Reopen Review and fix on the latest League Status message. If it is still unavailable, ask an admin to check the bot.');
       }
     },
     dispatch: async interaction => {
@@ -103,7 +103,7 @@ export async function handleLeagueOpsUi(interaction: Interaction, scope: object)
   if (!entry && !control) return false;
   const host = interaction.guildId ? hosts.get(scope)?.get(interaction.guildId) : undefined;
   if (!host) {
-    if (interaction.isRepliable()) await interaction.reply({ content: 'Rat is starting up or these controls expired. Use Review and fix on the latest League Status message. View roster problems lets you check records without making changes.', flags: MessageFlags.Ephemeral });
+    if (interaction.isRepliable()) await interaction.reply({ content: 'Rat is starting up or these controls expired. Use Review and fix on the latest League Status message. Opening these tools makes no roster changes.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (entry && interaction.isButton()) await host.open(interaction);

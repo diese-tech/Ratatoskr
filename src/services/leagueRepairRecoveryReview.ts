@@ -28,7 +28,7 @@ export async function handleLeagueRepairRecoveryButton(
   if (action === 'recheck') {
     const job = worker.enqueue('audit', { trigger: 'scheduled' }, 'full-audit');
     await interaction.editReply(
-      `A new Discord and roster-sheet check is waiting to start: ${job.reference}. Use View roster problems on the updated League Status message to review any fixes.`,
+      `A new Discord and roster-sheet check is waiting to start: ${job.reference}. Use Review and fix on the updated League Status message to review any fixes.`,
     );
     return true;
   }
@@ -36,7 +36,7 @@ export async function handleLeagueRepairRecoveryButton(
     const repairs = listIncompleteLeagueAuditRepairs(db).filter((repair) => repair.guildId === interaction.guild!.id);
     if (!repairs.length) {
       await interaction.editReply(
-        'No unfinished roster fixes remain. Use View roster problems to check current differences.',
+        'No unfinished roster fixes remain. Use Review and fix to check current differences.',
       );
       return true;
     }
@@ -61,7 +61,7 @@ export async function handleLeagueRepairRecoveryButton(
     return true;
   }
   if (action === 'confirm') {
-    await interaction.editReply('This view only shows records. Use Open league tools to check that Discord and the sheets agree, then review the history before closing the action.');
+    await interaction.editReply('This view only shows records. Use Review and fix to check that Discord and the sheets agree, then review the history before closing the action.');
     return true;
   }
   let preview;
@@ -80,7 +80,7 @@ export async function handleLeagueRepairRecoveryButton(
       `Earlier problem:\n${preview.repair.finding}`,
       `What happened: ${savedLeagueErrorMessage(preview.repair.errorMessage ?? 'Interrupted; outcome unknown.')}`,
       preview.findings.length
-        ? `Current problems: ${preview.findings.length}. Fix them from Open league tools before closing this action.`
+        ? `Current problems: ${preview.findings.length}. Fix them from Review and fix before closing this action.`
         : 'Discord and both roster sheets agree, including the player’s names. No new roster fix is needed.',
       'Review the saved action and name history first. Closing it records that today’s records agree. It does not run the old change again or say the old attempt succeeded.',
     ]
