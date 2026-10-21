@@ -5,7 +5,7 @@ import { MessageFlags, TextDisplayBuilder, type ButtonInteraction, type Interact
 import { buildFlowCatalog, createUiRuntime, EventKind, type V2MessagePayload, type V2ModalPayload } from 'fluxcord';
 import { accountReplacementSources } from './accountReplacement.test-support.js';
 import { buildLeagueIntentPlan } from './leagueTransactionIntent.js';
-import { createLeagueOpsFlow, type LeagueOpsPanelData } from './leagueOpsFlow.js';
+import { createLeagueOpsFlow, leagueCheckDetailPages, type LeagueOpsPanelData } from './leagueOpsFlow.js';
 import type { LeagueOpsReviewService, LeagueOpsSnapshot } from './leagueOpsReview.js';
 process.env.ROLE_ALLFATHER_ID = 'admin-role';
 process.env.ROLE_AESIR_ID = 'staff-role';
@@ -221,5 +221,25 @@ test('check details are reachable in the private flow without approving a change
     assert.deepEqual(h.repairConfirmations, []);
     await h.click('Roster problems');
     assert.match(JSON.stringify(h.edits.at(-1)), /No roster problems found/);
+  } finally { h.release(); h.close(); }
+});
+
+
+test('long private details remain reachable through bounded pages without discarding draft guidance', async () => {
+  const h = await harness();
+  try {
+    const details = Array.from({ length: 30 }, (_, index) => `Roster problem ${index}: ` + 'Check the sheet values. '.repeat(7));
+    details.push('Draft Picks is missing. Ask an admin to check its setup.', 'Last full roster check: 8 AM EDT');
+    const pages = leagueCheckDetailPages(details);
+    assert.equal(pages.join(''), details.join('\n\n'));
+    assert.ok(pages.every(page => page.length <= 1400));
+    await h.setData(data => { data.snapshot.checkDetails = details; });
+    await h.click('Check details');
+    for (let index = 1; index < pages.length; index++) await h.click('Next details');
+    assert.match(JSON.stringify(h.edits.at(-1)), /Draft Picks is missing/);
+    assert.match(JSON.stringify(h.edits.at(-1)), /Last full roster check/);
+    await h.click('Previous details');
+    assert.equal(h.count(), 0);
+    assert.deepEqual(h.repairConfirmations, []);
   } finally { h.release(); h.close(); }
 });

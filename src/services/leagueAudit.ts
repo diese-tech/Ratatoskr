@@ -1,6 +1,6 @@
 import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 import { listLeagueFindings, replaceFullLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
-import { listActionableLeagueJobs, dismissResolvedRepairReviews } from '../db/repositories/leagueJobs.js';
+import { listUnfinishedLeagueMutationJobs, dismissResolvedRepairReviews } from '../db/repositories/leagueJobs.js';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { auditLeagueRoster, type LeagueSnapshot } from '../domain/leagueOperations.js';
@@ -187,7 +187,7 @@ export async function refreshLeagueOpsPanel(
   const tickets = listOpenLeagueReconciliationTickets(input.db, input.guildId);
   for (const ticket of tickets) if (!issues.includes(ticket.summary)) issues.push(ticket.summary);
   const mutationProblems = listLeagueMutationProblems(input.db, input.guildId);
-  const jobs = listActionableLeagueJobs(input.db, input.guildId).filter(job => ['transaction', 'repair', 'account-replacement'].includes(job.type));
+  const jobs = listUnfinishedLeagueMutationJobs(input.db, input.guildId).filter(job => ['transaction', 'repair', 'account-replacement'].includes(job.type));
   const unfinished = new Set([...jobs.map(job => job.reference), ...mutationProblems, ...listIncompleteLeagueAuditRepairs(input.db).filter(repair => repair.guildId === input.guildId).map(repair => repair.reference)]);
   const errorState = listLeagueFindings(input.db, input.guildId).some((entry) => entry.resourceKey === 'connection');
   const result = errorState ? 'error' : issues.length || unfinished.size ? 'dirty' : 'clean';

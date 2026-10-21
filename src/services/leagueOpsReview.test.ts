@@ -287,3 +287,16 @@ test('private check details retain exact sheet repair guidance, draft counts and
     await assert.rejects(() => f.service.snapshot('admin'), /revoked/);
   } finally { f.close(); }
 });
+
+
+test('unfinished private inventory includes canonical work at every active phase', async () => {
+  const f = await leagueOpsReviewFixture();
+  try {
+    for (const status of ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING', 'RETRYING'] as const) {
+      const job = enqueueLeagueJob(f.db, { guildId: 'g', type: 'transaction', dedupeKey: status, payload: {} });
+      if (status !== 'QUEUED') transitionLeagueJob(f.db, job.reference, status);
+      assert.ok((await f.service.snapshot('admin')).operations.some(operation => operation.reference === job.reference && operation.status === status));
+    }
+    assert.equal(f.gateway.writes.length, 0);
+  } finally { f.close(); }
+});

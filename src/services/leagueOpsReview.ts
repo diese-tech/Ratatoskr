@@ -4,7 +4,7 @@ import { draftSnapshotStatus } from './leagueStatusSnapshot.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { escapeMarkdown } from 'discord.js';
-import { getLeagueJob, getLeagueJobByDedupe, listActionableLeagueJobs, type LeagueJob } from '../db/repositories/leagueJobs.js';
+import { getLeagueJob, getLeagueJobByDedupe, listUnfinishedLeagueMutationJobs, type LeagueJob } from '../db/repositories/leagueJobs.js';
 import { getLeagueTransaction } from '../db/repositories/leagueOperations.js';
 import { getLeagueAuditRepair, getLeagueRepairResolution, listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 import { getAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
@@ -118,7 +118,7 @@ export class LeagueOpsReviewService {
   async snapshot(actor: string): Promise<LeagueOpsSnapshot> {
     await this.authorize(actor);
     const { db, guildId } = this.input;
-    const operations = listActionableLeagueJobs(db, guildId).filter(job => ['transaction', 'repair', 'account-replacement'].includes(job.type)).map(job => this.operation(job));
+    const operations = listUnfinishedLeagueMutationJobs(db, guildId).filter(job => ['transaction', 'repair', 'account-replacement'].includes(job.type)).map(job => this.operation(job));
     for (const repair of listIncompleteLeagueAuditRepairs(db).filter(repair => repair.guildId === guildId))
       if (!operations.some(operation => operation.reference === repair.reference)) operations.push(this.legacyRepair(repair.reference)!);
     const resources = listLeagueFindings(db, guildId);

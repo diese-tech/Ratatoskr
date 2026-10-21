@@ -1,3 +1,4 @@
+import { enqueueLeagueJob, transitionLeagueJob } from '../db/repositories/leagueJobs.js';
 import { leagueStatusCardColor } from './leagueAuditDiscord.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -535,4 +536,26 @@ test('overlapping audit triggers coalesce into one read and one rolling-card upd
   } finally {
     db.close();
   }
+});
+
+
+test('queued and running approved changes prevent a falsely clear snapshot', async () => {
+  const db = openDatabase(':memory:');
+  const cards = new Cards();
+  const clean = snapshot(); clean.publicRosters.Vanaheim!.teams.B = ['Two'];
+  try {
+    await runLeagueAudit({ db, operationScope: db, guildId: 'guild', trigger: 'scheduled', now: new Date('2026-10-21T12:00:00Z'), freeAgentRoleId: 'fa',
+      members: { getMembers: async () => clean.discordMembers }, sheets: { load: async () => ({ snapshot: clean, sources: {} as never }),
+        checkDraftPickHealth: async () => ({ status: 'ready', summary: 'Draft picks checked: all 96 top-four picks have matching player records.', next: 'No setup action needed.' }) }, cards });
+    assert.equal(cards.sent[0]!.card.title, 'League Status · All clear');
+    const job = enqueueLeagueJob(db, { guildId: 'guild', type: 'transaction', dedupeKey: 'approved', payload: {} });
+    for (const status of ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING', 'RETRYING'] as const) {
+      if (status !== 'QUEUED') transitionLeagueJob(db, job.reference, status);
+      let card: LeagueAuditCard | undefined;
+      await refreshLeagueOpsPanel({ db, guildId: 'guild', now: new Date('2026-10-21T12:30:00Z'), cards: { ...cards, findByReference: cards.findByReference.bind(cards), send: cards.send.bind(cards), delete: cards.delete.bind(cards), edit: async (_id, updated) => { card = updated; } } });
+      assert.equal(card!.title, 'League Status · Needs attention');
+      assert.match(card!.description, /1 unfinished action/);
+      assert.match(card!.footer, /8:00 AM EDT/); // Heartbeat is not a fresh audit.
+    }
+  } finally { db.close(); }
 });
