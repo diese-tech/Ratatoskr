@@ -243,3 +243,24 @@ test('long private details remain reachable through bounded pages without discar
     assert.deepEqual(h.repairConfirmations, []);
   } finally { h.release(); h.close(); }
 });
+
+
+test('private pagination redacts complete credentials before splitting across a page boundary', async () => {
+  const key = 'SNAPSHOT_BOUNDARY_TEST_TOKEN';
+  const old = process.env[key];
+  const secret = 'synthetic-boundary-secret-for-regression';
+  process.env[key] = secret;
+  const h = await harness();
+  try {
+    const details = ['x'.repeat(1390) + secret + ' visible next step'];
+    const pages = leagueCheckDetailPages(details);
+    assert.doesNotMatch(pages.join(''), /synthetic-boundary-secret-for-regression/);
+    assert.match(pages.join(''), /REDACTED/);
+    await h.setData(data => { data.snapshot.checkDetails = details; });
+    await h.click('Check details');
+    const rendered = [JSON.stringify(h.edits.at(-1))];
+    for (let page = 1; page < pages.length; page++) { await h.click('Next details'); rendered.push(JSON.stringify(h.edits.at(-1))); }
+    assert.doesNotMatch(rendered.join(''), /synthetic|boundary-secret/);
+    assert.match(rendered.join(''), /visible next step/);
+  } finally { h.release(); h.close(); if (old === undefined) delete process.env[key]; else process.env[key] = old; }
+});

@@ -1,3 +1,4 @@
+import { redactOperationalText } from './redactOperationalText.js';
 import { EventKind, action, container, flow, input, modal, policy, row, screen, text, view,
   type ActionEvent, type DeepReadonly, type ScreenKit } from 'fluxcord';
 import { LeagueJobBlockedError } from './leagueJobWorker.js';
@@ -16,7 +17,7 @@ export type LeagueOpsPanelData = { snapshot: LeagueOpsSnapshot; page: number; se
 const PAGE_SIZE = 5;
 export function leagueCheckDetailPages(details: readonly string[]): string[] {
   const pages: string[] = [];
-  let remaining = details.join('\n\n') || 'No check details available yet.';
+  let remaining = redactOperationalText(details.join('\n\n')) || 'No check details available yet.';
   while (remaining.length) {
     let length = Math.min(1400, remaining.length);
     // Keep Unicode pairs together while bounding escaped Discord text.
