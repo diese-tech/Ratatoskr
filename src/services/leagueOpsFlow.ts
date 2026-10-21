@@ -35,8 +35,8 @@ export function leagueOpsPreviewText(data: DeepReadonly<Pick<LeagueOpsPanelData,
     `Original blocked reference: ${data.transaction!.originalReference}.`, 'This is a fresh preview. The original approval will not be replayed.'].join('\n') : 'No approved preview is available.';
 }
 export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id: string) => void = () => {}) {
-  const run = (event: ActionEvent<LeagueOpsPanelData>, work: () => Promise<Partial<LeagueOpsPanelData>>) => {
-    if (event.session.data.busy || event.session.data.queued) return;
+  const run = (event: ActionEvent<LeagueOpsPanelData>, work: () => Promise<Partial<LeagueOpsPanelData>>, readOnly = false) => {
+    if (event.session.data.busy || (event.session.data.queued && !readOnly)) return;
     event.mutate(data => { data.busy = true; data.notice = 'Checking fresh league state…'; });
     event.launch(async job => {
       try { const changes = await work(); job.mutate(data => { Object.assign(data, changes); }); }
@@ -54,7 +54,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
       const selectedOperation = reference ? await service.operationDetail(event.actorId, reference) : undefined;
       // This is a finite read, never an unattended polling/redraw loop.
       return { snapshot, ...(selectedOperation ? { selectedOperation } : {}), notice: 'Current saved state loaded.' };
-    });
+    }, true);
   });
   const findOperation = action<LeagueOpsPanelData>()(async event => {
     if (event.session.data.busy) return;
@@ -65,7 +65,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     }
     const reference = String(event.inputs?.reference ?? '').trim();
     event.ui.go('operation');
-    run(event, async () => ({ selectedOperation: await service.operationDetail(event.actorId, reference), notice: 'Current durable operation state loaded.' }));
+    run(event, async () => ({ selectedOperation: await service.operationDetail(event.actorId, reference), notice: 'Current durable operation state loaded.' }), true);
   });
   const replacement = action<LeagueOpsPanelData>()(async event => {
     if (event.session.data.busy || event.session.data.replacement || event.session.data.transaction) return;
@@ -143,6 +143,16 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     kit.Button({ label: 'Operations', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; }); event.ui.go('operations'); } }),
     kit.Button({ label: 'Refresh', secondary: true, onClick: refresh }),
     kit.Button({ label: 'Close', secondary: true, onClick: event => event.ui.exit() }));
+  const backToIssues = (kit: ScreenKit<LeagueOpsPanelData>, data: DeepReadonly<LeagueOpsPanelData>) => kit.Button({
+    label: 'Back to issues', secondary: true, disabled: data.busy || !!data.queued, onClick: event => {
+      if (event.session.data.busy || event.session.data.queued) return;
+      event.mutate(d => {
+        delete d.replacement; delete d.transaction; delete d.repair; delete d.recovery; delete d.samePlayerConfirmed;
+        d.notice = 'Preview cleared. Choose an issue to review. If you submitted confirmation, check Operations before trying again.';
+      });
+      event.ui.go('issues');
+    },
+  });
   const issueScreen = screen<LeagueOpsPanelData>()((data, kit) => {
     const page = Math.min(data.page, Math.max(0, Math.ceil(data.snapshot.issues.length / PAGE_SIZE) - 1));
     const issues = data.snapshot.issues.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -167,8 +177,8 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
   const issue = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
     text({ title: 'League Ops · Issue detail' }, leagueOpsText(data.selectedIssue?.finding ?? 'Select a current issue.')),
     text(data.selectedIssue?.oldDiscordId ? 'Choose the event that actually happened. Account replacement continues one player; departure and self-drop use the existing transaction previews.' : 'Resolve this finding through the managed sheet/audit workflow. Refresh after correcting its source.'),
-    row({}, kit.Button({ label: 'Player changed Discord account', disabled: !data.selectedIssue?.oldDiscordId, onClick: replacement })),
-    row({}, kit.Button({ label: 'Preview managed repair', disabled: !!data.selectedIssue?.oldDiscordId || !leagueOpsRepairAction(data.selectedIssue?.finding ?? ''), onClick: repairPreview })),
+    row({}, kit.Button({ label: 'Player changed Discord account', disabled: !!data.queued || !data.selectedIssue?.oldDiscordId, onClick: replacement })),
+    row({}, kit.Button({ label: 'Preview managed repair', disabled: !!data.queued || !!data.selectedIssue?.oldDiscordId || !leagueOpsRepairAction(data.selectedIssue?.finding ?? ''), onClick: repairPreview })),
     text('Left league: /transaction departure. Self-dropped: /transaction self-drop. Both require a separate preview and explicit confirmation.'), text(data.notice || 'Review is read-only until explicit confirmation.'), navigation(kit))));
   const operation = screen<LeagueOpsPanelData>()((data, kit) => {
     const op = data.selectedOperation;
@@ -176,17 +186,18 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
       [`Reference: ${op.reference}`, `Type/action: ${op.type} / ${op.action}`, `State: ${op.status}; attempts: ${op.attempts}`,
         `Created: ${op.createdAt}; actor: ${op.actor}`, `Targets: ${op.targets.join('; ') || 'See saved finding'}`,
         `Saved error: ${op.error}`, `Next: ${op.next}`].map(line => leagueOpsText(line, 1700)).join('\n') : 'Select an operation.'),
-      row({}, kit.Button({ label: 'Fresh transaction preview', disabled: !op?.canRepreview, onClick: repreview }),
-        kit.Button({ label: 'Inspect reconciliation', disabled: !op?.canRecover, secondary: true, onClick: recoveryPreview })), text(data.notice || 'Review is read-only until explicit confirmation.'), navigation(kit)));
+      row({}, kit.Button({ label: 'Fresh transaction preview', disabled: !!data.queued || !op?.canRepreview, onClick: repreview }),
+        kit.Button({ label: 'Inspect reconciliation', disabled: !!data.queued || !op?.canRecover, secondary: true, onClick: recoveryPreview })), text(data.notice || 'Review is read-only until explicit confirmation.'), navigation(kit)));
   });
   const preview = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
     text({ title: 'League Ops · Resolution preview' }, leagueOpsText(leagueOpsPreviewText(data), 3400)), text(data.notice || 'Review is read-only until explicit confirmation.'),
     row({}, kit.Button({ label: 'Review confirmation', disabled: data.busy || (data.recovery && !data.recovery.canConfirm) || (!data.replacement && !data.transaction && !data.repair && !data.recovery), onClick: e => e.ui.go('confirmation') }),
-      kit.Button({ label: 'Cancel and close', secondary: true, onClick: e => e.ui.exit() })))));
+      backToIssues(kit, data), kit.Button({ label: 'Cancel and close', secondary: true, onClick: e => e.ui.exit() })))));
   const confirmation = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
     text({ title: 'League Ops · Explicit confirmation' }, leagueOpsText(leagueOpsPreviewText(data), 3400)),
     text(data.notice || 'Review is read-only until explicit confirmation.'), row({}, kit.Button({ label: 'Confirm this reviewed operation', success: true, disabled: data.busy || !!data.queued, onClick: confirm }),
-      kit.Button({ label: 'Close', secondary: true, onClick: e => e.ui.exit() })))));
+        backToIssues(kit, data), kit.Button({ label: 'Close', secondary: true, onClick: e => e.ui.exit() })),
+      ...(data.queued ? [navigation(kit)] : []))));
   return flow<LeagueOpsPanelData>('review', { screens: { issues: issueScreen, operations, issue, operation, preview, confirmation },
     first: 'issues', initialData: { snapshot: { issues: [], operations: [] }, page: 0, busy: false, notice: 'Choose a private read-only issue or operation view.' }, ttlMs: 10 * 60_000,
     parting: { note: 'Reopen Review League Ops on the current staff-ops status card. No expired approval is resumed.' } },
