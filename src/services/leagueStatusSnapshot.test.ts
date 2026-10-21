@@ -23,6 +23,7 @@ test('attention snapshots preserve counts, failed checks and draft uncertainty w
   const failed = buildLeagueStatusSnapshot({ result: 'error', problems: 0, unfinished: 0 });
   assert.match(failed.title, /Check incomplete/);
   assert.match(failed.description, /not confirmed/);
+  assert.match(failed.description, /No roster changes were made by this check/);
   assert.doesNotMatch(failed.description, /No roster problems|up to date/);
   const waiting = buildLeagueStatusSnapshot({ result: 'clean', problems: 0, unfinished: 0 });
   assert.match(waiting.title, /Checking/);
