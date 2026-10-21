@@ -20,7 +20,7 @@ function nonceFor(reference: string): string {
 
 export function leagueStatusCardColor(description: string): number {
   // Pending saved cards may still contain the previous wording after deploy.
-  return /^(Rosters: No problems found\.|(?:Roster )?[Ss]tatus: Healthy)/.test(description) ? 0x358653 : 0xC43C35;
+  return /^(All clear — no roster problems\.|Rosters: No problems found\.|(?:Roster )?[Ss]tatus: Healthy)/.test(description) ? 0x358653 : 0xC43C35;
 }
 
 export function isResolvedLeagueAlertMessage(

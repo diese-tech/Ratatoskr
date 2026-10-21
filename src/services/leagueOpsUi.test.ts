@@ -1,3 +1,4 @@
+import { buildLeagueAccountReplacementPlan } from '../domain/leagueAccountReplacement.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MessageFlags, TextDisplayBuilder, type ButtonInteraction, type Interaction } from 'discord.js';
@@ -33,6 +34,7 @@ async function harness() {
   const plan = buildLeagueIntentPlan(JSON.stringify(['trade', 'one', 'two']), (await source.sheets.load([...source.members.values()], 'fa')).snapshot);
   let allowed = true;
   let confirmations = 0;
+  let recoveries = 0;
   const repairConfirmations: string[] = [];
   let release!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
@@ -41,6 +43,8 @@ async function harness() {
     previewTransaction: async () => { await pending; return { originalReference: 'original', selections: 'selected', fingerprint: 'reviewed', approval: 'one-approval', plan }; },
     confirmTransaction: async () => { confirmations++; return { reference: 'new-durable-job', status: 'QUEUED' }; },
     snapshot: async () => snapshot,
+    previewRecovery: async () => ({ reference: 'other-recovery', type: 'repair', fingerprint: 'proof', approvalReference: 'approval', description: 'Recovery for a different player', canConfirm: true }),
+    confirmRecovery: async () => { recoveries++; return { reference: 'other-recovery', status: 'QUEUED' }; },
     operationDetail: async (_actor: string, reference: string) => ({ ...snapshot.operations[0], reference, status: 'COMPLETED' }),
     previewRepair: async (_actor: string, key: string) => ({ issueKey: key, finding: key, action: 'repair-roles',
       fingerprint: key, approvalReference: key, description: `Fix for ${key}` }),
@@ -82,7 +86,7 @@ async function harness() {
     release(); await until(() => JSON.stringify(edits.at(-1)).includes('Review these player changes'));
     await click('Approve player change');
   };
-  return { runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
+  return { snapshot, setData: async (change: (data: LeagueOpsPanelData) => void) => handle.redraw(change), recoveries: () => recoveries, runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
     setIssues: async (issues: LeagueOpsSnapshot['issues']) => { snapshot.issues = issues; await handle.redraw(data => { data.snapshot = snapshot; }); },
     repairConfirmations,
     expire: () => { now += 11 * 60_000; }, count: () => confirmations, close: () => runtime.stopSweeper() };
@@ -181,4 +185,27 @@ test('deferred status-card transport edits only its private response, and stale 
   assert.equal(await handleLeagueOpsUi(interaction, {}), true);
   assert.equal(replies[0]?.flags, MessageFlags.Ephemeral);
   assert.match(replies[0]!.content, /expired|starting up/);
+});
+
+
+test('switching from account replacement to saved recovery shows and confirms only the recovery', async () => {
+  const h = await harness();
+  try {
+    const f = accountReplacementSources();
+    const snapshot = (await f.sheets.load([...f.members.values()], 'fa')).snapshot;
+    const plan = buildLeagueAccountReplacementPlan({ guildId: 'g', snapshot, oldDiscordId: 'one', newDiscordId: 'new', oldMember: null, newMember: f.members.get('new')!, newNameSheetRow: 20 });
+    await h.setData(data => { data.replacement = { plan, fingerprint: 'old-proof', approvalReference: 'old-approval', preservedJobReferences: [], draftVerification: 'verified' }; data.samePlayerConfirmed = true; });
+    h.snapshot.operations[0]!.canRecover = true;
+    await h.click('Saved actions'); await h.click('View action'); await h.click('Check unfinished changes');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Close checked action'));
+    assert.match(JSON.stringify(h.edits.at(-1)), /Recovery for a different player/);
+    assert.doesNotMatch(JSON.stringify(h.edits.at(-1)), /Move One to their new Discord account/);
+    await h.click('Close checked action');
+    assert.match(JSON.stringify(h.modals.at(-1)), /Recovery for a different player/);
+    assert.doesNotMatch(JSON.stringify(h.modals.at(-1)), /Move One to their new Discord account/);
+    await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'HISTORY REVIEWED' });
+    await until(() => h.recoveries() === 1);
+    assert.equal(h.count(), 0);
+    assert.deepEqual(h.repairConfirmations, []);
+  } finally { h.release(); h.close(); }
 });

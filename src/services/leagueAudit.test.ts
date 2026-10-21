@@ -1,3 +1,4 @@
+import { leagueStatusCardColor } from './leagueAuditDiscord.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { openDatabase } from '../db/client.js';
@@ -368,6 +369,7 @@ test('a clean audit retains a healthy authoritative panel', async () => {
     assert.equal(state?.result, 'clean');
     assert.equal(state?.currentMessageId, 'message-2');
     assert.match(cards.sent[1]!.card.description,/All clear — no roster problems./);
+    assert.equal(leagueStatusCardColor(cards.sent[1]!.card.description), 0x358653);
     assert.equal(state?.phase, 'settled');
   } finally {
     db.close();

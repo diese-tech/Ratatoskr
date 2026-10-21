@@ -14,6 +14,7 @@ export type LeagueOpsPanelData = { snapshot: LeagueOpsSnapshot; page: number; se
   recovery?: ReviewRecoveryPreview;
   samePlayerConfirmed?: boolean; busy: boolean; notice: string; queued?: string };
 const PAGE_SIZE = 5;
+const clearedPreview = { replacement: undefined, transaction: undefined, repair: undefined, recovery: undefined, samePlayerConfirmed: undefined };
 export function leagueOpsPreviewText(data: DeepReadonly<Pick<LeagueOpsPanelData, 'replacement' | 'transaction' | 'repair' | 'recovery'>>): string {
   const replacement = data.replacement;
   if (replacement) {
@@ -89,7 +90,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     event.ui.go('preview');
     run(event, async () => {
       const preview = await service.previewReplacement(event.actorId, issue.key, oldId, newId);
-      return { replacement: preview, samePlayerConfirmed: true,
+      return { ...clearedPreview, replacement: preview, samePlayerConfirmed: true,
         notice: 'Review the account change. Check any captain or staff roles listed below before confirming.' };
     });
   });
@@ -99,24 +100,24 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     event.ui.go('preview');
     run(event, async () => {
       const preview = await service.previewTransaction(event.actorId, operation.reference);
-      return { transaction: preview, notice: 'Review these player changes. No changes were made.' };
+      return { ...clearedPreview, transaction: preview, notice: 'Review these player changes. No changes were made.' };
     });
   });
   const repairPreview = action<LeagueOpsPanelData>()(event => {
     const issue = event.session.data.selectedIssue;
     if (!issue || event.session.data.replacement || event.session.data.transaction || event.session.data.repair) return;
     event.ui.go('preview');
-    run(event, async () => ({ repair: await service.previewRepair(event.actorId, issue.key), notice: 'Review this fix, then confirm if it is correct.' }));
+    run(event, async () => ({ ...clearedPreview, repair: await service.previewRepair(event.actorId, issue.key), notice: 'Review this fix, then confirm if it is correct.' }));
   });
   const recoveryPreview = action<LeagueOpsPanelData>()(event => {
     const operation = event.session.data.selectedOperation;
     if (!operation?.canRecover || event.session.data.recovery) return;
     event.ui.go('preview');
-    run(event, async () => ({ recovery: await service.previewRecovery(event.actorId, operation.reference), notice: 'Check that Discord and the sheets agree, then review the saved history before closing this action.' }));
+    run(event, async () => ({ ...clearedPreview, recovery: await service.previewRecovery(event.actorId, operation.reference), notice: 'Check that Discord and the sheets agree, then review the saved history before closing this action.' }));
   });
   const confirm = action<LeagueOpsPanelData>()(async event => {
     const data = event.session.data;
-    if (data.busy || data.queued || (!data.replacement && !data.transaction && !data.repair && !data.recovery)) return;
+    if (data.busy || data.queued || [data.replacement, data.transaction, data.repair, data.recovery].filter(Boolean).length !== 1) return;
     if (event.kind !== EventKind.ModalSubmit) {
       if (data.recovery && !data.recovery.canConfirm) return;
       await event.ui.showModal(modal({ title: data.recovery ? 'Close checked action' : data.replacement ? 'Confirm account replacement' : data.repair ? leagueFixLabel(data.repair.action) : 'Confirm player change' },
@@ -142,8 +143,8 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     });
   });
   const navigation = (kit: ScreenKit<LeagueOpsPanelData>) => row({},
-    kit.Button({ label: 'Roster problems', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; d.replacement = undefined; d.transaction = undefined; d.repair = undefined; d.recovery = undefined; d.samePlayerConfirmed = undefined; d.notice = ''; }); event.ui.go('issues'); } }),
-    kit.Button({ label: 'Saved actions', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; }); event.ui.go('operations'); } }),
+    kit.Button({ label: 'Roster problems', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; Object.assign(d, clearedPreview); d.notice = ''; }); event.ui.go('issues'); } }),
+    kit.Button({ label: 'Saved actions', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; Object.assign(d, clearedPreview); d.notice = ''; }); event.ui.go('operations'); } }),
     kit.Button({ label: 'Refresh', secondary: true, onClick: refresh }),
     kit.Button({ label: 'Close', secondary: true, onClick: event => event.ui.exit() }));
   const issueScreen = screen<LeagueOpsPanelData>()((data, kit) => {
