@@ -22,7 +22,7 @@ import {
   resourcesForDivision,
 } from '../services/divisionScaffold.js';
 import { DIVISION_CHANNEL_TEMPLATE, getDivisionSpec, getDivisionTemplate, provisionDivision } from '../services/divisions.js';
-import { savedLeagueErrorMessage } from '../services/leaguePresentation.js';
+import { leagueRemovalErrorMessage } from '../services/leaguePresentation.js';
 import { redactOperationalText } from '../services/redactOperationalText.js';
 import { scoutGameStatusLabel } from '../services/scoutGamePresentation.js';
 
@@ -358,7 +358,7 @@ async function handleDivisionCommandLocked(interaction: ChatInputCommandInteract
         `Could not remove (${failed.length}). These items remain; check access before trying their removal again:`,
         ...failed.map(({ name, error }) => {
           console.error(redactOperationalText(`Division removal failed for ${name}: ${error}`));
-          return `- ${name}: ${savedLeagueErrorMessage(error)}`;
+          return `- ${name}: ${leagueRemovalErrorMessage(error)}`;
         }),
       );
     }

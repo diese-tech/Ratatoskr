@@ -40,7 +40,7 @@ export function savedLeagueErrorMessage(message: string | null | undefined): str
   if (/preview|fingerprint|changed.*(writing|confirmation)|source changed/i.test(message))
     return 'The information changed after the preview. Check the latest records before approving another action.';
   if (/current.name|Player Name History/i.test(message)) return 'The player’s name records need checking in Player Name History.';
-  if (/ambiguous|inactive team|League Teams/i.test(message)) return 'Rat cannot choose the correct team or role. Ask staff to check League Teams.';
+  if (/ambiguous|unambiguously|inactive team|League Teams/i.test(message)) return 'Rat cannot choose the correct team or role. Ask staff to check League Teams.';
   if (/roster audit|Current Rosters|roster.*(mismatch|does not match)/i.test(message))
     return 'The roster records do not agree. Ask staff to review the current roster problems and the saved action.';
   if (/delivery|partial|interrupted|outcome unknown/i.test(message))
@@ -52,6 +52,15 @@ export function savedLeagueErrorMessage(message: string | null | undefined): str
  * Unrecognized text must never be presumed suitable for a private reply. */
 const readableLeagueValidationMessages = new Set([
   'A trade requires two different players.',
+  'The selected role is not an active YSL team role.',
+  'A traded player name is already used in the destination roster area.',
+  'That player name is already used in the destination free-agent area.',
+  'That player name is already used in the destination roster area.',
+  "That is already the player's Current League Name.",
+  'That league name is already used by another player in this roster area.',
+  'The current Discord nickname could not be verified. Request a fresh preview.',
+  'The new player nickname must contain 1–32 characters without control characters.',
+  'That player does not have a usable Discord display name.',
   'Cross-division trades are not supported.',
   'Both players are already on the same team.',
   'The outgoing player cannot replace themselves.',
@@ -68,6 +77,8 @@ const readableLeagueValidationMessages = new Set([
   'Confirm that both Discord accounts belong to the same player.',
 ]);
 export function leagueValidationMessage(message: string, outcome: 'read-only' | 'unknown' = 'unknown'): string {
+  if (message.startsWith('The new league name must exactly match the player’s current Discord display name: '))
+    return 'The league name must match the player’s current Discord name. Copy that name from Discord and preview the change.';
   if (readableLeagueValidationMessages.has(message)
     || /^<@[A-Za-z0-9_-]+> is (?:not rostered on an active YSL team|not registered in Player Name History)\.$/.test(message)) return message;
   const guidance = savedLeagueErrorMessage(message);
@@ -78,6 +89,11 @@ export function leagueValidationMessage(message: string, outcome: 'read-only' | 
 
 /** Only for a typed repair failure that guarantees no external write occurred. */
 export function leagueRepairNoWriteMessage(message: string): string {
+  const manual = /exactly one current[- ]name record|multiple current name records|more than one current roster assignment|ambiguous or inactive team|division role is not configured unambiguously/i.test(message);
+  if (manual) return `${savedLeagueErrorMessage(message)} No changes were made. Correct the named sheet before reviewing this fix again.`;
+  if (/conflicting player-name issue/i.test(message)) return 'The player’s names disagree. Fix the name problem first, then check the public roster. No changes were made.';
+  if (/no longer (?:available for a Discord role repair|has both a Discord account and one current name record)/i.test(message)) return 'This player’s Discord account or name record changed. Check the account and Player Name History before choosing a fix. No changes were made.';
+  if (/does not currently provide a usable display name/i.test(message)) return 'Check the player’s current name in Discord before choosing a name fix. No changes were made.';
   const reason = /changed since this review page opened/i.test(message)
     ? 'The records changed after this review opened.' : 'Rat could not prepare this repair.';
   return `${reason} No changes were made. Review and fix from the latest League Status message, check the roster problems and review a fresh preview before approving a fix.`;
@@ -127,4 +143,14 @@ export function leagueFixExplanation(action: string | undefined): string {
     case 'mark-inactive': return 'This marks the departed free agent inactive and removes them from the public free-agent list.';
     default: return 'Staff must check the named sheet and correct this problem there.';
   }
+}
+
+
+/** Removal records track individual resources and may be safely retried after review. */
+export function leagueRemovalErrorMessage(message: string): string {
+  if (/permission|access|hierarchy|privileged|not editable|integration-owned/i.test(message))
+    return 'Rat could not remove this item. Ask an admin to check Rat’s permissions and role order, then review the remaining items before running removal again.';
+  if (/429|quota|rate.?limit|throttl/i.test(message))
+    return 'Discord asked Rat to wait. Wait, then review the remaining items before running removal again.';
+  return 'Rat could not confirm this item was removed. Check whether it still exists in Discord, then review the remaining items before running removal again.';
 }

@@ -11,7 +11,7 @@ import { yslGuildStructure, type GuildChannelSpec, type GuildRoleSpec } from '..
 import type { ManagedResource } from '../db/index.js';
 import type { ManagedResourceStore } from '../storage/index.js';
 import { STAFF_ROLES } from './divisions.js';
-import { savedLeagueErrorMessage } from './leaguePresentation.js';
+import { leagueRemovalErrorMessage } from './leaguePresentation.js';
 import { redactOperationalText } from './redactOperationalText.js';
 import {
   classifyMatch,
@@ -393,7 +393,7 @@ export async function runServerBootstrap(
       log(`\nCould not remove (${failed.length}). Rat keeps these on the list so removal can be tried again:`);
       for (const { resource, error } of failed) {
         console.error(redactOperationalText(`Server setup removal failed for ${resource.discordResourceId}: ${error}`));
-        log(`  - ${describeObsolete(resource)}: ${savedLeagueErrorMessage(error)}`);
+        log(`  - ${describeObsolete(resource)}: ${leagueRemovalErrorMessage(error)}`);
       }
     }
   }

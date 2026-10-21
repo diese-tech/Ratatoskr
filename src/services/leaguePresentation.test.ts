@@ -63,3 +63,35 @@ test('league times stay in Eastern time across daylight saving and legacy UTC ro
   assert.equal(leagueEasternTime(undefined), 'Not checked yet');
   assert.equal(leagueEasternTime('not a date'), 'Time unavailable');
 });
+
+
+test('supported command validation keeps specific correctable reasons', () => {
+  for (const message of ['The selected role is not an active YSL team role.', "That is already the player's Current League Name.", 'That league name is already used by another player in this roster area.']) {
+    assert.equal(leagueValidationMessage(message, 'read-only'), message);
+  }
+  assert.match(leagueValidationMessage('The new league name must exactly match the player’s current Discord display name: One.'), /Copy that name from Discord/);
+});
+
+test('no-write manual repair failures name the sheet to correct instead of sending staff back to a preview', () => {
+  for (const [message, sheet] of [
+    ['This player does not have exactly one current name record. Resolve Player Name History first.', 'Player Name History'],
+    ['This player has more than one current roster assignment. Resolve Current Rosters first.', 'Current Rosters'],
+    ['This player roster points to an ambiguous or inactive team role. Resolve League Teams first.', 'League Teams'],
+    ['The expected division role is not configured unambiguously. Resolve League Teams first.', 'League Teams'],
+  ]) {
+    const text = leagueRepairNoWriteMessage(message!);
+    assert.ok(text.includes(sheet!));
+    assert.match(text, /No changes were made/);
+    assert.match(text, /Correct the named sheet/);
+    assert.doesNotMatch(text, /fresh preview|may already/);
+  }
+});
+
+test('removal failures give consistent removal-specific guidance without saved-action warnings', async () => {
+  const { leagueRemovalErrorMessage } = await import('./leaguePresentation.js');
+  for (const message of ['Missing Permissions', '429', 'UNEXPECTED_ERROR token=private-value']) {
+    const text = leagueRemovalErrorMessage(message);
+    assert.match(text, /remaining items before running removal again/);
+    assert.doesNotMatch(text, /saved action|do not repeat|UNEXPECTED_ERROR|private-value|may already/);
+  }
+});
