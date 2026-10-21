@@ -220,6 +220,37 @@ test('repair execution rejects changed sheet proof before creating any external-
   } finally { f.close(); }
 });
 
+test('previously hidden role findings can be previewed, confirmed and repaired without touching unrelated roles or sheets', async () => {
+  for (const roles of [['a', 'b', 'division', 'unmanaged'], ['b', 'division', 'fa', 'unmanaged']]) {
+    const f = await leagueOpsReviewFixture();
+    try {
+      f.members.get('two')!.roleIds = [...roles];
+      await f.recheck();
+      const issue = (await f.service.snapshot('admin')).issues.find(item =>
+        item.finding.includes('Two has multiple team roles') || item.finding.includes('Two is rostered on'))!;
+      assert.ok(issue);
+      const preview = await f.service.previewRepair('admin', issue.key);
+      assert.equal(preview.action, 'repair-roles');
+      assert.deepEqual(f.members.get('two')!.roleIds, roles);
+      const job = await f.service.confirmRepair('admin', preview);
+      assert.equal(job.type, 'repair');
+      assert.deepEqual(f.members.get('two')!.roleIds, roles);
+      await executeLeagueAuditRepair({ db: f.db, operationScope: f.db, guildId: 'g', auditReference: 'audit',
+        actorUserId: 'admin', actorName: 'Admin', now: new Date(), freeAgentRoleId: 'fa',
+        expectedFinding: preview.finding, action: preview.action, expectedRepairFingerprint: preview.fingerprint,
+        jobReference: job.reference, sheets: f.sheets, members: { getMembers: async () => [...f.members.values()] },
+        discord: { validateDisplayName: async () => {}, reconcileManagedRoles: async change => {
+          const member = f.members.get(change.discordId)!;
+          member.roleIds = member.roleIds.filter(id => !change.remove.includes(id)).concat(change.add);
+        } } });
+      await f.recheck();
+      assert.deepEqual(f.members.get('two')!.roleIds.sort(), ['b', 'division', 'unmanaged']);
+      assert.ok(!(await f.service.snapshot('admin')).issues.some(item => item.finding === issue.finding));
+      assert.equal(f.gateway.writes.length, 0);
+    } finally { f.close(); }
+  }
+});
+
 test('private error text redacts credentials and escapes mentions/formatting', () => {
   const previous = process.env.PRIVATE_TEST_TOKEN;
   process.env.PRIVATE_TEST_TOKEN = 'sensitive-test-value';

@@ -55,6 +55,42 @@ test('daily audit accepts matching Discord, admin roster, canonical names, and p
   assert.deepEqual(auditLeagueRoster(snapshot()), []);
 });
 
+test('Niflheim free agents outside tracked sheets may retain the general Free Agent role', () => {
+  const current = snapshot();
+  Object.assign(current, { niflheimFreeAgentRoleId: 'niflheim-fa' });
+  current.discordMembers.push({ discordId: 'niflheim-player', displayName: 'Niflheim player',
+    roleIds: ['free-agent', 'niflheim-fa', 'division-v', 'unrelated'] });
+  assert.deepEqual(auditLeagueRoster(current), []);
+  assert.throws(() => buildPickupPlan(current, 'niflheim-player', 'team-a'));
+});
+
+test('Niflheim membership does not hide tracked or previously recorded players and team-role drift', () => {
+  for (const scenario of ['rostered', 'inactive', 'historical', 'unmapped-team', 'role-removed', 'not-configured', 'wrong-role', 'overlap']) {
+    const current = snapshot();
+    Object.assign(current, { niflheimFreeAgentRoleId: scenario === 'overlap' ? 'free-agent' : 'niflheim-fa' });
+    if (scenario === 'rostered') current.discordMembers[0]!.roleIds.push('niflheim-fa', 'free-agent');
+    else {
+      const id = 'outside';
+      current.discordMembers.push({ discordId: id, displayName: 'Outside', roleIds: ['free-agent',
+        ...(scenario === 'role-removed' ? [] : [scenario === 'wrong-role' ? 'other-fa' : 'niflheim-fa']),
+        ...(scenario === 'unmapped-team' ? ['team-a'] : [])] });
+      if (scenario === 'inactive' || scenario === 'historical') current.names.push({ ...current.names[0]!,
+        discordId: id, currentLeagueName: 'Outside', knownName: 'Outside', franchise: '',
+        nameStatus: scenario === 'historical' ? 'Previous / Alternate' : 'Current Discord Name', leagueStatus: 'Inactive' });
+      if (scenario === 'not-configured') Object.assign(current, { niflheimFreeAgentRoleId: undefined });
+    }
+    assert.ok(auditLeagueRoster(current).some(issue => /Free Agent role|Niflheim/.test(issue)), scenario);
+  }
+});
+
+test('a Niflheim binding cannot alias a tracked team, division or general Free Agent role', () => {
+  for (const role of ['team-a', 'division-v', 'free-agent']) {
+    const current = snapshot();
+    current.niflheimFreeAgentRoleId = role;
+    assert.ok(auditLeagueRoster(current).some(issue => issue.startsWith('The Niflheim Free Agent role overlaps')));
+  }
+});
+
 test('daily audit reports one name issue when managed sheets do not use the current Discord name', () => {
   const current = snapshot();
   current.discordMembers[0]!.displayName = 'OneLive';

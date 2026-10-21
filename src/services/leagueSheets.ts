@@ -40,6 +40,7 @@ export interface LeagueSheetsGateway {
 export type LeagueSheetsConfig = {
   adminSpreadsheetId: string;
   publicSpreadsheetId: string;
+  niflheimFreeAgentRoleId?: string;
 };
 
 const ServiceAccountSchema = z.object({
@@ -52,6 +53,7 @@ const LeagueSheetsEnvironmentSchema = z.object({
   GOOGLE_SERVICE_ACCOUNT_JSON: z.string().min(1),
   YSL_ADMIN_SPREADSHEET_ID: z.string().min(1),
   YSL_PUBLIC_SPREADSHEET_ID: z.string().min(1),
+  ROLE_NIFLHEIM_FREE_AGENT_ID: z.string().regex(/^\d{16,20}$/).optional(),
 });
 
 // Pace league reads below the service-account limit and respect quota cooldowns.
@@ -138,7 +140,8 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
     const client = await auth.getClient();
     return (await client.request<T>({ ...options, retry: false })).data;
   });
-  return { gateway, config: { adminSpreadsheetId: parsed.YSL_ADMIN_SPREADSHEET_ID, publicSpreadsheetId: parsed.YSL_PUBLIC_SPREADSHEET_ID } };
+  return { gateway, config: { adminSpreadsheetId: parsed.YSL_ADMIN_SPREADSHEET_ID, publicSpreadsheetId: parsed.YSL_PUBLIC_SPREADSHEET_ID,
+    ...(parsed.ROLE_NIFLHEIM_FREE_AGENT_ID ? { niflheimFreeAgentRoleId: parsed.ROLE_NIFLHEIM_FREE_AGENT_ID } : {}) } };
 }
 
 type LeagueSheetsRequest = { url: string; method?: 'GET' | 'POST'; data?: unknown };
@@ -715,6 +718,7 @@ export class LeagueSheetsService {
           divisions.map((division) => [division, parsePublic(publicByDivision[division])]),
         ),
         freeAgentRoleId,
+        ...(this.config.niflheimFreeAgentRoleId ? { niflheimFreeAgentRoleId: this.config.niflheimFreeAgentRoleId } : {}),
       },
       sources: { teams, rosters, names, publicByDivision, selfDropPresentation },
     };
@@ -751,7 +755,8 @@ export class LeagueSheetsService {
       affectedDivisions.map((division, index) => [division,
       parsePublic(publicRows[index] ?? [])]),
     );
-    return { teams, rosters, names, discordMembers: member ? [member] : [], publicRosters, freeAgentRoleId };
+    return { teams, rosters, names, discordMembers: member ? [member] : [], publicRosters, freeAgentRoleId,
+      ...(this.config.niflheimFreeAgentRoleId ? { niflheimFreeAgentRoleId: this.config.niflheimFreeAgentRoleId } : {}) };
   }
 
   async assertUnchanged(loaded: LoadedLeagueSnapshot): Promise<void> {

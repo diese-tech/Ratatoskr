@@ -49,6 +49,8 @@ function discordDivisionRoles(snapshot: LeagueSnapshot, discordId: string): stri
 
 function humanize(snapshot: LeagueSnapshot, issue: string): string {
   let match: RegExpMatchArray | null;
+  if (issue === 'The Niflheim Free Agent role overlaps a tracked league role. Configure a separate role before excluding Niflheim players.')
+    return issue;
 
   match = issue.match(/^Managed player names for (\S+) do not match the current Discord display name\.$/);
   if (match) {
