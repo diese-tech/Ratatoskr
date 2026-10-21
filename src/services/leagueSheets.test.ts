@@ -4,6 +4,7 @@ import { DRAFT_PICK_HEADERS } from './draftPicks.js';
 import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan } from '../domain/leagueOperations.js';
 import {
   createLeagueSheetsReadSchedule,
+  createGoogleLeagueSheetsGateway,
   createScheduledLeagueSheetsGateway,
   LeagueSheetDriftError,
   LeagueSheetInputError,
@@ -138,6 +139,20 @@ const members = [
   { discordId: 'two', displayName: 'TwoLive', roleIds: ['team-b', 'division-v'] },
   { discordId: 'free', displayName: 'FreeLive', roleIds: ['free-agent', 'division-v'] },
 ];
+
+test('Niflheim role configuration is exact and reaches both full and targeted league reads', async () => {
+  const environment = { GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: 'test@example.com', private_key: 'synthetic' }),
+    YSL_ADMIN_SPREADSHEET_ID: 'admin', YSL_PUBLIC_SPREADSHEET_ID: 'public', ROLE_NIFLHEIM_FREE_AGENT_ID: '111111111111111111' };
+  const { config } = createGoogleLeagueSheetsGateway(environment);
+  assert.equal(config.niflheimFreeAgentRoleId, environment.ROLE_NIFLHEIM_FREE_AGENT_ID);
+  assert.throws(() => createGoogleLeagueSheetsGateway({ ...environment, ROLE_NIFLHEIM_FREE_AGENT_ID: 'Free Agent (Niflheim)' }));
+  const f = serviceFixture();
+  const service = new LeagueSheetsService(f.gateway, config);
+  assert.equal((await service.load(members, 'free-agent')).snapshot.niflheimFreeAgentRoleId, config.niflheimFreeAgentRoleId);
+  assert.equal((await service.loadMember('one', members[0]!, 'free-agent')).niflheimFreeAgentRoleId, config.niflheimFreeAgentRoleId);
+  assert.equal((await f.service.load(members, 'free-agent')).snapshot.niflheimFreeAgentRoleId, undefined);
+  assert.equal(f.gateway.writes.length, 0);
+});
 
 test('league sheet reader maps only the configured managed tabs and cells', async () => {
   const { service } = serviceFixture();

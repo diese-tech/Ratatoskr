@@ -38,6 +38,9 @@ export function cacheVerifiedLeagueMember(
     managedRoleIds: [
       ...new Set([
         snapshot.freeAgentRoleId,
+        // Observe pool membership changes so adding/removing this role triggers
+        // a fresh check. This grants no role-mutation authority.
+        ...(snapshot.niflheimFreeAgentRoleId ? [snapshot.niflheimFreeAgentRoleId] : []),
         ...snapshot.teams.filter((t) => t.active).flatMap((t) => [t.teamRoleId, t.divisionRoleId]),
       ]),
     ].sort(),

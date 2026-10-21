@@ -76,6 +76,23 @@ function setup() {
     cacheVerifiedLeagueMember(db, 'g', member.discordId, snapshot, now, 'full');
   return { db, worker, snapshot, input, targetedReads };
 }
+
+test('Niflheim pool membership clears only the false finding and role removal schedules a fresh check', async () => {
+  const f = setup();
+  try {
+    f.snapshot.niflheimFreeAgentRoleId = 'niflheim-fa';
+    const member = { discordId: 'niflheim-player', displayName: 'Niflheim player', roleIds: ['fa', 'niflheim-fa'] };
+    f.snapshot.discordMembers.push(member);
+    replaceLeagueFindings(f.db, 'g', 'member:niflheim-player', ['Old untracked Free Agent warning'], now);
+    await checkLeagueMember({ ...f.input, discordId: member.discordId });
+    assert.ok(!listLeagueFindings(f.db, 'g').some(entry => entry.resourceKey === 'member:niflheim-player'));
+    assert.equal(observeLeagueMember(f.db, f.worker, member, member.discordId), false);
+    assert.equal(observeLeagueMember(f.db, f.worker, { ...member, roleIds: ['fa'] }, member.discordId), true);
+    member.roleIds = ['fa'];
+    await checkLeagueMember({ ...f.input, discordId: member.discordId });
+    assert.ok(listLeagueFindings(f.db, 'g').some(entry => entry.resourceKey === 'member:niflheim-player'));
+  } finally { f.worker.stop(); f.db.close(); }
+});
 test('display-name drift triggers targeted work; irrelevant roles stop; burst events coalesce by Discord ID', () => {
   const f = setup();
   try {
