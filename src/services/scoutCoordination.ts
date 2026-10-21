@@ -139,7 +139,7 @@ export async function handleScoutCoordinationButton(
       : 'canonical-entry',
   );
   if (!setup || setup.version !== expectedVersion) {
-    await interaction.editReply({ content: 'You are not authorized or that roster view is stale.', components: [] });
+    await interaction.editReply({ content: 'The teams changed or you no longer have permission to manage this game. Open its latest controls.', components: [] });
     return true;
   }
   if (setup.workflow === 'inhouse' && parts[1] === 'changeorganizer') {
@@ -217,7 +217,7 @@ export async function handleScoutCoordinationStringSelect(
   const [rawGame, userId] = (interaction.values[0] ?? '').split('|');
   const gameNumber = Number(rawGame) as 1 | 2;
   if (!setup || setup.version !== expectedVersion || !userId || ![1, 2].includes(gameNumber)) {
-    await interaction.editReply({ content: 'That Host selection is stale or unauthorized.', components: [] });
+    await interaction.editReply({ content: 'The game changed or you no longer have permission to change its lobby host. Open the latest controls.', components: [] });
     return true;
   }
   const outcome = db.transaction(() => {
@@ -235,8 +235,8 @@ export async function handleScoutCoordinationStringSelect(
   })();
   const presented = outcome === 'updated' ? await refreshPublishedPresentation(interaction, db, setupId) : true;
   await interaction.editReply({ content: outcome === 'updated'
-    ? `Lobby Host changed.${presented ? '' : ' The roster display update is pending recovery.'}`
-    : `No Host change was made (${outcome}).`, components: [] });
+    ? `Lobby Host changed.${presented ? '' : ' The change is saved, but Rat still needs to update the teams post. Do not change the host again.'}`
+    : 'No lobby host change was made. Open the game’s latest controls and check the player before trying again.', components: [] });
   return true;
 }
 
@@ -256,13 +256,13 @@ export async function handleScoutCoordinationUserSelect(
     ? await interaction.guild!.members.fetch(userId).catch(() => undefined)
     : undefined;
   if (!setup || setup.workflow === 'inhouse' || setup.version !== expectedVersion || !userId || !member || member.user.bot) {
-    await interaction.editReply({ content: 'That Organizer selection is stale or invalid.', components: [] });
+    await interaction.editReply({ content: 'The game changed or that organizer is no longer available. Open the latest controls.', components: [] });
     return true;
   }
   const outcome = changeScoutOrganizerIfVersion(db, setupId, expectedVersion, userId, interaction.user.id);
   const presented = outcome === 'updated' ? await refreshPublishedPresentation(interaction, db, setupId) : true;
   await interaction.editReply({ content: outcome === 'updated'
-    ? `Organizer changed.${presented ? '' : ' The roster controls update is pending recovery.'}`
-    : `No Organizer change was made (${outcome}).`, components: [] });
+    ? `Organizer changed.${presented ? '' : ' The change is saved, but Rat still needs to update the game controls. Do not change the organizer again.'}`
+    : 'No organizer change was made. Open the game’s latest controls and check the player before trying again.', components: [] });
   return true;
 }

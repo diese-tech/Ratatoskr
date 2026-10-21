@@ -144,7 +144,7 @@ test('a trade preview rejects non-rostered Discord members without escalating an
 
   assert.equal(handled, true);
   assert.deepEqual(replies, [
-    'Transaction cannot be previewed: <@first-admin> is not rostered on an active YSL team.\n\nNo changes were made.',
+    'Rat cannot show this player change yet: <@first-admin> is not rostered on an active YSL team.\n\nNo changes were made.',
   ]);
 });
 

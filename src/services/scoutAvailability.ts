@@ -64,7 +64,7 @@ export async function handleScoutAvailabilityButton(
     setupId, expectedVersion, userId: interaction.user.id, now: Math.floor(Date.now() / 1_000),
   });
   if (outcome.status === 'stale' || outcome.status === 'not_rostered') {
-    await interaction.editReply({ content: 'That roster changed; no availability flag was added.', components: [] });
+    await interaction.editReply({ content: 'The teams changed. Your spot was not marked as needing a replacement. Open the latest teams post and try again.', components: [] });
     return true;
   }
   const current = getScoutSetupById(db, setupId)!;
@@ -79,7 +79,7 @@ export async function handleScoutAvailabilityButton(
       }, error);
       await refreshScoutStatusCardSafely(interaction.client, db, setupId);
       await interaction.editReply({
-        content: `Your seat is marked as needing a replacement. The roster display update is pending recovery. ${operationalErrorGuidance(report)}`,
+        content: `Your spot is marked as needing a replacement, but Rat still needs to update the teams post. Do not mark it again. ${operationalErrorGuidance(report)}`,
         components: [],
       });
       return true;

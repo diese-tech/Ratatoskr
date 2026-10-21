@@ -27,6 +27,7 @@ import {
   leagueTransactionPlanFingerprint,
 } from '../services/leagueTransactions.js';
 import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
+import { leagueStatusLabel, savedLeagueErrorMessage, leagueValidationMessage } from '../services/leaguePresentation.js';
 
 export const transactionCommand = new SlashCommandBuilder()
   .setName('transaction')
@@ -168,7 +169,7 @@ export async function replyToTransactionValidation(
   error: unknown,
 ): Promise<boolean> {
   if (!(error instanceof LeagueMutationValidationError)) return false;
-  await interaction.editReply(`Transaction cannot be previewed: ${error.message}\n\nNo changes were made.`);
+  await interaction.editReply(`Rat cannot show this player change yet: ${leagueValidationMessage(error.message, 'read-only')}\n\nNo changes were made.`);
   return true;
 }
 
@@ -228,10 +229,10 @@ export async function handleTransactionCommand(
       selections: previewIntent, actorUserId: interaction.user.id, actorName, expectedPlanFingerprint,
     } satisfies LeagueTransactionIntent, `transaction:${interaction.user.id}:${previewIntent}:${getLeaguePreviewApproval(db,guildId,interaction.user.id,previewIntent)}`);
     if (job.status === 'BLOCKED_REVIEW') {
-      await showPreview(`This queued operation needs a new review. ${job.lastError ?? ''}\n\n`);
+      await showPreview(`This player change needs another review. ${savedLeagueErrorMessage(job.lastError)}\n\n`);
       return;
     }
-    await interaction.editReply(`Transaction ${job.status === 'COMPLETED' ? 'completed' : job.status === 'QUEUED' ? 'queued' : job.status === 'RETRYING' ? 'waiting to retry' : job.status === 'RECONCILIATION_REQUIRED' ? 'requires reconciliation' : job.status === 'FAILED' ? 'failed' : 'processing'}. Reference: ${job.reference}\nLeague Ops Status tracks operations needing review.`);
+    await interaction.editReply(`${leagueStatusLabel(job.status)}. Reference: ${job.reference}\nUse Review and fix on the League Status message to check this action. Do not submit it again.`);
   } catch (error) {
     if (!(await replyToTransactionValidation(interaction, error))) throw error;
     deleteLeagueTransactionPreview(db, guildId, interaction.user.id, previewIntent);

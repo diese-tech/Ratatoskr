@@ -18,6 +18,11 @@ function nonceFor(reference: string): string {
   return createHash('sha256').update(reference).digest('hex').slice(0, 24);
 }
 
+export function leagueStatusCardColor(description: string): number {
+  // Pending saved cards may still contain the previous wording after deploy.
+  return /^(All clear — no roster problems\.|Rosters: No problems found\.|(?:Roster )?[Ss]tatus: Healthy)/.test(description) ? 0x358653 : 0xC43C35;
+}
+
 export function isResolvedLeagueAlertMessage(
   message: { author: { id: string }; content: string },
   botUserId: string | undefined,
@@ -34,7 +39,7 @@ export function isLegacyResolvedLeagueAlertMessage(
   verifiedBefore: string,
 ): boolean {
   return Boolean(botUserId && message.author.id === botUserId && message.createdTimestamp < Date.parse(verifiedBefore)
-    && /^Ratatoskr could not finish \*\*League roster audit (repair|review)\*\*\./.test(message.content)
+    && /^Ratatoskr could not finish \*\*(?:League roster audit (?:repair|review)|(?:fixing|reviewing) roster problems)\*\*\./.test(message.content)
     && /^Reference: [0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\s*$/mi.test(message.content));
 }
 
@@ -99,7 +104,7 @@ export function createLeagueAuditCardPort(
           .setTitle(card.title)
           .setDescription(card.description.slice(0, 4096))
           .setFooter({ text: `${card.footer} • ${reference}`.slice(0, 2048) })
-          .setColor(0xC43C35)],
+          .setColor(leagueStatusCardColor(card.description))],
         components: card.actions?.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
           card.actions.map((action) => new ButtonBuilder()
             .setCustomId(`${action.id}:${reference}`)
@@ -116,7 +121,7 @@ export function createLeagueAuditCardPort(
       const channel = await getValidatedStaffChannel(client, db, guildId);
       try {
         await channel.messages.edit(messageId, {
-          embeds: [new EmbedBuilder().setTitle(card.title).setDescription(card.description.slice(0,4096)).setFooter({text:`${card.footer} • ${reference}`.slice(0,2048)}).setColor(card.description.includes('Status: Healthy') ? 0x358653 : 0xC43C35)],
+          embeds: [new EmbedBuilder().setTitle(card.title).setDescription(card.description.slice(0,4096)).setFooter({text:`${card.footer} • ${reference}`.slice(0,2048)}).setColor(leagueStatusCardColor(card.description))],
           components: card.actions?.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(card.actions.map(action => new ButtonBuilder().setCustomId(`${action.id}:${reference}`).setLabel(action.label).setStyle(ButtonStyle.Primary)))] : [],
           allowedMentions: {parse:[]},
         });

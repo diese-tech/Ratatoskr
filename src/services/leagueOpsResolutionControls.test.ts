@@ -32,3 +32,18 @@ test('configuration and missing public sections never offer an unsupported repai
     assert.equal(leagueOpsRepairAction(finding), undefined, finding);
   }
 });
+
+
+test('role repair previews identify the player and role names before approval', async () => {
+  const sources = accountReplacementSources();
+  sources.members.get('two')!.roleIds = ['a', 'division', 'fa'];
+  const loaded = await sources.sheets.load([...sources.members.values()], 'fa');
+  const diagnostic = auditLeagueRoster(loaded.snapshot).find(value => value.startsWith('Discord member two '))!;
+  const finding = humanizeLeagueAuditIssues(loaded.snapshot, [diagnostic])[0]!;
+  const preview = previewLeagueAuditResolution(loaded, finding, 'repair-roles');
+  assert.match(preview.description, /Two/);
+  assert.ok(preview.description.includes(loaded.snapshot.teams.find(team => team.teamRoleId === 'b')!.teamRole));
+  assert.match(preview.description, /Remove Discord roles: .*Free Agent/);
+  assert.match(preview.description, /roster sheets stay the same/);
+  assert.equal(sources.gateway.writes.length, 0);
+});

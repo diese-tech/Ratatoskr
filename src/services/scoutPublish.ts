@@ -568,7 +568,7 @@ export async function handleScoutPublishedSlotSelect(
     rows.push(new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
       new UserSelectMenuBuilder()
         .setCustomId(`scout:publisheduser:${setupId}:${version}:${slotId}`)
-        .setPlaceholder('Or choose an explicit eligible member'),
+        .setPlaceholder('Or choose another player who can join'),
     ));
     await interaction.editReply({
       content: `Choose the replacement for ${formatScoutSlotLabel(target)}.${candidates.length > 25 ? ` Showing the first 25 of ${candidates.length} signup candidates; the explicit member picker remains available.` : ''}`,
@@ -615,7 +615,7 @@ export async function handleScoutPublishedUserSelect(
       return true;
     }
     if (!isScoutUserEligible(replacementMember.roles.cache.keys(), setup.eligibilityRoleId)) {
-      await interaction.editReply({ content: 'The replacement does not hold this setup\'s eligibility role.' });
+      await interaction.editReply({ content: 'That player does not have the Discord role required to join this game.' });
       return true;
     }
     const oldSlot = listScoutRosterSlots(db, setupId).find((slot) => slot.id === slotId);

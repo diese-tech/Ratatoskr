@@ -55,8 +55,8 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
   const runtime = createUiRuntime({ platform: bridge.platform, sendToChannel: async () => { throw Error('League Ops panels must stay private.'); },
     flows: buildFlowCatalog([{ module: 'league-ops', flow: panel }]),
     policy: { authorize: async request => ({ allowed: await authorizeLeagueOpsUi(request, input.guild.id, authorize),
-      denyMessage: 'Only this panel’s current league administrator can inspect or approve its operations.' }) },
-    onError: async () => { await bridge.platform.replyToActor('League Ops could not finish this review. Reopen it from the current status card. No approval is resumed automatically.'); } });
+      denyMessage: 'Only the staff member who opened this view can use it, and they must still have league staff access.' }) },
+    onError: async () => { await bridge.platform.replyToActor('Rat could not finish this review. Use Review and fix on the latest League Status message and start again. No old confirmation will be used.'); } });
   const host: Host = {
     open: async interaction => {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -64,7 +64,7 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
         await authorize(interaction.user.id);
         const state = getLeagueAuditState(input.db, input.guild.id);
         if (!state?.currentMessageId || interaction.message.id !== state.currentMessageId) {
-          await interaction.editReply('This status card has been replaced. Open Review League Ops on the current card.');
+          await interaction.editReply('This message was replaced. Use Review and fix on the latest League Status message.');
           return;
         }
         const snapshot = await service.snapshot(interaction.user.id);
@@ -73,18 +73,18 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
         sessions.set(handle.sessionId, { actor: interaction.user.id, messageId: handle.messageId });
         await handle.redraw(data => { data.snapshot = snapshot; });
       } catch {
-        await interaction.editReply('League Ops is unavailable or your administrator access changed. Use the read-only review on the current status card.');
+        await interaction.editReply('League tools are unavailable, or your staff access changed. Reopen Review and fix on the latest League Status message. If it is still unavailable, ask an admin to check the bot.');
       }
     },
     dispatch: async interaction => {
       if (!interaction.isMessageComponent() && !interaction.isModalSubmit()) return;
       let address;
       try { address = decodeActionId(interaction.customId.split('~')[0]!); }
-      catch { await interaction.reply({ content: 'This League Ops control is stale. Reopen the current status card.', flags: MessageFlags.Ephemeral }); return; }
+      catch { await interaction.reply({ content: 'These controls are out of date. Use Review and fix on the latest League Status message.', flags: MessageFlags.Ephemeral }); return; }
       const session = sessions.get(address.sessionId);
       if (!session || session.actor !== interaction.user.id || interaction.guildId !== input.guild.id
         || interaction.message?.id !== session.messageId) {
-        await interaction.reply({ content: 'This private review expired or belongs to another administrator. Reopen Review League Ops.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'This view expired or belongs to another staff member. Use Review and fix on the latest League Status message to open your own view.', flags: MessageFlags.Ephemeral });
         return;
       }
       await bridge.dispatch(interaction, runtime.dispatch);
@@ -103,7 +103,7 @@ export async function handleLeagueOpsUi(interaction: Interaction, scope: object)
   if (!entry && !control) return false;
   const host = interaction.guildId ? hosts.get(scope)?.get(interaction.guildId) : undefined;
   if (!host) {
-    if (interaction.isRepliable()) await interaction.reply({ content: 'League Ops is starting up or this panel expired. Reopen the current status card; the legacy review is read-only.', flags: MessageFlags.Ephemeral });
+    if (interaction.isRepliable()) await interaction.reply({ content: 'Rat is starting up or these controls expired. Use Review and fix on the latest League Status message. Opening these tools makes no roster changes.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (entry && interaction.isButton()) await host.open(interaction);

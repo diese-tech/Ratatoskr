@@ -206,7 +206,7 @@ test("Can't play rejects an ephemeral confirmation after another canonical avail
     assert.equal(getScoutSetupById(f.db, f.setupId)!.version, initial.version + 1);
     await handleScoutAvailabilityButton(f.interaction(staleConfirm, second!.userId, 'ephemeral-stale'), f.db);
 
-    assert.match(f.replies.at(-1).content, /roster changed/);
+    assert.match(f.replies.at(-1).content, /teams changed/i);
     assert.equal(listScoutRosterSlots(f.db, f.setupId).filter((slot) => slot.replacementNeeded).length, 1);
     assert.equal(notificationCount(f.db, 'availability_alert'), 1);
   } finally {
@@ -273,7 +273,7 @@ test('Ping roster requires canonical entry and keeps private confirm, back, and 
     const setup = getScoutSetupById(f.db, f.setupId)!;
     const id = `scout:pingroster:${f.setupId}:${setup.version}`;
     await handleScoutCoordinationButton(f.interaction(id, 'manager', 'copied-control'), f.db);
-    assert.match(f.replies.at(-1).content, /not authorized|stale/);
+    assert.match(f.replies.at(-1).content, /changed|no longer have permission/);
     assert.equal(notificationCount(f.db, 'manual_roster'), 0);
 
     await handleScoutCoordinationButton(f.interaction(id, 'manager'), f.db);
@@ -319,7 +319,7 @@ test('Ping roster confirmation fails closed after a legitimate host change advan
     assert.equal(getScoutSetupById(f.db, f.setupId)!.version, setup.version + 1);
 
     await handleScoutCoordinationButton(f.interaction(confirm, 'manager', 'ephemeral-stale-ping'), f.db);
-    assert.match(f.replies.at(-1).content, /stale/);
+    assert.match(f.replies.at(-1).content, /changed/);
     assert.equal(notificationCount(f.db, 'manual_roster'), 0);
   } finally {
     closeDatabase(f.db);
@@ -363,7 +363,7 @@ test('Change host accepts its private selector and advances only the selected ga
       f.interaction(menu.custom_id, 'manager', 'ephemeral-host-selector', [option.value]) as unknown as StringSelectMenuInteraction,
       f.db,
     );
-    assert.match(f.replies.at(-1).content, /stale or unauthorized/);
+    assert.match(f.replies.at(-1).content, /changed|no longer have permission/);
     assert.equal(getScoutSetupById(f.db, f.setupId)!.version, current.version);
     assert.equal(notificationCount(f.db, 'host_change'), 1);
     assert.equal((f.db.prepare("SELECT COUNT(*) AS count FROM scout_events WHERE setup_id = ? AND event_type = 'lobby_host_changed'")
@@ -401,7 +401,7 @@ test('Change organizer accepts its private selector and refreshes current contro
       f.interaction(menu.custom_id, 'manager', 'ephemeral-organizer-selector', ['new-organizer']) as unknown as UserSelectMenuInteraction,
       f.db,
     );
-    assert.match(f.replies.at(-1).content, /stale or invalid/);
+    assert.match(f.replies.at(-1).content, /changed|no longer available/);
     assert.equal(getScoutSetupById(f.db, f.setupId)!.version, current.version);
     assert.equal((f.db.prepare("SELECT COUNT(*) AS count FROM scout_events WHERE setup_id = ? AND event_type = 'organizer_changed'")
       .get(f.setupId) as { count: number }).count, 1);
@@ -426,7 +426,7 @@ test('Change organizer rejects departed users and bots', async () => {
         f.db,
       );
 
-      assert.match(f.replies.at(-1).content, /stale or invalid/);
+      assert.match(f.replies.at(-1).content, /changed|no longer available/);
       assert.equal(getScoutCoordination(f.db, f.setupId)?.organizerUserId, 'organizer');
       assert.equal(getScoutSetupById(f.db, f.setupId)!.version, setup.version);
       assert.equal((f.db.prepare("SELECT COUNT(*) AS count FROM scout_events WHERE setup_id = ? AND event_type = 'organizer_changed'")
@@ -446,7 +446,7 @@ for (const action of ['changehost', 'changeorganizer'] as const) {
         f.interaction(`scout:${action}:${f.setupId}:${setup.version}`, 'manager', 'copied-control') as ButtonInteraction,
         f.db,
       );
-      assert.match(f.replies.at(-1).content, /not authorized|stale/);
+      assert.match(f.replies.at(-1).content, /changed|no longer have permission/);
 
       f.db.prepare("UPDATE scout_setups SET control_message_id = 'ops-card' WHERE id = ?").run(f.setupId);
       const opsEntry: any = f.interaction(`scout:${action}:${f.setupId}:${setup.version}`, 'manager', 'ops-card');

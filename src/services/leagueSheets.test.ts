@@ -458,7 +458,7 @@ test('unconfirmed Draft Picks failures preserve pick/history records instead of 
     const loaded = await service.load(members, 'free-agent');
     await assert.rejects(() => service.appendTransactionHistory(buildTradePlan(loaded.snapshot, 'one', 'two'), {
       reference: 'never-appended', effectiveDate: '2026-10-13', processedById: 'admin', processedBy: 'Admin',
-    }), (error: unknown) => error instanceof Error && /not verified/.test(error.message));
+    }), (error: unknown) => error instanceof Error && /not checked/.test(error.message));
     assert.equal(gateway.appends.length, 0);
     assert.equal(gateway.writes.length, 0);
     assert.equal(service.lastDraftPickHealth?.health.httpStatus, status);

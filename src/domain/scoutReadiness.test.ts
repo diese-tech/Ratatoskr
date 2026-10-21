@@ -23,7 +23,7 @@ test('Fill covers shortages without double counting and matching resolves overla
   const overlap = [...SCOUT_ROLES.flatMap((role) => [signup('flex1', role), signup('flex2', role)]),
     ...Array.from({ length: 8 }, (_, i) => signup(`solo${i}`, 'solo'))];
   assert.equal(scoutReadinessSnapshot(overlap, 1).feasible, false);
-  assert.match(renderScoutReadiness(scoutReadinessSnapshot(overlap, 1)), /Role overlap/);
+  assert.match(renderScoutReadiness(scoutReadinessSnapshot(overlap, 1)), /chosen roles do not fill every team spot/);
 });
 test('two-game requirements and eligible unseated participants reflect current slots', () => {
   const signups = Array.from({ length: 23 }, (_, i) => signup(String(i), 'fill'));
@@ -34,7 +34,7 @@ test('two-game requirements and eligible unseated participants reflect current s
   assert.equal(snapshot.requiredPlayers, 20);
   assert.equal(snapshot.requiredPerRole, 4);
   assert.equal(snapshot.overflow, 3);
-  assert.match(renderScoutReadiness(snapshot), /draft needs attention/);
-  assert.match(renderScoutReadiness(snapshot, true), /Historical signups/);
+  assert.match(renderScoutReadiness(snapshot), /Teams need checking/);
+  assert.match(renderScoutReadiness(snapshot, true), /These are past signups/);
   assert.ok(!renderScoutReadiness(snapshot, true).includes('can be formed'));
 });

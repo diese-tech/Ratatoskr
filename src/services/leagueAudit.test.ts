@@ -1,9 +1,10 @@
+import { leagueStatusCardColor } from './leagueAuditDiscord.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { openDatabase } from '../db/client.js';
 import { getLeagueAuditState } from '../db/repositories/leagueAudits.js';
 import type { LeagueSnapshot } from '../domain/leagueOperations.js';
-import { nextLeagueAuditAt, recoverPendingLeagueAudit, runLeagueAudit, startLeagueAuditWorker, type LeagueAuditCard, type LeagueAuditCardPort } from './leagueAudit.js';
+import { nextLeagueAuditAt, recoverPendingLeagueAudit, refreshLeagueOpsPanel, runLeagueAudit, startLeagueAuditWorker, type LeagueAuditCard, type LeagueAuditCardPort } from './leagueAudit.js';
 import { LeagueSheetInputError } from './leagueSheets.js';
 import { LeagueMemberGatewayThrottleError } from './leagueMemberReads.js';
 import { listLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
@@ -20,7 +21,7 @@ test('optional Draft Picks health appears separately from clean roster status an
       sheets: { load: async () => ({ snapshot: clean, sources: {} as never }), checkDraftPickHealth: async () => health }, cards });
     assert.equal(result.status, 'clean');
     assert.match(cards.sent.at(-1)!.card.description, /Draft Picks tab is missing/);
-    assert.match(cards.sent.at(-1)!.card.description, /Open reconciliation items: 0/);
+    assert.match(cards.sent.at(-1)!.card.description, /All clear — no roster problems./);
     assert.equal(listLeagueFindings(db, 'guild').filter(row => row.resourceKey === 'feature:draft-picks').length, 1);
   } finally { db.close(); }
 });
@@ -44,7 +45,7 @@ test('a throttled member read reports Gateway cooldown and preserves existing ro
     limited = true;
     const result = await runLeagueAudit({ ...input, now: new Date('2026-10-12T10:02:00Z') });
     assert.equal(result.status, 'error');
-    assert.match(result.issues.join(' '), /Discord Gateway.*cooldown/i);
+    assert.match(result.issues.join(' '), /Discord asked Rat to wait/i);
     assert.doesNotMatch(result.issues.join(' '), /Google Sheets.*429/);
     assert.equal(sheetReads, 1);
     assert.deepEqual(listLeagueFindings(db, 'guild').filter((finding) => finding.resourceKey !== 'connection'), before);
@@ -132,7 +133,7 @@ test('a dirty startup audit posts one unpinged staff card and records it durably
     assert.equal(result.status, 'dirty');
     assert.equal(cards.sent.length, 1);
     assert.equal(cards.sent[0]?.card.allowedMentions, false);
-    assert.equal(cards.sent[0]!.card.title, 'League Ops Status');
+    assert.equal(cards.sent[0]!.card.title, 'League Status');
     assert.match(cards.sent[0]!.card.description, /roster sheets and setup/i);
     assert.equal(getLeagueAuditState(db, 'guild')?.currentMessageId, 'message-1');
   } finally {
@@ -165,12 +166,12 @@ test('audit cards stay compact and offer a private review queue instead of listi
     const card = cards.sent[0]!.card;
     const description = card.description;
     assert.match(description, /player names/i);
-    assert.match(description, /review issues/i);
+    assert.match(description, /review and fix/i);
     assert.doesNotMatch(description, /Old League Name/);
     assert.doesNotMatch(description, /Current League Name/);
     assert.doesNotMatch(description, /143011986349883392/);
     assert.doesNotMatch(description, /inspect the audit log/i);
-    assert.deepEqual(card.actions, [{ id: 'league-audit:review', label: 'Review issues' }]);
+    assert.deepEqual(card.actions, [{ id: 'league-ops:open', label: 'Review and fix' }, { id: 'league-recovery:recheck', label: 'Check rosters again' }]);
   } finally {
     db.close();
   }
@@ -198,7 +199,7 @@ test('large audits stay compact while preserving the complete private review que
     const description = cards.sent[0]!.card.description;
     assert.ok(description.length < 700);
     assert.match(description, /Player names: 60/);
-    assert.match(description, /Review issues/);
+    assert.match(description, /Review and fix/);
     assert.doesNotMatch(description, /\b\d{17,20}\b/);
   } finally {
     db.close();
@@ -337,7 +338,7 @@ test('a later dirty audit posts its fresh card before deleting the prior card', 
     await runLeagueAudit({ ...input, trigger: 'startup', now: new Date('2026-10-04T10:00:00.000Z') });
     await runLeagueAudit({ ...input, trigger: 'scheduled', now: new Date('2026-10-05T10:00:00.000Z') });
 
-    assert.deepEqual(cards.sent.map(({ card }) => card.footer.split(' • ')[0]), ['Startup audit', 'Daily audit']);
+    assert.deepEqual(cards.sent.map(({ card }) => card.footer.split(' • ')[0]), ['Startup roster check', 'Daily roster check']);
     assert.deepEqual(cards.deleted, ['message-1']);
     assert.equal(getLeagueAuditState(db, 'guild')?.currentMessageId, 'message-2');
     assert.equal(getLeagueAuditState(db, 'guild')?.phase, 'settled');
@@ -367,7 +368,8 @@ test('a clean audit retains a healthy authoritative panel', async () => {
     const state = getLeagueAuditState(db, 'guild');
     assert.equal(state?.result, 'clean');
     assert.equal(state?.currentMessageId, 'message-2');
-    assert.match(cards.sent[1]!.card.description,/Status: Healthy/);
+    assert.match(cards.sent[1]!.card.description,/All clear — no roster problems./);
+    assert.equal(leagueStatusCardColor(cards.sent[1]!.card.description), 0x358653);
     assert.equal(state?.phase, 'settled');
   } finally {
     db.close();
@@ -419,8 +421,15 @@ test('an unreadable source posts an audit-failed card instead of claiming the le
     });
 
     assert.equal(result.status, 'error');
-    assert.equal(cards.sent[0]!.card.title, 'League Ops Status');
+    assert.equal(cards.sent[0]!.card.title, 'League Status');
     assert.doesNotMatch(cards.sent[0]!.card.description, /Discord unavailable/);
+    assert.match(cards.sent[0]!.card.description, /No roster changes were made by this check/);
+    assert.doesNotMatch(cards.sent[0]!.card.description, /changes may already|do not repeat|saved action/);
+    let refreshed = '';
+    await refreshLeagueOpsPanel({ db, guildId: 'guild', now: new Date('2026-10-05T10:02:00Z'),
+      cards: Object.assign(cards, { edit: async (_id: string, card: { description: string }) => { refreshed = card.description; } }) });
+    assert.match(refreshed, /No roster changes were made by this check/);
+    assert.doesNotMatch(refreshed, /changes may already|do not repeat|saved action/);
     assert.equal(getLeagueAuditState(db, 'guild')?.result, 'error');
   } finally {
     db.close();
@@ -447,9 +456,15 @@ test('a known roster-sheet input problem gives staff the exact safe repair on th
     const description = cards.sent[0]!.card.description;
     assert.match(description, /Player Name History row 234/);
     assert.match(description, /move the existing values one column left/);
-    assert.match(description, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
+    assert.doesNotMatch(description, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
     assert.match(description, /No changes were made/);
     assert.doesNotMatch(description, /check which connection failed/i);
+    let refreshed = '';
+    await refreshLeagueOpsPanel({ db, guildId: 'guild', now: new Date('2026-10-05T13:00:00Z'),
+      cards: Object.assign(cards, { edit: async (_id: string, card: { description: string }) => { refreshed = card.description; } }) });
+    assert.match(refreshed, /Player Name History row 234/);
+    assert.match(refreshed, /move the existing values one column left/);
+    assert.doesNotMatch(refreshed, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
   } finally {
     db.close();
   }

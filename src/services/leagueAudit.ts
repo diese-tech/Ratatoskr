@@ -33,6 +33,7 @@ import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAudit
 import { LeagueMemberGatewayThrottleError, LeagueMemberSnapshotUnavailableError, type LeagueMemberReadOptions } from './leagueMemberReads.js';
 import { DRAFT_PICK_FEATURE, draftPickHealthFinding, type DraftPickHealth } from './draftPickTracking.js';
 import { replaceLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
+import { leagueActionLabel, leagueAuditReadErrorMessage, leagueEasternTime } from './leaguePresentation.js';
 
 export type LeagueAuditCard = PersistedLeagueOpsCard;
 
@@ -63,8 +64,7 @@ type Input = {
 const LEAGUE_TIMEZONE = 'America/New_York';
 function appendDraftHealth(card: LeagueAuditCard, findings?: string[]): void {
   if (!findings?.length) return;
-  card.description = card.description.replace('Status: Healthy', 'Roster status: Healthy');
-  card.description += `\n\nTop-four draft tracking\n${findings.join('\n')}`;
+  card.description += `\n\nTop-four draft picks\n${findings.join('\n').replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, value => leagueEasternTime(value))}`;
 }
 
 type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number; second: number };
@@ -146,11 +146,11 @@ function cardFor(
   const intro =
     result === 'error'
       ? issues.length
-        ? 'The latest check could not finish. The findings below are from the last verified reads and may have changed. Review remains available; every confirmed repair must read fresh state before writing.'
+        ? 'The latest roster check could not finish. Earlier problems may have changed. Open Review and fix to check them.'
         : 'The latest check could not finish. No verified player findings are available to review. No changes were made by this check.'
       : issues.length
         ? `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.`
-        : 'An operation needs administrator review before it can proceed safely.';
+        : 'A saved action needs staff review.';
   const categories = [
     [
       'Player names',
@@ -194,14 +194,14 @@ function cardFor(
     timeZoneName: 'short',
   }).format(now);
   return {
-    title: 'League Ops Status',
+    title: 'League Status',
     description:
-      result === 'clean'
-        ? 'Status: Healthy\nOpen reconciliation items: 0'
-        : `Status: Attention required\nOpen reconciliation items: ${issues.length}\n\n${intro}${summary ? `\n\n${summary}\n\nSelect **Review issues** for a private, step-by-step queue.` : ''}`,
-    footer: `${trigger === 'startup' ? 'Startup' : 'Daily'} audit • ${time}`,
+      (result === 'clean'
+        ? 'All clear — no roster problems.'
+        : `Rosters: ${result === 'error' ? 'Rat could not finish checking.' : issues.length ? 'Problems need review.' : 'No roster problems found in the last check.'}\nProblems to review: ${issues.length}\n\n${intro}${summary ? `\n\n${summary}\n\nUse **Review and fix** to check each problem privately.` : ''}`) + '\n\n**Review and fix** — open private tools to review problems and confirm fixes.\n**Check rosters again** — look for problems again; makes no roster changes.',
+    footer: `${trigger === 'startup' ? 'Startup' : 'Daily'} roster check • ${time}`,
     allowedMentions: false,
-    ...(issues.length ? { actions: [{ id: 'league-audit:review', label: 'Review issues' }] } : {}),
+    actions: [{ id: 'league-ops:open', label: 'Review and fix' }, { id: 'league-recovery:recheck', label: 'Check rosters again' }],
   };
 }
 
@@ -214,7 +214,7 @@ export async function recoverPendingLeagueAudit(input: Pick<Input, 'db' | 'guild
       markLeagueAuditSendAttempted(input.db, input.guildId, state.runReference);
       const card = state.pendingCard ?? cardFor(state.result, state.findings, new Date(state.runAt), state.trigger);
       if (!state.pendingCard)
-        card.description += `\n\nLast targeted check: ${state.lastTargetedAt ?? 'Pending'}\nLast full audit: ${state.lastFullAt ?? 'Pending'}`;
+        card.description += `\n\nLast player check: ${leagueEasternTime(state.lastTargetedAt)}\nLast full roster check: ${leagueEasternTime(state.lastFullAt)}`;
       messageId = await input.cards.send(card, state.runReference);
     }
     confirmLeagueAuditCard(input.db, input.guildId, state.runReference, messageId);
@@ -274,36 +274,33 @@ export async function refreshLeagueOpsPanel(
   const reference = `YSL-AUD-${randomUUID().slice(0, 8).toUpperCase()}`;
   const card = cardFor(result, issues, input.now, 'scheduled');
   if (readErrors.length)
-    card.description += `\n\nLatest check: ${readErrors.join('\n')}\nRatatoskr will retry automatically in the dirty-state cycle (2 minutes).`;
+    card.description += `\n\nLatest check: ${readErrors.filter(line => !line.startsWith('**Error code:**')).map(leagueAuditReadErrorMessage).join('\n')}\nRat will check again automatically in about 2 minutes.`;
   if (result === 'clean' && !prior?.lastFullAt)
     card.description =
-      'Status: Checking league state\nOpen reconciliation items: 0\nThe startup safety check is pending.';
+      'Rosters: Waiting for the first check.\nRat is still checking the league records.';
   const draftHealth = resources.find(entry => entry.resourceKey === DRAFT_PICK_FEATURE);
   appendDraftHealth(card, draftHealth?.findings);
-  if (!issues.length) card.actions = undefined;
-  card.actions = [...(card.actions ?? []), { id: 'league-ops:open', label: 'Review League Ops' }];
-  if (recoverableRepairs.length) card.actions = [...(card.actions ?? []), { id: 'league-recovery:list', label: 'Review operations' }];
-  card.actions = [...(card.actions ?? []), { id: 'league-recovery:recheck', label: 'Recheck roster' }];
+
   if (jobs.length)
     card.description +=
-      `\n\nOperations to review: ${jobs.length}\n` +
+      `\n\nSaved actions needing review: ${jobs.length}\n` +
       jobs
         .slice(-8)
         .map(
           (job) =>
-            `${job.reference}: ${job.type} · ${job.status === 'BLOCKED_REVIEW' ? (job.type === 'transaction' ? 'Fresh transaction preview required' : 'Inspect the saved repair/account issue privately') : job.status === 'RECONCILIATION_REQUIRED' ? (job.result && typeof job.result === 'object' && 'pendingDelivery' in job.result ? 'Roster change complete; public notice/history is being recovered' : 'Inspect a possibly partial operation; do not replay') : job.status === 'RETRYING' ? 'Automatic retry pending' : 'Inspect configuration and saved error privately'}`,
+            `${job.reference}: ${leagueActionLabel(job.type)} · ${job.status === 'BLOCKED_REVIEW' ? (job.type === 'transaction' ? 'Review a new preview before approving' : 'Review and fix to review the saved problem') : job.status === 'RECONCILIATION_REQUIRED' ? (job.result && typeof job.result === 'object' && 'pendingDelivery' in job.result ? 'Player change saved; Rat still needs to finish its post or history' : 'Some changes may already have happened. Check the records; do not run it again') : job.status === 'RETRYING' ? 'Rat will try again automatically' : 'Review and fix to check what happened'}`,
         )
         .join('\n');
   const additionalProblems = mutationProblems.filter((reference) => !jobs.some((job) => job.reference === reference));
   if (additionalProblems.length) {
-    card.description += `\n\nPossibly partial operations: ${additionalProblems.length}`;
+    card.description += `\n\nUnfinished actions to check: ${additionalProblems.length}`;
     const repairs = additionalProblems.filter((reference) => repairReferences.has(reference));
     const transactions = additionalProblems.filter((reference) => !repairReferences.has(reference));
-    if (repairs.length) card.description += `\nSelect Review operations to inspect and reconcile repairs: ${repairs.slice(-5).join(', ')}`;
-    if (transactions.length) card.description += `\nInspect Discord, managed sheets and transaction notice/history for: ${transactions.slice(-5).join(', ')}. Do not replay the transaction.`;
+    if (repairs.length) card.description += `\nOpen Review and fix / Saved actions to check: ${repairs.slice(-5).join(', ')}`;
+    if (transactions.length) card.description += `\nCheck Discord, league sheets and transaction posts/history for: ${transactions.slice(-5).join(', ')}. Do not run the player change again.`;
   }
   const times = getLeagueAuditState(input.db, input.guildId);
-  card.description += `\n\nLast targeted check: ${times?.lastTargetedAt ?? 'Pending'}\nLast full audit: ${times?.lastFullAt ?? 'Pending'}`;
+  card.description += `\n\nLast player check: ${leagueEasternTime(times?.lastTargetedAt)}\nLast full roster check: ${leagueEasternTime(times?.lastFullAt)}`;
   if (prior?.currentMessageId && (!input.repost || recovered || alreadyReposted) && input.cards.edit) {
     await input.cards.edit(prior.currentMessageId, card, reference);
     recordLeaguePanelEdit(input.db, {
@@ -361,18 +358,17 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
         ? [
             `**What happened:** ${error.operationalSummary}`,
             `**What to do:** ${error.operationalNext}`,
-            `**Error code:** ${error.operationalCode}`,
           ]
         : status === 429 && source === 'Google Sheets'
           ? [
-              'Google Sheets read quota reached (429). Reads are paused before retrying; no roster changes were made by this check.',
+              'Google Sheets asked Rat to wait before checking again. No roster changes were made by this check.',
             ]
           : status === 503 && source === 'Google Sheets'
-            ? ['Google Sheets is temporarily unavailable (503). No roster changes were made by this check.']
+            ? ['Google Sheets is temporarily unavailable. No roster changes were made by this check.']
             : status === 429 && source === 'Discord'
-              ? ['Discord REST read quota reached (429). No roster changes were made by this check.']
+              ? ['Discord asked Rat to wait before checking again. No roster changes were made by this check.']
               : [
-                'The audit could not read every required Discord and roster-sheet source. No roster changes were made by this check.',
+                'Rat could not check all Discord members and roster sheets. No roster changes were made by this check.',
               ];
     result = 'error';
     const { replaceLeagueFindings } = await import('../db/repositories/leagueVerifiedState.js');
@@ -390,7 +386,7 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
     const initialCard = cardFor(result, result === 'error' ? [] : issues, input.now, input.trigger);
     appendDraftHealth(initialCard, listLeagueFindings(input.db, input.guildId).find(entry => entry.resourceKey === DRAFT_PICK_FEATURE)?.findings);
     if (result === 'error')
-      initialCard.description += `\n\n${issues.join('\n')}\nNo changes were made by this check. The next dirty-state check will retry automatically.`;
+      initialCard.description += `\n\n${issues.join('\n')}\nNo changes were made by this check. Rat will try checking again automatically.`;
     beginDirtyLeagueAudit(input.db, {
       guildId: input.guildId,
       result,

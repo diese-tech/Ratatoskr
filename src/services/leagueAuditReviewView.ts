@@ -13,12 +13,12 @@ export function buildLeagueAuditRepairReply(
   reference: string,
 ): string {
   if (result.status === 'error') {
-    return `Repair completed, but Ratatoskr could not refresh the audit card because Discord or a roster sheet was temporarily unavailable. The repair was saved, and the audit will retry automatically. Reference: ${reference}`;
+    return `Repair completed, but Ratatoskr could not update the League Status message because Discord or a roster sheet was temporarily unavailable. The repair was saved, and Rat will check again automatically. Reference: ${reference}`;
   }
   if (result.status === 'clean') {
-    return `Repair completed. Ratatoskr refreshed the audit card; no issues remain. Reference: ${reference}`;
+    return `Repair completed. Ratatoskr updated the League Status message; no roster problems remain. Reference: ${reference}`;
   }
-  return `Repair completed. Ratatoskr refreshed the audit card; ${result.issues.length} issue${result.issues.length === 1 ? '' : 's'} remain. Reference: ${reference}`;
+  return `Repair completed. Ratatoskr updated the League Status message; ${result.issues.length} issue${result.issues.length === 1 ? '' : 's'} remain. Reference: ${reference}`;
 }
 
 function categoryFor(finding: string): string {
@@ -42,7 +42,7 @@ export function buildLeagueAuditReviewView(findings: string[], requestedPage: nu
   const resolvable = canResolveInDiscord(finding);
   const resolveAction = { id: `league-audit:resolve:${reference}:${page}`, label: 'Resolve this issue', disabled: !resolvable };
   return {
-    title: `League Roster Audit — ${categoryFor(finding)}`,
+    title: `Roster problems — ${categoryFor(finding)}`,
     description: `${finding}${resolvable ? '' : '\n\nThis needs a manual sheet review because Ratatoskr cannot safely choose the correct value.'}`,
     footer: `Issue ${findings.length ? page + 1 : 0} of ${findings.length}`,
     actions: findings.length <= 1 ? [resolveAction] : [
@@ -73,10 +73,10 @@ export function buildLeagueAuditResolutionView(
   if (categoryFor(finding) === 'Discord roles') {
     return {
       title: 'Resolve Discord roles',
-      description: `${finding}\n\nRatatoskr can make the managed team, division, and Free Agent roles match the managed sheets. No changes have been made.`,
+      description: `${finding}\n\nRat reads Current Rosters and Player Name History in the Admin workbook and sets Discord team, division and Free Agent roles from those sheets. The sheets stay the same. No changes have been made.`,
       footer: `Issue ${page + 1}`,
       actions: [
-        { id: `league-audit:choice:${reference}:${page}:repair-roles`, label: 'Use managed sheets', disabled: false },
+        { id: `league-audit:choice:${reference}:${page}:repair-roles`, label: 'Set Discord roles from roster sheets', disabled: false },
         back,
       ],
     };
@@ -84,10 +84,10 @@ export function buildLeagueAuditResolutionView(
   if (categoryFor(finding) === 'Public roster') {
     return {
       title: 'Resolve public roster',
-      description: `${finding}\n\nRatatoskr can update only this public roster block from Current Rosters and Player Name History. No changes have been made.`,
+      description: `${finding}\n\nRatatoskr can update only this team section on the public roster from Current Rosters and Player Name History. No changes have been made.`,
       footer: `Issue ${page + 1}`,
       actions: [
-        { id: `league-audit:choice:${reference}:${page}:sync-public-roster`, label: 'Use managed roster', disabled: false },
+        { id: `league-audit:choice:${reference}:${page}:sync-public-roster`, label: 'Match league roster', disabled: false },
         back,
       ],
     };
@@ -123,13 +123,13 @@ export function buildLeagueAuditConfirmationView(
     'use-discord-name': `Discord currently shows “${discordName}”. Ratatoskr will update Current Rosters, Player Name History, and the matching public roster to that name. It will keep “${historyName}” in name history.`,
     'use-league-name': 'Ratatoskr will update Current Rosters to the Player Name History value and repair the matching public roster cell only if needed.',
     'use-roster-name': 'Ratatoskr will make the Current Rosters value the official league name, update the public roster, and preserve the previous official name as history.',
-    'repair-roles': 'Ratatoskr will remove conflicting managed league roles and apply the team, division, and Free Agent roles recorded in the managed sheets.',
-    'sync-public-roster': 'Ratatoskr will update only the affected public roster block from Current Rosters and Player Name History.',
+    'repair-roles': 'Ratatoskr will remove incorrect league roles and add the team, division, and Free Agent roles listed in the league sheets.',
+    'sync-public-roster': 'Ratatoskr will update only the affected team section on the public roster from Current Rosters and Player Name History.',
     'mark-inactive': 'Ratatoskr will mark the departed free agent inactive in Player Name History and remove them from the public free-agent list.',
   };
   return {
-    title: action === 'use-discord-name' ? 'Confirm Discord name update' : 'Confirm audit repair',
-    description: `${finding}\n\n${explanation[action]}\n\nRatatoskr will recheck every source before writing. No changes have been made.`,
+    title: action === 'use-discord-name' ? 'Confirm Discord name update' : 'Confirm roster fix',
+    description: `${finding}\n\n${explanation[action]}\n\nRatatoskr will check the records again before making changes. No changes have been made.`,
     footer: `Issue ${page + 1}`,
     actions: [
       { id: `league-audit:confirm:${reference}:${page}:${action}`, label: action === 'use-discord-name' ? 'Update to Discord name' : 'Confirm repair', disabled: false },

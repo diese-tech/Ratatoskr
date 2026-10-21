@@ -16,6 +16,8 @@ import { classifyMatch, resolveChannelPermissionOverwrites, type CandidateResour
 import { evaluateSeasonCreateEligibility, seasonChannelLogicalKey, SEASON_CHANNELS } from '../services/seasonBootstrap.js';
 
 type SeasonResourceState = 'present' | 'missing' | 'stale' | 'misparented';
+const seasonResourceLabel = (state: SeasonResourceState) => ({ present: 'Present', missing: 'Missing',
+  stale: 'Missing or changed', misparented: 'In the wrong category' })[state];
 
 function seasonCategoryState(guild: NonNullable<ChatInputCommandInteraction['guild']>, season: Season): SeasonResourceState {
   if (!season.discordCategoryId) return 'missing';
@@ -117,14 +119,14 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
           guild.id,
           seasonChannelLogicalKey(season.seasonNumber, spec.key),
         );
-        return `- ${spec.name}: ${seasonChannelState(guild, managed?.discordResourceId, season.discordCategoryId)}`;
+        return `- ${spec.name}: ${seasonResourceLabel(seasonChannelState(guild, managed?.discordResourceId, season.discordCategoryId))}`;
       }),
     );
     await interaction.editReply({
       content: [
         `**Season ${season.seasonNumber} status**`,
-        `Lifecycle status: ${season.status}`,
-        `Category: ${seasonCategoryState(guild, season)}`,
+        `Status: ${season.status === 'active' ? 'Active' : season.status === 'archived' ? 'Closed' : 'Not active'}`,
+        `Category: ${seasonResourceLabel(seasonCategoryState(guild, season))}`,
         'Channels:',
         ...channelStates,
       ].join('\n'),
@@ -266,7 +268,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
 
   if (categoryAmbiguous || !category) {
     await interaction.editReply(
-      `Season ${seasonNumber}'s category "${categoryName}" is ambiguous: an existing, unmanaged category shares that name. ` +
+      `Season ${seasonNumber}'s category "${categoryName}" could not be chosen: another category not owned by Rat has that name. ` +
         'Resolve it manually in Discord (rename or remove the duplicate), then re-run `/season create` to continue. Nothing was activated.',
     );
     return;
@@ -374,10 +376,10 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
   if (ambiguous.length > 0) {
     await interaction.editReply(
       [
-        `Season ${seasonNumber} (${categoryName}) category is ready, but ${ambiguous.length} channel(s) are ambiguous and were left untouched: ${ambiguous.join(', ')}.`,
+        `Season ${seasonNumber} (${categoryName}) category is ready, but ${ambiguous.length} channels could not be chosen safely and were left unchanged: ${ambiguous.join(', ')}.`,
         `Created: ${created.length ? created.join(', ') : 'none'}`,
-        `Adopted: ${adopted.length ? adopted.join(', ') : 'none'}`,
-        'Resolve the ambiguous channel(s) manually in Discord, then re-run `/season create` to finish. The season was not activated.',
+        `Existing channels used: ${adopted.length ? adopted.join(', ') : 'none'}`,
+        'Check for duplicate channel names or channels in the wrong category in Discord, then run `/season create` to finish. The season was not activated.',
       ].join('\n'),
     );
     return;
@@ -396,7 +398,7 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
     if (error instanceof SeasonAlreadyActiveError) {
       await interaction.editReply(
         [
-          `Season ${seasonNumber} (${categoryName}) is fully provisioned, but season ${error.activeSeasonNumber} became active in the meantime.`,
+          `Season ${seasonNumber} (${categoryName}) has its channels set up, but season ${error.activeSeasonNumber} became active in the meantime.`,
           'Nothing was activated to avoid silently replacing it -- re-run `/season create` once that season is closed to activate this one.',
         ].join('\n'),
       );
@@ -407,9 +409,9 @@ export async function handleSeasonCommand(interaction: ChatInputCommandInteracti
 
   await interaction.editReply(
     [
-      `Season ${seasonNumber} (${categoryName}) is provisioned and now active.`,
+      `Season ${seasonNumber} (${categoryName}) is set up and now active.`,
       `Created: ${created.length ? created.join(', ') : 'none'}`,
-      `Adopted: ${adopted.length ? adopted.join(', ') : 'none'}`,
+      `Existing channels used: ${adopted.length ? adopted.join(', ') : 'none'}`,
     ].join('\n'),
   );
 }
