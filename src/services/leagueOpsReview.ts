@@ -25,6 +25,7 @@ export function leagueOpsRepairAction(finding: string): LeagueAuditResolutionAct
   const control = buildLeagueAuditResolutionView(finding, 0, 'private').actions.find(item => item.id.includes(':choice:'));
   return control?.id.split(':').at(-1) as LeagueAuditResolutionAction | undefined;
 }
+export type ReviewAccountReplacementPreview = AccountReplacementPreview & { roleLabels?: Record<string, string> };
 export type LeagueOpsIssue = { key: string; finding: string; oldDiscordId?: string };
 export type LeagueOpsOperation = { reference: string; type: string; status: string; action: string; targets: string[];
   actor: string; createdAt: string; attempts: number; error: string; next: string; canRepreview: boolean; canRecover: boolean };
@@ -124,13 +125,14 @@ export class LeagueOpsReviewService {
         ...(id && state?.rosters.length === 1 && !state.member ? { oldDiscordId: id } : {}) };
     })), operations };
   }
-  async previewReplacement(actor: string, issueKey: string, oldId: string, newId: string): Promise<AccountReplacementPreview> {
+  async previewReplacement(actor: string, issueKey: string, oldId: string, newId: string): Promise<ReviewAccountReplacementPreview> {
     const current = await this.snapshot(actor);
     if (!current.issues.some(issue => issue.key === issueKey && issue.oldDiscordId === oldId))
       throw new LeagueMutationValidationError('This player’s account or roster problem changed. Refresh Roster problems before choosing an account change.');
     const preview = await this.input.replacement.preview(actor, oldId, newId);
     await this.authorize(actor);
-    return preview;
+    return { ...preview, roleLabels: Object.fromEntries(preview.plan.roles.flatMap(role => [...role.add, ...role.remove])
+      .map(id => [id, this.input.roleLabel?.(id) ?? `League role (${id})`])) };
   }
   async confirmReplacement(actor: string, preview: AccountReplacementPreview, samePlayerConfirmed: boolean) {
     await this.authorize(actor);

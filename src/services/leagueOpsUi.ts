@@ -56,7 +56,7 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
     flows: buildFlowCatalog([{ module: 'league-ops', flow: panel }]),
     policy: { authorize: async request => ({ allowed: await authorizeLeagueOpsUi(request, input.guild.id, authorize),
       denyMessage: 'Only the staff member who opened this view can use it, and they must still have league staff access.' }) },
-    onError: async () => { await bridge.platform.replyToActor('Rat could not finish this review. Use Open league tools on the latest League Status message and start again. No old confirmation will be used.'); } });
+    onError: async () => { await bridge.platform.replyToActor('Rat could not finish this review. Use Review and fix on the latest League Status message and start again. No old confirmation will be used.'); } });
   const host: Host = {
     open: async interaction => {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -64,7 +64,7 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
         await authorize(interaction.user.id);
         const state = getLeagueAuditState(input.db, input.guild.id);
         if (!state?.currentMessageId || interaction.message.id !== state.currentMessageId) {
-          await interaction.editReply('This message was replaced. Use Open league tools on the latest League Status message.');
+          await interaction.editReply('This message was replaced. Use Review and fix on the latest League Status message.');
           return;
         }
         const snapshot = await service.snapshot(interaction.user.id);
@@ -80,11 +80,11 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
       if (!interaction.isMessageComponent() && !interaction.isModalSubmit()) return;
       let address;
       try { address = decodeActionId(interaction.customId.split('~')[0]!); }
-      catch { await interaction.reply({ content: 'These controls are out of date. Use Open league tools on the latest League Status message.', flags: MessageFlags.Ephemeral }); return; }
+      catch { await interaction.reply({ content: 'These controls are out of date. Use Review and fix on the latest League Status message.', flags: MessageFlags.Ephemeral }); return; }
       const session = sessions.get(address.sessionId);
       if (!session || session.actor !== interaction.user.id || interaction.guildId !== input.guild.id
         || interaction.message?.id !== session.messageId) {
-        await interaction.reply({ content: 'This view expired or belongs to another staff member. Use Open league tools on the latest League Status message to open your own view.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'This view expired or belongs to another staff member. Use Review and fix on the latest League Status message to open your own view.', flags: MessageFlags.Ephemeral });
         return;
       }
       await bridge.dispatch(interaction, runtime.dispatch);
@@ -103,7 +103,7 @@ export async function handleLeagueOpsUi(interaction: Interaction, scope: object)
   if (!entry && !control) return false;
   const host = interaction.guildId ? hosts.get(scope)?.get(interaction.guildId) : undefined;
   if (!host) {
-    if (interaction.isRepliable()) await interaction.reply({ content: 'Rat is starting up or these controls expired. Use Open league tools on the latest League Status message. View roster problems lets you check records without making changes.', flags: MessageFlags.Ephemeral });
+    if (interaction.isRepliable()) await interaction.reply({ content: 'Rat is starting up or these controls expired. Use Review and fix on the latest League Status message. View roster problems lets you check records without making changes.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (entry && interaction.isButton()) await host.open(interaction);

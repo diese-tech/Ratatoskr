@@ -20,7 +20,7 @@ test('optional Draft Picks health appears separately from clean roster status an
       sheets: { load: async () => ({ snapshot: clean, sources: {} as never }), checkDraftPickHealth: async () => health }, cards });
     assert.equal(result.status, 'clean');
     assert.match(cards.sent.at(-1)!.card.description, /Draft Picks tab is missing/);
-    assert.match(cards.sent.at(-1)!.card.description, /Problems to review: 0/);
+    assert.match(cards.sent.at(-1)!.card.description, /All clear — no roster problems./);
     assert.equal(listLeagueFindings(db, 'guild').filter(row => row.resourceKey === 'feature:draft-picks').length, 1);
   } finally { db.close(); }
 });
@@ -165,12 +165,12 @@ test('audit cards stay compact and offer a private review queue instead of listi
     const card = cards.sent[0]!.card;
     const description = card.description;
     assert.match(description, /player names/i);
-    assert.match(description, /view roster problems/i);
+    assert.match(description, /review and fix/i);
     assert.doesNotMatch(description, /Old League Name/);
     assert.doesNotMatch(description, /Current League Name/);
     assert.doesNotMatch(description, /143011986349883392/);
     assert.doesNotMatch(description, /inspect the audit log/i);
-    assert.deepEqual(card.actions, [{ id: 'league-audit:review', label: 'View roster problems' }]);
+    assert.deepEqual(card.actions, [{ id: 'league-ops:open', label: 'Review and fix' }, { id: 'league-recovery:recheck', label: 'Check rosters again' }]);
   } finally {
     db.close();
   }
@@ -198,7 +198,7 @@ test('large audits stay compact while preserving the complete private review que
     const description = cards.sent[0]!.card.description;
     assert.ok(description.length < 700);
     assert.match(description, /Player names: 60/);
-    assert.match(description, /View roster problems/);
+    assert.match(description, /Review and fix/);
     assert.doesNotMatch(description, /\b\d{17,20}\b/);
   } finally {
     db.close();
@@ -367,7 +367,7 @@ test('a clean audit retains a healthy authoritative panel', async () => {
     const state = getLeagueAuditState(db, 'guild');
     assert.equal(state?.result, 'clean');
     assert.equal(state?.currentMessageId, 'message-2');
-    assert.match(cards.sent[1]!.card.description,/Rosters: No problems found./);
+    assert.match(cards.sent[1]!.card.description,/All clear — no roster problems./);
     assert.equal(state?.phase, 'settled');
   } finally {
     db.close();

@@ -51,6 +51,9 @@ export type LeagueSnapshot = {
   discordMembers: DiscordLeagueMember[];
   publicRosters: Partial<Record<LeagueDivision, PublicDivisionRoster>>;
   freeAgentRoleId: string;
+  // An independently managed pool; this does not make players eligible for
+  // transactions in the tracked sheet divisions.
+  niflheimFreeAgentRoleId?: string;
 };
 
 export type PublicRosterChange = {
@@ -119,6 +122,11 @@ export function auditLeagueRoster(
 ): string[] {
   const issues: string[] = [];
   const activeTeams = snapshot.teams.filter((team) => team.active);
+  const niflheimRole = snapshot.niflheimFreeAgentRoleId;
+  const separateNiflheimRole = niflheimRole && niflheimRole !== snapshot.freeAgentRoleId
+    && !activeTeams.some(team => team.teamRoleId === niflheimRole || team.divisionRoleId === niflheimRole);
+  if (niflheimRole && !separateNiflheimRole)
+    issues.push('The Niflheim Free Agent role overlaps a tracked league role. Configure a separate role before excluding Niflheim players.');
   const teamsByRole = new Map<string, LeagueTeam>();
   const teamsByPublicBlock = new Map<string, LeagueTeam>();
   const roleByDivision = new Map<LeagueDivision, string>();
@@ -239,7 +247,9 @@ export function auditLeagueRoster(
       if (recordedFreeAgent && !member.roleIds.includes(snapshot.freeAgentRoleId)) {
         issues.push(`Discord member ${member.discordId} is recorded as a free agent but is missing the Free Agent role.`);
       }
-      if (!recordedFreeAgent && member.roleIds.includes(snapshot.freeAgentRoleId)) {
+      const untrackedNiflheimPlayer = separateNiflheimRole && member.roleIds.includes(niflheimRole!)
+        && assignedTeamRoles.length === 0 && !snapshot.names.some(row => row.discordId === member.discordId);
+      if (!recordedFreeAgent && !untrackedNiflheimPlayer && member.roleIds.includes(snapshot.freeAgentRoleId)) {
         issues.push(`Discord member ${member.discordId} has the Free Agent role but is not recorded as a current free agent.`);
       }
     }

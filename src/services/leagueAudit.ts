@@ -33,7 +33,7 @@ import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAudit
 import { LeagueMemberGatewayThrottleError, LeagueMemberSnapshotUnavailableError, type LeagueMemberReadOptions } from './leagueMemberReads.js';
 import { DRAFT_PICK_FEATURE, draftPickHealthFinding, type DraftPickHealth } from './draftPickTracking.js';
 import { replaceLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
-import { leagueActionLabel, leagueAuditReadErrorMessage } from './leaguePresentation.js';
+import { leagueActionLabel, leagueAuditReadErrorMessage, leagueEasternTime } from './leaguePresentation.js';
 
 export type LeagueAuditCard = PersistedLeagueOpsCard;
 
@@ -64,7 +64,7 @@ type Input = {
 const LEAGUE_TIMEZONE = 'America/New_York';
 function appendDraftHealth(card: LeagueAuditCard, findings?: string[]): void {
   if (!findings?.length) return;
-  card.description += `\n\nTop-four draft picks\n${findings.join('\n')}`;
+  card.description += `\n\nTop-four draft picks\n${findings.join('\n').replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, value => leagueEasternTime(value))}`;
 }
 
 type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number; second: number };
@@ -146,11 +146,11 @@ function cardFor(
   const intro =
     result === 'error'
       ? issues.length
-        ? 'The latest check could not finish. The findings below are from the last verified reads and may have changed. Review remains available; every confirmed repair must read fresh state before writing.'
+        ? 'The latest roster check could not finish. Earlier problems may have changed. Open Review and fix to check them.'
         : 'The latest check could not finish. No verified player findings are available to review. No changes were made by this check.'
       : issues.length
         ? `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.`
-        : 'An operation needs administrator review before it can proceed safely.';
+        : 'A saved action needs staff review.';
   const categories = [
     [
       'Player names',
@@ -196,12 +196,12 @@ function cardFor(
   return {
     title: 'League Status',
     description:
-      result === 'clean'
-        ? 'Rosters: No problems found.\nProblems to review: 0'
-        : `Rosters: ${result === 'error' ? 'Rat could not finish checking.' : issues.length ? 'Problems need review.' : 'No roster problems found in the last check.'}\nProblems to review: ${issues.length}\n\n${intro}${summary ? `\n\n${summary}\n\nUse **View roster problems** to check each problem privately.` : ''}`,
+      (result === 'clean'
+        ? 'All clear — no roster problems.'
+        : `Rosters: ${result === 'error' ? 'Rat could not finish checking.' : issues.length ? 'Problems need review.' : 'No roster problems found in the last check.'}\nProblems to review: ${issues.length}\n\n${intro}${summary ? `\n\n${summary}\n\nUse **Review and fix** to check each problem privately.` : ''}`) + '\n\n**Review and fix** — open private tools to review problems and confirm fixes.\n**Check rosters again** — look for problems again; makes no roster changes.',
     footer: `${trigger === 'startup' ? 'Startup' : 'Daily'} roster check • ${time}`,
     allowedMentions: false,
-    ...(issues.length ? { actions: [{ id: 'league-audit:review', label: 'View roster problems' }] } : {}),
+    actions: [{ id: 'league-ops:open', label: 'Review and fix' }, { id: 'league-recovery:recheck', label: 'Check rosters again' }],
   };
 }
 
@@ -214,7 +214,7 @@ export async function recoverPendingLeagueAudit(input: Pick<Input, 'db' | 'guild
       markLeagueAuditSendAttempted(input.db, input.guildId, state.runReference);
       const card = state.pendingCard ?? cardFor(state.result, state.findings, new Date(state.runAt), state.trigger);
       if (!state.pendingCard)
-        card.description += `\n\nLast targeted check: ${state.lastTargetedAt ?? 'Pending'}\nLast full audit: ${state.lastFullAt ?? 'Pending'}`;
+        card.description += `\n\nLast player check: ${leagueEasternTime(state.lastTargetedAt)}\nLast full roster check: ${leagueEasternTime(state.lastFullAt)}`;
       messageId = await input.cards.send(card, state.runReference);
     }
     confirmLeagueAuditCard(input.db, input.guildId, state.runReference, messageId);
@@ -280,10 +280,7 @@ export async function refreshLeagueOpsPanel(
       'Rosters: Waiting for the first check.\nRat is still checking the league records.';
   const draftHealth = resources.find(entry => entry.resourceKey === DRAFT_PICK_FEATURE);
   appendDraftHealth(card, draftHealth?.findings);
-  if (!issues.length) card.actions = undefined;
-  card.actions = [...(card.actions ?? []), { id: 'league-ops:open', label: 'Open league tools' }];
-  if (recoverableRepairs.length) card.actions = [...(card.actions ?? []), { id: 'league-recovery:list', label: 'View unfinished fixes' }];
-  card.actions = [...(card.actions ?? []), { id: 'league-recovery:recheck', label: 'Check rosters again' }];
+
   if (jobs.length)
     card.description +=
       `\n\nSaved actions needing review: ${jobs.length}\n` +
@@ -299,11 +296,11 @@ export async function refreshLeagueOpsPanel(
     card.description += `\n\nUnfinished actions to check: ${additionalProblems.length}`;
     const repairs = additionalProblems.filter((reference) => repairReferences.has(reference));
     const transactions = additionalProblems.filter((reference) => !repairReferences.has(reference));
-    if (repairs.length) card.description += `\nUse View unfinished fixes to check: ${repairs.slice(-5).join(', ')}`;
+    if (repairs.length) card.description += `\nOpen Review and fix / Saved actions to check: ${repairs.slice(-5).join(', ')}`;
     if (transactions.length) card.description += `\nCheck Discord, league sheets and transaction posts/history for: ${transactions.slice(-5).join(', ')}. Do not run the player change again.`;
   }
   const times = getLeagueAuditState(input.db, input.guildId);
-  card.description += `\n\nLast player check: ${times?.lastTargetedAt ?? 'Not checked yet'}\nLast full roster check: ${times?.lastFullAt ?? 'Not checked yet'}`;
+  card.description += `\n\nLast player check: ${leagueEasternTime(times?.lastTargetedAt)}\nLast full roster check: ${leagueEasternTime(times?.lastFullAt)}`;
   if (prior?.currentMessageId && (!input.repost || recovered || alreadyReposted) && input.cards.edit) {
     await input.cards.edit(prior.currentMessageId, card, reference);
     recordLeaguePanelEdit(input.db, {

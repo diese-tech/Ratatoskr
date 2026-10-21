@@ -33,12 +33,20 @@ async function harness() {
   const plan = buildLeagueIntentPlan(JSON.stringify(['trade', 'one', 'two']), (await source.sheets.load([...source.members.values()], 'fa')).snapshot);
   let allowed = true;
   let confirmations = 0;
+  const repairConfirmations: string[] = [];
   let release!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
   const service = {
     authorize: async () => { if (!allowed) throw Error('Revoked'); return 'Admin'; },
     previewTransaction: async () => { await pending; return { originalReference: 'original', selections: 'selected', fingerprint: 'reviewed', approval: 'one-approval', plan }; },
     confirmTransaction: async () => { confirmations++; return { reference: 'new-durable-job', status: 'QUEUED' }; },
+    snapshot: async () => snapshot,
+    operationDetail: async (_actor: string, reference: string) => ({ ...snapshot.operations[0], reference, status: 'COMPLETED' }),
+    previewRepair: async (_actor: string, key: string) => ({ issueKey: key, finding: key, action: 'repair-roles',
+      fingerprint: key, approvalReference: key, description: `Fix for ${key}` }),
+    confirmRepair: async (_actor: string, preview: { issueKey: string }) => {
+      repairConfirmations.push(preview.issueKey); return { reference: 'saved-repair', status: 'QUEUED' };
+    },
   } as unknown as LeagueOpsReviewService;
   const flow = createLeagueOpsFlow(service);
   const edits: V2MessagePayload[] = [];
@@ -72,9 +80,11 @@ async function harness() {
     // The click finishes while external proof reads remain pending.
     assert.ok(JSON.stringify(edits.at(-1)).includes('Checking the latest league records'));
     release(); await until(() => JSON.stringify(edits.at(-1)).includes('Review these player changes'));
-    await click('Continue to confirmation'); await click('Confirm changes');
+    await click('Approve player change');
   };
   return { runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
+    setIssues: async (issues: LeagueOpsSnapshot['issues']) => { snapshot.issues = issues; await handle.redraw(data => { data.snapshot = snapshot; }); },
+    repairConfirmations,
     expire: () => { now += 11 * 60_000; }, count: () => confirmations, close: () => runtime.stopSweeper() };
 }
 
@@ -87,6 +97,50 @@ test('real Fluxcord flow releases slow preview work, requires modal confirmation
     await Promise.all([h.dispatch(id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' }),
       h.dispatch(id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' })]);
     await until(() => JSON.stringify(h.edits.at(-1)).includes('new-durable-job'));
+    assert.equal(h.count(), 1);
+  } finally { h.release(); h.close(); }
+});
+
+test('cancelled previews release the panel for another issue and old modals cannot approve it', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: 'One — Discord division: none; expected: Vanaheim. Make the division role match.' },
+      { key: 'second', finding: 'Two — Discord division: none; expected: Vanaheim. Make the division role match.' }]);
+    await h.click('View problem');
+    await h.click('Make Discord roles match roster');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
+    await h.click('Make Discord roles match roster');
+    const oldModal = h.modals.at(-1)!.custom_id;
+    await h.click('Roster problems');
+    // Pick the second issue using its separately rendered control.
+    const ids: string[] = [];
+    const visit = (value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      const record = value as Record<string, unknown>;
+      if (record.label === 'View problem') ids.push(String(record.custom_id));
+      Object.values(record).forEach(visit);
+    };
+    visit(h.edits.at(-1));
+    await h.dispatch(ids[1]!);
+    await h.click('Make Discord roles match roster');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for second'));
+    await h.click('Make Discord roles match roster');
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    assert.deepEqual(h.repairConfirmations, []);
+    await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => h.repairConfirmations.length === 1);
+    assert.deepEqual(h.repairConfirmations, ['second']);
+  } finally { h.release(); h.close(); }
+});
+
+test('submitted panels can refresh and inspect saved progress without submitting again', async () => {
+  const h = await harness();
+  try {
+    await h.preview();
+    await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('new-durable-job'));
+    await h.click('Saved actions'); await h.click('View action'); await h.click('Refresh');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Finished'));
     assert.equal(h.count(), 1);
   } finally { h.release(); h.close(); }
 });
@@ -111,7 +165,7 @@ test('expired Fluxcord modal cannot resume an old approval', async () => {
     await h.preview(); h.expire();
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.equal(h.count(), 0);
-    assert.ok(JSON.stringify(h.edits.at(-1)).includes('Use Open league tools'));
+    assert.ok(JSON.stringify(h.edits.at(-1)).includes('Use Review and fix'));
   } finally { h.release(); h.close(); }
 });
 

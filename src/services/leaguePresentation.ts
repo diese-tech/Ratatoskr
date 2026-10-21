@@ -95,3 +95,36 @@ export function leagueAuditReadErrorMessage(message: string): string {
     return 'Discord asked Rat to wait before checking again. No roster changes were made by this check.';
   return 'Rat could not check all Discord members and roster sheets. No roster changes were made by this check.';
 }
+
+/** Always show league times in Eastern time, including the EST/EDT change. */
+export function leagueEasternTime(value: string | Date | null | undefined): string {
+  if (!value) return 'Not checked yet';
+  // Older SQLite rows use UTC without an explicit offset.
+  const source = typeof value === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+    ? value.replace(' ', 'T') + 'Z' : value;
+  const date = source instanceof Date ? source : new Date(source);
+  if (!Number.isFinite(date.getTime())) return 'Time unavailable';
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(date);
+}
+
+export function leagueFixLabel(action: string | undefined): string {
+  switch (action) {
+    case 'repair-roles': return 'Make Discord roles match roster';
+    case 'use-discord-name': return 'Update sheets to Discord name';
+    case 'use-league-name': return 'Use name from name history';
+    case 'use-roster-name': return 'Use name from team roster';
+    case 'sync-public-roster': return 'Update public roster';
+    case 'mark-inactive': return 'Remove departed free agent';
+    default: return 'Review fix';
+  }
+}
+export function leagueFixExplanation(action: string | undefined): string {
+  switch (action) {
+    case 'repair-roles': return 'This changes the player’s Discord team, division and Free Agent roles to match the roster sheets.';
+    case 'use-discord-name': return 'This copies the player’s current Discord name to the roster sheets and public roster. The old name stays in history.';
+    case 'sync-public-roster': return 'This updates the affected team’s public player list to match the roster sheets.';
+    case 'mark-inactive': return 'This marks the departed free agent inactive and removes them from the public free-agent list.';
+    default: return 'Staff must check the named sheet and correct this problem there.';
+  }
+}

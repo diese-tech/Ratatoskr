@@ -51,3 +51,15 @@ test('unmatched technical validation messages use safe guidance rather than leak
     assert.doesNotMatch(leagueValidationMessage(message, 'read-only'), /Some changes may already have happened/);
   }
 });
+
+
+test('league times stay in Eastern time across daylight saving and legacy UTC rows', async () => {
+  const { leagueEasternTime } = await import('./leaguePresentation.js');
+  assert.equal(leagueEasternTime('2026-07-01T12:30:00Z'), 'Jul 1, 2026, 8:30 AM EDT');
+  assert.equal(leagueEasternTime('2026-01-01T12:30:00Z'), 'Jan 1, 2026, 7:30 AM EST');
+  assert.equal(leagueEasternTime('2026-07-01 12:30:00'), 'Jul 1, 2026, 8:30 AM EDT');
+  assert.equal(leagueEasternTime('2026-11-01T05:30:00Z'), 'Nov 1, 2026, 1:30 AM EDT');
+  assert.equal(leagueEasternTime('2026-11-01T06:30:00Z'), 'Nov 1, 2026, 1:30 AM EST');
+  assert.equal(leagueEasternTime(undefined), 'Not checked yet');
+  assert.equal(leagueEasternTime('not a date'), 'Time unavailable');
+});

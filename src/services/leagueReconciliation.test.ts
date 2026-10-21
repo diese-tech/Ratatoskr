@@ -76,6 +76,23 @@ function setup() {
     cacheVerifiedLeagueMember(db, 'g', member.discordId, snapshot, now, 'full');
   return { db, worker, snapshot, input, targetedReads };
 }
+
+test('Niflheim pool membership clears only the false finding and role removal schedules a fresh check', async () => {
+  const f = setup();
+  try {
+    f.snapshot.niflheimFreeAgentRoleId = 'niflheim-fa';
+    const member = { discordId: 'niflheim-player', displayName: 'Niflheim player', roleIds: ['fa', 'niflheim-fa'] };
+    f.snapshot.discordMembers.push(member);
+    replaceLeagueFindings(f.db, 'g', 'member:niflheim-player', ['Old untracked Free Agent warning'], now);
+    await checkLeagueMember({ ...f.input, discordId: member.discordId });
+    assert.ok(!listLeagueFindings(f.db, 'g').some(entry => entry.resourceKey === 'member:niflheim-player'));
+    assert.equal(observeLeagueMember(f.db, f.worker, member, member.discordId), false);
+    assert.equal(observeLeagueMember(f.db, f.worker, { ...member, roleIds: ['fa'] }, member.discordId), true);
+    member.roleIds = ['fa'];
+    await checkLeagueMember({ ...f.input, discordId: member.discordId });
+    assert.ok(listLeagueFindings(f.db, 'g').some(entry => entry.resourceKey === 'member:niflheim-player'));
+  } finally { f.worker.stop(); f.db.close(); }
+});
 test('display-name drift triggers targeted work; irrelevant roles stop; burst events coalesce by Discord ID', () => {
   const f = setup();
   try {
@@ -191,7 +208,7 @@ test('healthy startup restores one panel; independent drifts edit it in place; h
     };
     await runLeagueAudit(audit);
     assert.equal(cards.sent.length, 1);
-    assert.match(cards.sent[0]!.card.description, /Rosters: No problems found./);
+    assert.match(cards.sent[0]!.card.description, /All clear — no roster problems./);
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
     assert.equal(cards.sent.length, 1);
     f.snapshot.discordMembers[0]!.displayName = 'First';
@@ -344,7 +361,7 @@ test('SQLite reopen restores one authoritative panel and outstanding dirty retry
     await runLeagueAudit(auditInput());
     assert.equal(cards.sent.length, 1);
     assert.equal(getLeagueAuditState(db, 'g')?.currentMessageId, 'm1');
-    assert.match(cards.sent[0]!.card.description, /Rosters: No problems found./);
+    assert.match(cards.sent[0]!.card.description, /All clear — no roster problems./);
   } finally {
     worker.stop();
     db.close();
@@ -381,8 +398,8 @@ for (const status of [429, 503]) {
       assert.equal(state.findings.length, 1);
       assert.match(state.findings[0]!, /Discord name now/);
       assert.match(cards.sent[0]!.card.description, status === 429 ? /asked Rat to wait/ : /temporarily unavailable/);
-      assert.match(cards.sent[0]!.card.description, /last verified reads/);
-      assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'View roster problems');
+      assert.match(cards.sent[0]!.card.description, /Earlier problems may have changed/);
+      assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review and fix');
       assert.equal(cards.sent.length, 1);
       unavailable = false;
       await runLeagueAudit(audit);
@@ -449,7 +466,7 @@ test('duplicate malformed roster diagnostics remain readable in the persistent p
     assert.ok(findings.length > 0);
     assert.ok(findings.every((finding) => typeof finding === 'string'));
     assert.match(cards.sent[0]!.card.description, /Problems need review/);
-    assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'View roster problems');
+    assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review and fix');
     f.db.prepare("UPDATE league_findings SET findings_json='[null]' WHERE guild_id='g'").run();
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
     assert.match(cards.sent[0]!.card.description, /Problems need review/);
@@ -474,13 +491,14 @@ test('partial operations expose recovery controls and prevent legacy alert clean
     createLeagueAuditRepair(f.db, { reference: 'old-repair', guildId: 'g', actorUserId: 'old-admin', auditReference: 'old', finding: 'Old finding', action: 'use-discord-name' });
     markLeagueAuditRepairReconciliationRequired(f.db, 'old-repair', 'Interrupted');
     await runLeagueAudit({ ...input, trigger: 'scheduled' });
-    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'View unfinished fixes'));
+    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Review and fix'));
+    assert.match(cards.sent[0]!.card.description, /Saved actions/);
     assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Check rosters again'));
     assert.deepEqual(cleanups, []);
     const preview = await previewLeagueRepairRecovery(input, 'old-repair');
     await reconcileLeagueRepairRecord({ ...input, reference: 'old-repair', actorUserId: 'admin', expectedFingerprint: preview.fingerprint });
     await assert.rejects(refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now }), /cleanup unavailable/);
-    assert.match(cards.sent[0]!.card.description, /Rosters: No problems found./);
+    assert.match(cards.sent[0]!.card.description, /All clear — no roster problems./);
     failCleanup = false;
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
@@ -523,7 +541,7 @@ test('targeted convergence after a dirty full audit cannot authorize legacy clea
     f.snapshot.discordMembers[0]!.displayName = original;
     await checkLeagueMember({ ...f.input, discordId: 'one', now: new Date(now.getTime() + 60_000) });
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now: new Date(now.getTime() + 60_000) });
-    assert.match(cards.sent[0]!.card.description, /Rosters: No problems found./);
+    assert.match(cards.sent[0]!.card.description, /All clear — no roster problems./);
     assert.deepEqual(cleaned, []);
     const cleanAt = new Date(now.getTime() + 120_000);
     await runLeagueAudit({ ...input, trigger: 'scheduled', now: cleanAt });

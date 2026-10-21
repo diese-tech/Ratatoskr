@@ -1,3 +1,4 @@
+import { leagueEasternTime } from './leaguePresentation.js';
 import { DRAFT_DIVISIONS, DRAFT_PICK_HEADERS, draftParseProblems, draftPickIdentityIndex } from './draftPicks.js';
 import type { LeagueSheetsGateway, PreparedAccountReplacementSheets } from './leagueSheets.js';
 
@@ -12,7 +13,7 @@ export function draftPickVerificationText(verification: PreparedAccountReplaceme
   }
 }
 export function draftPickHealthFinding(health: DraftPickHealth, checkedAt: Date): string {
-  return `${health.summary}\nNext: ${health.next}\nDraft picks checked: ${checkedAt.toISOString()}`;
+  return `${health.summary}\nNext: ${health.next}\nDraft picks checked: ${leagueEasternTime(checkedAt)}`;
 }
 export type DraftPickHealth = {
   status: 'ready' | 'partial' | 'empty-tab' | 'missing-tab' | 'invalid-schema' | 'invalid-range'

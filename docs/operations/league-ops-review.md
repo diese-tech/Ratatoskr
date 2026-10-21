@@ -1,13 +1,19 @@
 # Private League Ops review (#155)
 
-The existing rolling League Status card remains the public health summary. **Open league tools** opens an ephemeral, owner-bound Fluxcord panel for current OPERATIONS staff (Allfather, Aesir or Valkyrie). Structural ADMIN/configuration access remains Allfather/Aesir only. Existing commands, the 6 AM full audit and hourly presentation heartbeat keep their current contracts.
+The existing rolling League Status card remains the public health summary. **Review and fix** opens an ephemeral, owner-bound Fluxcord panel for current OPERATIONS staff (Allfather, Aesir or Valkyrie). Structural ADMIN/configuration access remains Allfather/Aesir only. Existing commands, the 6 AM full audit and hourly presentation heartbeat keep their current contracts.
+
+The staff-ops card has two controls: **Review and fix** opens private tools where staff can approve changes; **Check rosters again** only checks for problems and makes no roster changes. Times are displayed in Eastern time with EST or EDT as appropriate.
+
+The old read-only issue/recovery routes remain compatible with existing messages. New cards use the private tools rather than duplicate read-only buttons.
+
+Optional `ROLE_NIFLHEIM_FREE_AGENT_ID` recognizes the separate manually managed Niflheim free-agent pool. Untracked members with that exact role and the general Free Agent role need no synthetic roster/name record. Existing tracked identities and team conflicts still require review.
 
 ## Operator workflow
 
 - **Roster problems:** paginated current findings. An absent rostered account has separate account-replacement, departure and self-drop guidance. Replacement requires the exact old/new IDs and an explicit `SAME PLAYER` ownership attestation. Departures and self-drops continue through their existing transaction commands.
 - **Saved actions:** transaction, repair and account-replacement jobs, including original pre-write blocked attempts and interrupted legacy repair records. Detail shows the saved cause, action, targets, creator, timestamp, attempts, durable reference and appropriate next step. Completed records can be inspected with **Find by reference**; refresh re-reads their durable state.
 - **Review changes:** a fresh read-only account replacement, managed repair or proven pre-write transaction preview. A changed finding or source fingerprint blocks execution. Original blocked transaction selections are retained, while superseded attempts cannot generate reverse trades through stale UI.
-- **Confirmation:** review the preview, then type `CONFIRM` in its modal. Account replacement uses the #154 service; ordinary transactions/repairs use the existing canonical worker. UI state never performs external roster mutations.
+- **Confirmation:** review the preview, choose the button named for the change, then type `CONFIRM` in its modal. Account replacement uses the #154 service; ordinary transactions/repairs use the existing canonical worker. UI state never performs external roster mutations.
 - **Check unfinished changes:** inspect an interrupted account replacement or repair against fresh source values. Type `HISTORY REVIEWED` only after checking the original record and preserved name/history data. The worker rechecks the fingerprint before acknowledging convergence; no interrupted mutation is replayed or retroactively declared successful.
 
 Role-repair approvals use stable target/finding/action/source identity across audit references. Equivalent active work shares one job and duplicate approval keys remain aliases of it. A fresh explicit preview can recover a proven pre-write failure; old approval keys never silently retry it. Related original repair attempts stay preserved as evidence.
