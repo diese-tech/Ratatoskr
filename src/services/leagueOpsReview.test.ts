@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { openDatabase } from '../db/client.js';
 import { enqueueLeagueJob, getLeagueJob, transitionLeagueJob, type LeagueJobType } from '../db/repositories/leagueJobs.js';
-import { replaceFullLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
+import { replaceLeagueFindings, replaceFullLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
 import { beginDirtyLeagueAudit } from '../db/repositories/leagueAudits.js';
 import { auditLeagueRoster } from '../domain/leagueOperations.js';
 import { accountReplacementSources } from './accountReplacement.test-support.js';
@@ -266,4 +266,37 @@ test('private error text redacts credentials and escapes mentions/formatting', (
     process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({ private_key: key });
     assert.doesNotMatch(leagueOpsText(key + ' / ' + JSON.stringify(key).slice(1, -1)), /synthetic-private-key|second-line/);
   } finally { if (credentialBefore === undefined) delete process.env.GOOGLE_SERVICE_ACCOUNT_JSON; else process.env.GOOGLE_SERVICE_ACCOUNT_JSON = credentialBefore; }
+});
+
+
+test('private check details retain exact sheet repair guidance, draft counts and check times', async () => {
+  const f = await leagueOpsReviewFixture();
+  try {
+    replaceLeagueFindings(f.db, 'g', 'connection', ['Player Name History row 234: move the existing values one column left.'], new Date());
+    replaceLeagueFindings(f.db, 'g', 'feature:draft-picks', ['Draft Picks is missing. Ask an admin to check its setup. Draft picks checked: 2026-10-21T12:00:00Z'], new Date());
+    const snapshot = await f.service.snapshot('admin');
+    const details = snapshot.checkDetails!.join('\n');
+    assert.match(details, /Player Name History row 234.*move the existing values one column left/);
+    assert.match(details, /Draft Picks is missing/);
+    assert.match(details, /8:00 AM EDT/);
+    assert.match(details, /Last full roster check/);
+    assert.match(details, /Panel reference/);
+    assert.equal(snapshot.draftNeedsAttention, true);
+    assert.equal(f.gateway.writes.length, 0);
+    f.deny();
+    await assert.rejects(() => f.service.snapshot('admin'), /revoked/);
+  } finally { f.close(); }
+});
+
+
+test('unfinished private inventory includes canonical work at every active phase', async () => {
+  const f = await leagueOpsReviewFixture();
+  try {
+    for (const status of ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING', 'RETRYING'] as const) {
+      const job = enqueueLeagueJob(f.db, { guildId: 'g', type: 'transaction', dedupeKey: status, payload: {} });
+      if (status !== 'QUEUED') transitionLeagueJob(f.db, job.reference, status);
+      assert.ok((await f.service.snapshot('admin')).operations.some(operation => operation.reference === job.reference && operation.status === status));
+    }
+    assert.equal(f.gateway.writes.length, 0);
+  } finally { f.close(); }
 });

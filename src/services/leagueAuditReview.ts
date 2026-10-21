@@ -25,7 +25,7 @@ function payload(view: LeagueAuditReviewView): InteractionReplyOptions & Interac
     embeds: [
       new EmbedBuilder()
         .setTitle(view.title)
-        .setDescription(`${view.description}\n\nThis view only shows records. Use Review and fix on the latest League Status message to preview and confirm changes.`)
+        .setDescription(`${view.description}\n\nThis view only shows records. Use the main button on the latest League Status message to preview and confirm changes.`)
         .setFooter({ text: view.footer })
         .setColor(0xc43c35),
     ],
@@ -104,7 +104,7 @@ export async function handleLeagueAuditReviewButton(
     return true;
   }
   if (parsed.action === 'confirm') {
-    await interaction.editReply({ content: 'This view only shows records. Use Review and fix on the latest League Status message to preview and confirm changes.', embeds: [], components: [] });
+    await interaction.editReply({ content: 'This view only shows records. Use the main button on the latest League Status message to preview and confirm changes.', embeds: [], components: [] });
     return true;
   }
   const state = getLeagueAuditState(db, interaction.guild.id);

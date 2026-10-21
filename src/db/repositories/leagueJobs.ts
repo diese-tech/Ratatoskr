@@ -178,6 +178,11 @@ export function recoverLeagueJobs(db: Database.Database, guildId: string): Leagu
     .all(guildId) as Row[];
   return rows.map(decode);
 }
+/** Presentation inventory includes work in progress as well as staff-review failures. */
+export function listUnfinishedLeagueMutationJobs(db: Database.Database, guildId: string): LeagueJob[] {
+  return (db.prepare(`SELECT * FROM league_jobs WHERE guild_id=? AND dismissed_at IS NULL
+    AND type IN ('transaction','repair','account-replacement') AND status <> 'COMPLETED' ORDER BY sequence`).all(guildId) as Row[]).map(decode);
+}
 export function listActionableLeagueJobs(db: Database.Database, guildId: string): LeagueJob[] {
   return (
     db

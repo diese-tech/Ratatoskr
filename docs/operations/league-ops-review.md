@@ -1,8 +1,8 @@
 # Private League Ops review (#155)
 
-The existing rolling League Status card remains the public health summary. **Review and fix** opens an ephemeral, owner-bound Fluxcord panel for current OPERATIONS staff (Allfather, Aesir or Valkyrie). Structural ADMIN/configuration access remains Allfather/Aesir only. Existing commands, the 6 AM full audit and hourly presentation heartbeat keep their current contracts.
+The rolling League Status card is a compact snapshot: roster problem and unfinished-action counts, one draft-health line, and the time of the last full roster check. Diagnostic text, references and individual check times are private under **Check details**. **Open league tools** (or **Review problems** when attention is needed) opens an ephemeral, owner-bound Fluxcord panel for current OPERATIONS staff (Allfather, Aesir or Valkyrie). Structural ADMIN/configuration access remains Allfather/Aesir only. Existing commands, the 6 AM full audit and hourly presentation heartbeat keep their current contracts.
 
-The staff-ops card has two controls: **Review and fix** opens private tools where staff can approve changes; **Check rosters again** only checks for problems and makes no roster changes. Times are displayed in Eastern time with EST or EDT as appropriate.
+The staff-ops card has two controls: **Open league tools** opens private tools where staff can approve changes; **Check again** only checks for problems and makes no roster changes. Times are displayed in Eastern time with EST or EDT as appropriate.
 
 The old read-only issue/recovery routes remain compatible with existing messages. New cards use the private tools rather than duplicate read-only buttons.
 

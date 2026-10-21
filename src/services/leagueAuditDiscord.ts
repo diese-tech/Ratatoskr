@@ -8,17 +8,25 @@ import {
   PermissionFlagsBits,
   RESTJSONErrorCodes,
   type Client,
+  type Message,
   type Collection,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import { getValidatedStaffChannel } from './operationalErrors.js';
 import type { LeagueAuditCardPort } from './leagueAudit.js';
 
+export function hasLeagueStatusReceipt(message: Pick<Message, 'nonce' | 'embeds' | 'components'>, reference: string): boolean {
+  return String(message.nonce ?? '') === nonceFor(reference)
+    || message.embeds.some(embed => embed.footer?.text.endsWith(reference))
+    || message.components.some(row => 'components' in row && row.components.some(component => 'customId' in component && component.customId === `league-ops:open:${reference}`));
+}
+
 function nonceFor(reference: string): string {
   return createHash('sha256').update(reference).digest('hex').slice(0, 24);
 }
 
-export function leagueStatusCardColor(description: string): number {
+export function leagueStatusCardColor(description: string, title?: string): number {
+  if (title?.startsWith('League Status · ')) return title === 'League Status · All clear' ? 0x358653 : 0xC43C35;
   // Pending saved cards may still contain the previous wording after deploy.
   return /^(All clear — no roster problems\.|Rosters: No problems found\.|(?:Roster )?[Ss]tatus: Healthy)/.test(description) ? 0x358653 : 0xC43C35;
 }
@@ -84,12 +92,11 @@ export function createLeagueAuditCardPort(
       if (!channel.permissionsFor(bot)?.has(PermissionFlagsBits.ReadMessageHistory)) {
         throw new Error('bot cannot read staff-ops history for league audit recovery');
       }
-      const expectedNonce = nonceFor(reference);
       let before: string | undefined;
       while (true) {
         const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
         const match = messages.find((message) => message.author.id === client.user?.id
-          && (String(message.nonce ?? '') === expectedNonce || message.embeds.some(embed => embed.footer?.text.endsWith(reference))));
+          && hasLeagueStatusReceipt(message, reference));
         if (match) return match.id;
         if (messages.size < 100) return undefined;
         const oldest = messages.last();
@@ -103,8 +110,8 @@ export function createLeagueAuditCardPort(
         embeds: [new EmbedBuilder()
           .setTitle(card.title)
           .setDescription(card.description.slice(0, 4096))
-          .setFooter({ text: `${card.footer} • ${reference}`.slice(0, 2048) })
-          .setColor(leagueStatusCardColor(card.description))],
+          .setFooter({ text: (card.title.startsWith('League Status · ') && card.actions?.some(action => action.id === 'league-ops:open') ? card.footer : `${card.footer} • ${reference}`).slice(0, 2048) })
+          .setColor(leagueStatusCardColor(card.description, card.title))],
         components: card.actions?.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
           card.actions.map((action) => new ButtonBuilder()
             .setCustomId(`${action.id}:${reference}`)
@@ -121,7 +128,7 @@ export function createLeagueAuditCardPort(
       const channel = await getValidatedStaffChannel(client, db, guildId);
       try {
         await channel.messages.edit(messageId, {
-          embeds: [new EmbedBuilder().setTitle(card.title).setDescription(card.description.slice(0,4096)).setFooter({text:`${card.footer} • ${reference}`.slice(0,2048)}).setColor(leagueStatusCardColor(card.description))],
+          embeds: [new EmbedBuilder().setTitle(card.title).setDescription(card.description.slice(0,4096)).setFooter({text:(card.title.startsWith('League Status · ') && card.actions?.some(action => action.id === 'league-ops:open') ? card.footer : `${card.footer} • ${reference}`).slice(0,2048)}).setColor(leagueStatusCardColor(card.description, card.title))],
           components: card.actions?.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(card.actions.map(action => new ButtonBuilder().setCustomId(`${action.id}:${reference}`).setLabel(action.label).setStyle(ButtonStyle.Primary)))] : [],
           allowedMentions: {parse:[]},
         });

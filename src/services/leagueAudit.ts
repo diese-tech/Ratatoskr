@@ -1,5 +1,6 @@
+import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 import { listLeagueFindings, replaceFullLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
-import { listActionableLeagueJobs, dismissResolvedRepairReviews } from '../db/repositories/leagueJobs.js';
+import { listUnfinishedLeagueMutationJobs, dismissResolvedRepairReviews } from '../db/repositories/leagueJobs.js';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { auditLeagueRoster, type LeagueSnapshot } from '../domain/leagueOperations.js';
@@ -29,11 +30,10 @@ import {
 import { LeagueSheetInputError, type LoadedLeagueSnapshot } from './leagueSheets.js';
 import { runCoalescedLeagueAudit } from './leagueOperationCoordinator.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
-import { listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 import { LeagueMemberGatewayThrottleError, LeagueMemberSnapshotUnavailableError, type LeagueMemberReadOptions } from './leagueMemberReads.js';
 import { DRAFT_PICK_FEATURE, draftPickHealthFinding, type DraftPickHealth } from './draftPickTracking.js';
 import { replaceLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
-import { leagueActionLabel, leagueAuditReadErrorMessage, leagueEasternTime } from './leaguePresentation.js';
+import { buildLeagueStatusSnapshot } from './leagueStatusSnapshot.js';
 
 export type LeagueAuditCard = PersistedLeagueOpsCard;
 
@@ -62,11 +62,6 @@ type Input = {
 };
 
 const LEAGUE_TIMEZONE = 'America/New_York';
-function appendDraftHealth(card: LeagueAuditCard, findings?: string[]): void {
-  if (!findings?.length) return;
-  card.description += `\n\nTop-four draft picks\n${findings.join('\n').replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, value => leagueEasternTime(value))}`;
-}
-
 type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number; second: number };
 
 function zonedParts(date: Date): ZonedParts {
@@ -137,74 +132,6 @@ function auditDate(now: Date): string {
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
-function cardFor(
-  result: 'clean' | 'dirty' | 'error',
-  issues: string[],
-  now: Date,
-  trigger: Input['trigger'],
-): LeagueAuditCard {
-  const intro =
-    result === 'error'
-      ? issues.length
-        ? 'The latest roster check could not finish. Earlier problems may have changed. Open Review and fix to check them.'
-        : 'The latest check could not finish. No verified player findings are available to review. No changes were made by this check.'
-      : issues.length
-        ? `Ratatoskr found ${issues.length} item${issues.length === 1 ? ' that needs' : 's that need'} a league admin to review. Nothing was changed automatically.`
-        : 'A saved action needs staff review.';
-  const categories = [
-    [
-      'Player names',
-      issues.filter(
-        (issue) =>
-          (issue.includes('Discord name now:') &&
-            issue.includes('Current Rosters sheet:') &&
-            issue.includes('Player Name History sheet:')) ||
-          (issue.includes('Current Rosters:') &&
-            issue.includes('Player Name History:') &&
-            issue.includes('Make the names match.')),
-      ).length,
-    ],
-    [
-      'Departures or inactive players',
-      issues.filter((issue) => issue.includes('no longer in the Discord server')).length,
-    ],
-    [
-      'Discord roles',
-      issues.filter(
-        (issue) =>
-          !issue.includes('no longer in the Discord server') &&
-          /Discord .*role|role in Discord|Discord division|Discord team/i.test(issue),
-      ).length,
-    ],
-    ['Roster sheets and setup', 0],
-  ] as Array<[string, number]>;
-  if (categories.length)
-    categories[3]![1] = issues.length - categories.slice(0, 3).reduce((sum, entry) => sum + entry[1], 0);
-  const summary = categories
-    .filter(([, count]) => count > 0)
-    .map(([label, count]) => `• ${label}: ${count}`)
-    .join('\n');
-  const time = new Intl.DateTimeFormat('en-US', {
-    timeZone: LEAGUE_TIMEZONE,
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZoneName: 'short',
-  }).format(now);
-  return {
-    title: 'League Status',
-    description:
-      (result === 'clean'
-        ? 'All clear — no roster problems.'
-        : `Rosters: ${result === 'error' ? 'Rat could not finish checking.' : issues.length ? 'Problems need review.' : 'No roster problems found in the last check.'}\nProblems to review: ${issues.length}\n\n${intro}${summary ? `\n\n${summary}\n\nUse **Review and fix** to check each problem privately.` : ''}`) + '\n\n**Review and fix** — open private tools to review problems and confirm fixes.\n**Check rosters again** — look for problems again; makes no roster changes.',
-    footer: `${trigger === 'startup' ? 'Startup' : 'Daily'} roster check • ${time}`,
-    allowedMentions: false,
-    actions: [{ id: 'league-ops:open', label: 'Review and fix' }, { id: 'league-recovery:recheck', label: 'Check rosters again' }],
-  };
-}
-
 export async function recoverPendingLeagueAudit(input: Pick<Input, 'db' | 'guildId' | 'cards'>): Promise<boolean> {
   let state = getLeagueAuditState(input.db, input.guildId);
   if (!state || state.phase === 'settled') return false;
@@ -212,9 +139,7 @@ export async function recoverPendingLeagueAudit(input: Pick<Input, 'db' | 'guild
     let messageId = state.sendAttempted ? await input.cards.findByReference(state.runReference) : undefined;
     if (!messageId) {
       markLeagueAuditSendAttempted(input.db, input.guildId, state.runReference);
-      const card = state.pendingCard ?? cardFor(state.result, state.findings, new Date(state.runAt), state.trigger);
-      if (!state.pendingCard)
-        card.description += `\n\nLast player check: ${leagueEasternTime(state.lastTargetedAt)}\nLast full roster check: ${leagueEasternTime(state.lastFullAt)}`;
+      const card = state.pendingCard ?? buildLeagueStatusSnapshot({ result: state.result, problems: state.findings.length, unfinished: 0, lastFullAt: state.lastFullAt });
       messageId = await input.cards.send(card, state.runReference);
     }
     confirmLeagueAuditCard(input.db, input.guildId, state.runReference, messageId);
@@ -256,51 +181,19 @@ export async function refreshLeagueOpsPanel(
   const alreadyReposted = input.repostQueuedAt && prior?.lastRepostAt
     && Date.parse(prior.lastRepostAt) >= Date.parse(input.repostQueuedAt);
   const resources = listLeagueFindings(input.db, input.guildId);
-  const readErrors = resources.filter((entry) => entry.resourceKey === 'connection').flatMap((entry) => entry.findings);
   const issues = [
     ...new Set(resources.filter((entry) => entry.resourceKey !== 'connection' && entry.resourceKey !== DRAFT_PICK_FEATURE).flatMap((entry) => entry.findings)),
   ];
   const tickets = listOpenLeagueReconciliationTickets(input.db, input.guildId);
   for (const ticket of tickets) if (!issues.includes(ticket.summary)) issues.push(ticket.summary);
   const mutationProblems = listLeagueMutationProblems(input.db, input.guildId);
-  const recoverableRepairs = listIncompleteLeagueAuditRepairs(input.db)
-    .filter((repair) => repair.guildId === input.guildId && repair.status === 'reconciliation_required');
-  const repairReferences = new Set(recoverableRepairs.map((repair) => repair.reference));
-  const jobs = listActionableLeagueJobs(input.db, input.guildId).filter(
-    (job) => !['panel', 'heartbeat'].includes(job.type),
-  );
+  const jobs = listUnfinishedLeagueMutationJobs(input.db, input.guildId).filter(job => ['transaction', 'repair', 'account-replacement'].includes(job.type));
+  const unfinished = new Set([...jobs.map(job => job.reference), ...mutationProblems, ...listIncompleteLeagueAuditRepairs(input.db).filter(repair => repair.guildId === input.guildId).map(repair => repair.reference)]);
   const errorState = listLeagueFindings(input.db, input.guildId).some((entry) => entry.resourceKey === 'connection');
-  const result = errorState ? 'error' : issues.length || jobs.length || mutationProblems.length ? 'dirty' : 'clean';
+  const result = errorState ? 'error' : issues.length || unfinished.size ? 'dirty' : 'clean';
   const reference = `YSL-AUD-${randomUUID().slice(0, 8).toUpperCase()}`;
-  const card = cardFor(result, issues, input.now, 'scheduled');
-  if (readErrors.length)
-    card.description += `\n\nLatest check: ${readErrors.filter(line => !line.startsWith('**Error code:**')).map(leagueAuditReadErrorMessage).join('\n')}\nRat will check again automatically in about 2 minutes.`;
-  if (result === 'clean' && !prior?.lastFullAt)
-    card.description =
-      'Rosters: Waiting for the first check.\nRat is still checking the league records.';
-  const draftHealth = resources.find(entry => entry.resourceKey === DRAFT_PICK_FEATURE);
-  appendDraftHealth(card, draftHealth?.findings);
-
-  if (jobs.length)
-    card.description +=
-      `\n\nSaved actions needing review: ${jobs.length}\n` +
-      jobs
-        .slice(-8)
-        .map(
-          (job) =>
-            `${job.reference}: ${leagueActionLabel(job.type)} · ${job.status === 'BLOCKED_REVIEW' ? (job.type === 'transaction' ? 'Review a new preview before approving' : 'Review and fix to review the saved problem') : job.status === 'RECONCILIATION_REQUIRED' ? (job.result && typeof job.result === 'object' && 'pendingDelivery' in job.result ? 'Player change saved; Rat still needs to finish its post or history' : 'Some changes may already have happened. Check the records; do not run it again') : job.status === 'RETRYING' ? 'Rat will try again automatically' : 'Review and fix to check what happened'}`,
-        )
-        .join('\n');
-  const additionalProblems = mutationProblems.filter((reference) => !jobs.some((job) => job.reference === reference));
-  if (additionalProblems.length) {
-    card.description += `\n\nUnfinished actions to check: ${additionalProblems.length}`;
-    const repairs = additionalProblems.filter((reference) => repairReferences.has(reference));
-    const transactions = additionalProblems.filter((reference) => !repairReferences.has(reference));
-    if (repairs.length) card.description += `\nOpen Review and fix / Saved actions to check: ${repairs.slice(-5).join(', ')}`;
-    if (transactions.length) card.description += `\nCheck Discord, league sheets and transaction posts/history for: ${transactions.slice(-5).join(', ')}. Do not run the player change again.`;
-  }
-  const times = getLeagueAuditState(input.db, input.guildId);
-  card.description += `\n\nLast player check: ${leagueEasternTime(times?.lastTargetedAt)}\nLast full roster check: ${leagueEasternTime(times?.lastFullAt)}`;
+  const card = buildLeagueStatusSnapshot({ result, problems: issues.length, unfinished: unfinished.size,
+    lastFullAt: prior?.lastFullAt, draftFindings: resources.find(entry => entry.resourceKey === DRAFT_PICK_FEATURE)?.findings });
   if (prior?.currentMessageId && (!input.repost || recovered || alreadyReposted) && input.cards.edit) {
     await input.cards.edit(prior.currentMessageId, card, reference);
     recordLeaguePanelEdit(input.db, {
@@ -383,10 +276,9 @@ async function checkLeagueAudit(input: Input): Promise<{ status: 'clean' | 'dirt
   if (result === 'clean') resolveOpenLeagueReconciliationTickets(input.db, input.guildId);
   // Create durable panel state even before the first Discord delivery.
   if (!getLeagueAuditState(input.db, input.guildId)) {
-    const initialCard = cardFor(result, result === 'error' ? [] : issues, input.now, input.trigger);
-    appendDraftHealth(initialCard, listLeagueFindings(input.db, input.guildId).find(entry => entry.resourceKey === DRAFT_PICK_FEATURE)?.findings);
-    if (result === 'error')
-      initialCard.description += `\n\n${issues.join('\n')}\nNo changes were made by this check. Rat will try checking again automatically.`;
+    const initialCard = buildLeagueStatusSnapshot({ result, problems: result === 'error' ? 0 : issues.length, unfinished: 0,
+      lastFullAt: result === 'error' ? undefined : input.now.toISOString(),
+      draftFindings: listLeagueFindings(input.db, input.guildId).find(entry => entry.resourceKey === DRAFT_PICK_FEATURE)?.findings });
     beginDirtyLeagueAudit(input.db, {
       guildId: input.guildId,
       result,

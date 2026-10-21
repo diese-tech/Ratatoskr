@@ -5,7 +5,7 @@ import { MessageFlags, TextDisplayBuilder, type ButtonInteraction, type Interact
 import { buildFlowCatalog, createUiRuntime, EventKind, type V2MessagePayload, type V2ModalPayload } from 'fluxcord';
 import { accountReplacementSources } from './accountReplacement.test-support.js';
 import { buildLeagueIntentPlan } from './leagueTransactionIntent.js';
-import { createLeagueOpsFlow, type LeagueOpsPanelData } from './leagueOpsFlow.js';
+import { createLeagueOpsFlow, leagueCheckDetailPages, type LeagueOpsPanelData } from './leagueOpsFlow.js';
 import type { LeagueOpsReviewService, LeagueOpsSnapshot } from './leagueOpsReview.js';
 process.env.ROLE_ALLFATHER_ID = 'admin-role';
 process.env.ROLE_AESIR_ID = 'staff-role';
@@ -72,7 +72,7 @@ async function harness() {
     sendToChannel: async () => assert.fail('Private League Ops must never post to a public channel'),
     policy: { authorize: async request => ({ allowed: await authorizeLeagueOpsUi(request, 'g', actor => service.authorize(actor)) }) } });
   const handle = await runtime.mount(flow, { ownerId: 'admin', to: { reply: { send: async payload => { validatePayload(payload); edits.push(payload); return { channelId: 'c', messageId: 'm' }; }, ceilingMs: 15 * 60_000 } } });
-  const snapshot: LeagueOpsSnapshot = { issues: [], operations: [{ reference: 'original', type: 'transaction', status: 'BLOCKED_REVIEW',
+  const snapshot: LeagueOpsSnapshot = { issues: [], checkDetails: ['Private check details: 96 picks; Last full check: 8 AM EDT'], operations: [{ reference: 'original', type: 'transaction', status: 'BLOCKED_REVIEW',
     action: 'trade', targets: ['One', 'Two'], actor: 'Dolo', createdAt: '2026-10-11', attempts: 1, error: 'No changes were made.', next: 'Fresh preview', canRepreview: true, canRecover: false }] };
   await handle.redraw(data => { data.snapshot = snapshot; });
   const dispatch = (id: string, actorId = 'admin', guildId = 'g', kind: EventKind = EventKind.Button, inputs?: Record<string, string>) =>
@@ -169,7 +169,7 @@ test('expired Fluxcord modal cannot resume an old approval', async () => {
     await h.preview(); h.expire();
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.equal(h.count(), 0);
-    assert.ok(JSON.stringify(h.edits.at(-1)).includes('Use Review and fix'));
+    assert.ok(JSON.stringify(h.edits.at(-1)).includes('Use the main button'));
   } finally { h.release(); h.close(); }
 });
 
@@ -208,4 +208,59 @@ test('switching from account replacement to saved recovery shows and confirms on
     assert.equal(h.count(), 0);
     assert.deepEqual(h.repairConfirmations, []);
   } finally { h.release(); h.close(); }
+});
+
+
+test('check details are reachable in the private flow without approving a change', async () => {
+  const h = await harness();
+  try {
+    await h.click('Check details');
+    assert.match(JSON.stringify(h.edits.at(-1)), /Private check details: 96 picks/);
+    assert.equal(h.count(), 0);
+    assert.equal(h.recoveries(), 0);
+    assert.deepEqual(h.repairConfirmations, []);
+    await h.click('Roster problems');
+    assert.match(JSON.stringify(h.edits.at(-1)), /No roster problems found/);
+  } finally { h.release(); h.close(); }
+});
+
+
+test('long private details remain reachable through bounded pages without discarding draft guidance', async () => {
+  const h = await harness();
+  try {
+    const details = Array.from({ length: 30 }, (_, index) => `Roster problem ${index}: ` + 'Check the sheet values. '.repeat(7));
+    details.push('Draft Picks is missing. Ask an admin to check its setup.', 'Last full roster check: 8 AM EDT');
+    const pages = leagueCheckDetailPages(details);
+    assert.equal(pages.join(''), details.join('\n\n'));
+    assert.ok(pages.every(page => page.length <= 1400));
+    await h.setData(data => { data.snapshot.checkDetails = details; });
+    await h.click('Check details');
+    for (let index = 1; index < pages.length; index++) await h.click('Next details');
+    assert.match(JSON.stringify(h.edits.at(-1)), /Draft Picks is missing/);
+    assert.match(JSON.stringify(h.edits.at(-1)), /Last full roster check/);
+    await h.click('Previous details');
+    assert.equal(h.count(), 0);
+    assert.deepEqual(h.repairConfirmations, []);
+  } finally { h.release(); h.close(); }
+});
+
+
+test('private pagination redacts complete credentials before splitting across a page boundary', async () => {
+  const key = 'SNAPSHOT_BOUNDARY_TEST_TOKEN';
+  const old = process.env[key];
+  const secret = 'synthetic-boundary-secret-for-regression';
+  process.env[key] = secret;
+  const h = await harness();
+  try {
+    const details = ['x'.repeat(1390) + secret + ' visible next step'];
+    const pages = leagueCheckDetailPages(details);
+    assert.doesNotMatch(pages.join(''), /synthetic-boundary-secret-for-regression/);
+    assert.match(pages.join(''), /REDACTED/);
+    await h.setData(data => { data.snapshot.checkDetails = details; });
+    await h.click('Check details');
+    const rendered = [JSON.stringify(h.edits.at(-1))];
+    for (let page = 1; page < pages.length; page++) { await h.click('Next details'); rendered.push(JSON.stringify(h.edits.at(-1))); }
+    assert.doesNotMatch(rendered.join(''), /synthetic|boundary-secret/);
+    assert.match(rendered.join(''), /visible next step/);
+  } finally { h.release(); h.close(); if (old === undefined) delete process.env[key]; else process.env[key] = old; }
 });
