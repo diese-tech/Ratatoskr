@@ -20,8 +20,8 @@ test('optional Draft Picks health appears separately from clean roster status an
       now: new Date('2026-10-13T10:00:00Z'), freeAgentRoleId: 'fa', members: { getMembers: async () => clean.discordMembers },
       sheets: { load: async () => ({ snapshot: clean, sources: {} as never }), checkDraftPickHealth: async () => health }, cards });
     assert.equal(result.status, 'clean');
-    assert.match(cards.sent.at(-1)!.card.description, /Draft Picks tab is missing/);
-    assert.match(cards.sent.at(-1)!.card.description, /All clear — no roster problems./);
+    assert.match(cards.sent.at(-1)!.card.description, /Draft records: needs attention/);
+    assert.match(cards.sent.at(-1)!.card.description, /No roster problems or unfinished actions./);
     assert.equal(listLeagueFindings(db, 'guild').filter(row => row.resourceKey === 'feature:draft-picks').length, 1);
   } finally { db.close(); }
 });
@@ -133,8 +133,8 @@ test('a dirty startup audit posts one unpinged staff card and records it durably
     assert.equal(result.status, 'dirty');
     assert.equal(cards.sent.length, 1);
     assert.equal(cards.sent[0]?.card.allowedMentions, false);
-    assert.equal(cards.sent[0]!.card.title, 'League Status');
-    assert.match(cards.sent[0]!.card.description, /roster sheets and setup/i);
+    assert.equal(cards.sent[0]!.card.title, 'League Status · Needs attention');
+    assert.match(cards.sent[0]!.card.description, /1 roster problem/);
     assert.equal(getLeagueAuditState(db, 'guild')?.currentMessageId, 'message-1');
   } finally {
     db.close();
@@ -165,13 +165,13 @@ test('audit cards stay compact and offer a private review queue instead of listi
 
     const card = cards.sent[0]!.card;
     const description = card.description;
-    assert.match(description, /player names/i);
-    assert.match(description, /review and fix/i);
+    assert.match(description, /roster problems/i);
+    assert.match(description, /roster problems/i);
     assert.doesNotMatch(description, /Old League Name/);
     assert.doesNotMatch(description, /Current League Name/);
     assert.doesNotMatch(description, /143011986349883392/);
     assert.doesNotMatch(description, /inspect the audit log/i);
-    assert.deepEqual(card.actions, [{ id: 'league-ops:open', label: 'Review and fix' }, { id: 'league-recovery:recheck', label: 'Check rosters again' }]);
+    assert.deepEqual(card.actions, [{ id: 'league-ops:open', label: 'Review problems' }, { id: 'league-recovery:recheck', label: 'Check again' }]);
   } finally {
     db.close();
   }
@@ -198,8 +198,8 @@ test('large audits stay compact while preserving the complete private review que
 
     const description = cards.sent[0]!.card.description;
     assert.ok(description.length < 700);
-    assert.match(description, /Player names: 60/);
-    assert.match(description, /Review and fix/);
+    assert.match(description, /60 roster problems/);
+    assert.match(description, /roster problems/);
     assert.doesNotMatch(description, /\b\d{17,20}\b/);
   } finally {
     db.close();
@@ -338,7 +338,7 @@ test('a later dirty audit posts its fresh card before deleting the prior card', 
     await runLeagueAudit({ ...input, trigger: 'startup', now: new Date('2026-10-04T10:00:00.000Z') });
     await runLeagueAudit({ ...input, trigger: 'scheduled', now: new Date('2026-10-05T10:00:00.000Z') });
 
-    assert.deepEqual(cards.sent.map(({ card }) => card.footer.split(' • ')[0]), ['Startup roster check', 'Daily roster check']);
+    assert.deepEqual(cards.sent.map(({ card }) => card.footer.split(' • ')[0]), ['Last roster check: Oct 4, 2026, 6:00 AM EDT', 'Last roster check: Oct 5, 2026, 6:00 AM EDT']);
     assert.deepEqual(cards.deleted, ['message-1']);
     assert.equal(getLeagueAuditState(db, 'guild')?.currentMessageId, 'message-2');
     assert.equal(getLeagueAuditState(db, 'guild')?.phase, 'settled');
@@ -368,8 +368,8 @@ test('a clean audit retains a healthy authoritative panel', async () => {
     const state = getLeagueAuditState(db, 'guild');
     assert.equal(state?.result, 'clean');
     assert.equal(state?.currentMessageId, 'message-2');
-    assert.match(cards.sent[1]!.card.description,/All clear — no roster problems./);
-    assert.equal(leagueStatusCardColor(cards.sent[1]!.card.description), 0x358653);
+    assert.match(cards.sent[1]!.card.description,/No roster problems or unfinished actions./);
+    assert.equal(leagueStatusCardColor(cards.sent[1]!.card.description, cards.sent[1]!.card.title), 0xC43C35);
     assert.equal(state?.phase, 'settled');
   } finally {
     db.close();
@@ -421,14 +421,14 @@ test('an unreadable source posts an audit-failed card instead of claiming the le
     });
 
     assert.equal(result.status, 'error');
-    assert.equal(cards.sent[0]!.card.title, 'League Status');
+    assert.equal(cards.sent[0]!.card.title, 'League Status · Check incomplete');
     assert.doesNotMatch(cards.sent[0]!.card.description, /Discord unavailable/);
-    assert.match(cards.sent[0]!.card.description, /No roster changes were made by this check/);
+    assert.match(cards.sent[0]!.card.description, /latest check could not finish/);
     assert.doesNotMatch(cards.sent[0]!.card.description, /changes may already|do not repeat|saved action/);
     let refreshed = '';
     await refreshLeagueOpsPanel({ db, guildId: 'guild', now: new Date('2026-10-05T10:02:00Z'),
       cards: Object.assign(cards, { edit: async (_id: string, card: { description: string }) => { refreshed = card.description; } }) });
-    assert.match(refreshed, /No roster changes were made by this check/);
+    assert.match(refreshed, /latest check could not finish/);
     assert.doesNotMatch(refreshed, /changes may already|do not repeat|saved action/);
     assert.equal(getLeagueAuditState(db, 'guild')?.result, 'error');
   } finally {
@@ -454,16 +454,16 @@ test('a known roster-sheet input problem gives staff the exact safe repair on th
 
     assert.equal(result.status, 'error');
     const description = cards.sent[0]!.card.description;
-    assert.match(description, /Player Name History row 234/);
-    assert.match(description, /move the existing values one column left/);
+    assert.doesNotMatch(description, /Player Name History row 234/);
+    assert.doesNotMatch(description, /move the existing values one column left/);
     assert.doesNotMatch(description, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
-    assert.match(description, /No changes were made/);
+    assert.match(description, /latest check could not finish/);
     assert.doesNotMatch(description, /check which connection failed/i);
     let refreshed = '';
     await refreshLeagueOpsPanel({ db, guildId: 'guild', now: new Date('2026-10-05T13:00:00Z'),
       cards: Object.assign(cards, { edit: async (_id: string, card: { description: string }) => { refreshed = card.description; } }) });
-    assert.match(refreshed, /Player Name History row 234/);
-    assert.match(refreshed, /move the existing values one column left/);
+    assert.doesNotMatch(refreshed, /Player Name History row 234/);
+    assert.doesNotMatch(refreshed, /move the existing values one column left/);
     assert.doesNotMatch(refreshed, /LEAGUE_SHEET_MISSING_DISCORD_ID/);
   } finally {
     db.close();

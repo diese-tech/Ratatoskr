@@ -232,7 +232,7 @@ export async function handleTransactionCommand(
       await showPreview(`This player change needs another review. ${savedLeagueErrorMessage(job.lastError)}\n\n`);
       return;
     }
-    await interaction.editReply(`${leagueStatusLabel(job.status)}. Reference: ${job.reference}\nUse Review and fix on the League Status message to check this action. Do not submit it again.`);
+    await interaction.editReply(`${leagueStatusLabel(job.status)}. Reference: ${job.reference}\nUse Open league tools on the League Status message to check this action. Do not submit it again.`);
   } catch (error) {
     if (!(await replyToTransactionValidation(interaction, error))) throw error;
     deleteLeagueTransactionPreview(db, guildId, interaction.user.id, previewIntent);

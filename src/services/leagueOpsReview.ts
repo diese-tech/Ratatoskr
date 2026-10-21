@@ -1,3 +1,6 @@
+import { listLeagueMutationProblems, listOpenLeagueReconciliationTickets } from '../db/repositories/leagueOperations.js';
+import { leagueEasternTime } from './leaguePresentation.js';
+import { draftSnapshotStatus } from './leagueStatusSnapshot.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { escapeMarkdown } from 'discord.js';
@@ -29,7 +32,7 @@ export type ReviewAccountReplacementPreview = AccountReplacementPreview & { role
 export type LeagueOpsIssue = { key: string; finding: string; oldDiscordId?: string };
 export type LeagueOpsOperation = { reference: string; type: string; status: string; action: string; targets: string[];
   actor: string; createdAt: string; attempts: number; error: string; next: string; canRepreview: boolean; canRecover: boolean };
-export type LeagueOpsSnapshot = { issues: LeagueOpsIssue[]; operations: LeagueOpsOperation[] };
+export type LeagueOpsSnapshot = { issues: LeagueOpsIssue[]; operations: LeagueOpsOperation[]; checkDetails?: string[]; draftNeedsAttention?: boolean };
 export type ReviewTransactionPreview = { originalReference: string; selections: string; fingerprint: string; approval: string; plan: LeagueMutationPlan };
 export type ReviewRepairPreview = { issueKey: string; finding: string; action: LeagueAuditResolutionAction; fingerprint: string; approvalReference: string; description: string };
 export type ReviewRecoveryPreview = { reference: string; type: 'repair' | 'account-replacement'; fingerprint: string; approvalReference: string; description: string; canConfirm: boolean };
@@ -118,7 +121,19 @@ export class LeagueOpsReviewService {
     const operations = listActionableLeagueJobs(db, guildId).filter(job => ['transaction', 'repair', 'account-replacement'].includes(job.type)).map(job => this.operation(job));
     for (const repair of listIncompleteLeagueAuditRepairs(db).filter(repair => repair.guildId === guildId))
       if (!operations.some(operation => operation.reference === repair.reference)) operations.push(this.legacyRepair(repair.reference)!);
-    return { issues: listLeagueFindings(db, guildId).filter(entry => entry.resourceKey !== DRAFT_PICK_FEATURE).flatMap(entry => entry.findings.map((finding, index) => {
+    const resources = listLeagueFindings(db, guildId);
+    const audit = getLeagueAuditState(db, guildId);
+    const draft = resources.find(entry => entry.resourceKey === DRAFT_PICK_FEATURE);
+    const format = (value: string) => value.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, timestamp => leagueEasternTime(timestamp));
+    return { checkDetails: [
+      'Open league tools lets you review existing problems and confirm fixes. Check again only reads Discord and the roster sheets; it makes no roster changes.',
+      ...resources.filter(entry => entry.resourceKey === 'connection').flatMap(entry => entry.findings.map(format)),
+      ...listOpenLeagueReconciliationTickets(db, guildId).map(ticket => `Roster problem: ${ticket.summary}`),
+      ...listLeagueMutationProblems(db, guildId).map(reference => `Unfinished action: ${reference}. Check Discord, roster sheets and history; do not run the player change again.`),
+      `Panel reference: ${audit?.runReference ?? 'Not available'}`,
+      `Last full roster check: ${leagueEasternTime(audit?.lastFullAt)}`, `Last player check: ${leagueEasternTime(audit?.lastTargetedAt)}`,
+      ...(draft?.findings.map(format) ?? ['Draft records have not been checked yet.']),
+    ], draftNeedsAttention: draftSnapshotStatus(draft?.findings) !== 'ready', issues: resources.filter(entry => entry.resourceKey !== DRAFT_PICK_FEATURE).flatMap(entry => entry.findings.map((finding, index) => {
       const id = entry.resourceKey.startsWith('member:') ? entry.resourceKey.slice(7) : undefined;
       const state = id ? getVerifiedLeagueMember(db, guildId, id) : undefined;
       return { key: `${entry.resourceKey}:${index}`, finding,

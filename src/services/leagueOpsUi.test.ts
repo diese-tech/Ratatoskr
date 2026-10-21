@@ -72,7 +72,7 @@ async function harness() {
     sendToChannel: async () => assert.fail('Private League Ops must never post to a public channel'),
     policy: { authorize: async request => ({ allowed: await authorizeLeagueOpsUi(request, 'g', actor => service.authorize(actor)) }) } });
   const handle = await runtime.mount(flow, { ownerId: 'admin', to: { reply: { send: async payload => { validatePayload(payload); edits.push(payload); return { channelId: 'c', messageId: 'm' }; }, ceilingMs: 15 * 60_000 } } });
-  const snapshot: LeagueOpsSnapshot = { issues: [], operations: [{ reference: 'original', type: 'transaction', status: 'BLOCKED_REVIEW',
+  const snapshot: LeagueOpsSnapshot = { issues: [], checkDetails: ['Private check details: 96 picks; Last full check: 8 AM EDT'], operations: [{ reference: 'original', type: 'transaction', status: 'BLOCKED_REVIEW',
     action: 'trade', targets: ['One', 'Two'], actor: 'Dolo', createdAt: '2026-10-11', attempts: 1, error: 'No changes were made.', next: 'Fresh preview', canRepreview: true, canRecover: false }] };
   await handle.redraw(data => { data.snapshot = snapshot; });
   const dispatch = (id: string, actorId = 'admin', guildId = 'g', kind: EventKind = EventKind.Button, inputs?: Record<string, string>) =>
@@ -169,7 +169,7 @@ test('expired Fluxcord modal cannot resume an old approval', async () => {
     await h.preview(); h.expire();
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.equal(h.count(), 0);
-    assert.ok(JSON.stringify(h.edits.at(-1)).includes('Use Review and fix'));
+    assert.ok(JSON.stringify(h.edits.at(-1)).includes('Use the main button'));
   } finally { h.release(); h.close(); }
 });
 
@@ -207,5 +207,19 @@ test('switching from account replacement to saved recovery shows and confirms on
     await until(() => h.recoveries() === 1);
     assert.equal(h.count(), 0);
     assert.deepEqual(h.repairConfirmations, []);
+  } finally { h.release(); h.close(); }
+});
+
+
+test('check details are reachable in the private flow without approving a change', async () => {
+  const h = await harness();
+  try {
+    await h.click('Check details');
+    assert.match(JSON.stringify(h.edits.at(-1)), /Private check details: 96 picks/);
+    assert.equal(h.count(), 0);
+    assert.equal(h.recoveries(), 0);
+    assert.deepEqual(h.repairConfirmations, []);
+    await h.click('Roster problems');
+    assert.match(JSON.stringify(h.edits.at(-1)), /No roster problems found/);
   } finally { h.release(); h.close(); }
 });

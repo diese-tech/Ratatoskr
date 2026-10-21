@@ -208,7 +208,7 @@ test('healthy startup restores one panel; independent drifts edit it in place; h
     };
     await runLeagueAudit(audit);
     assert.equal(cards.sent.length, 1);
-    assert.match(cards.sent[0]!.card.description, /All clear — no roster problems./);
+    assert.match(cards.sent[0]!.card.description, /No roster problems or unfinished actions./);
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
     assert.equal(cards.sent.length, 1);
     f.snapshot.discordMembers[0]!.displayName = 'First';
@@ -216,7 +216,7 @@ test('healthy startup restores one panel; independent drifts edit it in place; h
     await checkLeagueMember({ ...f.input, discordId: 'one' });
     await checkLeagueMember({ ...f.input, discordId: 'two' });
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
-    assert.match(cards.sent[0]!.card.description, /Player names: 2/);
+    assert.match(cards.sent[0]!.card.description, /2 roster problems/);
     assert.equal(cards.sent.length, 1);
     const id = getLeagueAuditState(f.db, 'g')!.currentMessageId;
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now, repost: true });
@@ -274,7 +274,7 @@ for (const failure of ['ambiguous send', 'failed cleanup']) {
         ['delete:m1'],
       );
       assert.equal(cards.events.at(-1), 'edit:m2');
-      assert.match(cards.sent[1]!.card.description, /Player names: 1/);
+      assert.match(cards.sent[1]!.card.description, /1 roster problem/);
     } finally {
       f.worker.stop();
       f.db.close();
@@ -361,7 +361,7 @@ test('SQLite reopen restores one authoritative panel and outstanding dirty retry
     await runLeagueAudit(auditInput());
     assert.equal(cards.sent.length, 1);
     assert.equal(getLeagueAuditState(db, 'g')?.currentMessageId, 'm1');
-    assert.match(cards.sent[0]!.card.description, /All clear — no roster problems./);
+    assert.match(cards.sent[0]!.card.description, /No roster problems or unfinished actions./);
   } finally {
     worker.stop();
     db.close();
@@ -397,9 +397,9 @@ for (const status of [429, 503]) {
       assert.equal(state.lastFullAt, verifiedAt);
       assert.equal(state.findings.length, 1);
       assert.match(state.findings[0]!, /Discord name now/);
-      assert.match(cards.sent[0]!.card.description, status === 429 ? /asked Rat to wait/ : /temporarily unavailable/);
-      assert.match(cards.sent[0]!.card.description, /Earlier problems may have changed/);
-      assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review and fix');
+      assert.match(cards.sent[0]!.card.description, /latest check could not finish/);
+      assert.match(cards.sent[0]!.card.description, /Previous results may have changed/);
+      assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review problems');
       assert.equal(cards.sent.length, 1);
       unavailable = false;
       await runLeagueAudit(audit);
@@ -465,11 +465,11 @@ test('duplicate malformed roster diagnostics remain readable in the persistent p
     const findings = listLeagueFindings(f.db, 'g').flatMap((entry) => entry.findings);
     assert.ok(findings.length > 0);
     assert.ok(findings.every((finding) => typeof finding === 'string'));
-    assert.match(cards.sent[0]!.card.description, /Problems need review/);
-    assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review and fix');
+    assert.match(cards.sent[0]!.card.description, /roster problems?/);
+    assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review problems');
     f.db.prepare("UPDATE league_findings SET findings_json='[null]' WHERE guild_id='g'").run();
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
-    assert.match(cards.sent[0]!.card.description, /Problems need review/);
+    assert.match(cards.sent[0]!.card.description, /roster problems?/);
     assert.ok(listLeagueFindings(f.db, 'g').every((entry) => entry.findings.every((finding) => typeof finding === 'string')));
   } finally { f.worker.stop(); f.db.close(); }
 });
@@ -491,14 +491,14 @@ test('partial operations expose recovery controls and prevent legacy alert clean
     createLeagueAuditRepair(f.db, { reference: 'old-repair', guildId: 'g', actorUserId: 'old-admin', auditReference: 'old', finding: 'Old finding', action: 'use-discord-name' });
     markLeagueAuditRepairReconciliationRequired(f.db, 'old-repair', 'Interrupted');
     await runLeagueAudit({ ...input, trigger: 'scheduled' });
-    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Review and fix'));
-    assert.match(cards.sent[0]!.card.description, /Saved actions/);
-    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Check rosters again'));
+    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Review problems'));
+    assert.match(cards.sent[0]!.card.description, /unfinished action/);
+    assert.ok(cards.sent[0]!.card.actions?.some((action) => action.label === 'Check again'));
     assert.deepEqual(cleanups, []);
     const preview = await previewLeagueRepairRecovery(input, 'old-repair');
     await reconcileLeagueRepairRecord({ ...input, reference: 'old-repair', actorUserId: 'admin', expectedFingerprint: preview.fingerprint });
     await assert.rejects(refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now }), /cleanup unavailable/);
-    assert.match(cards.sent[0]!.card.description, /All clear — no roster problems./);
+    assert.match(cards.sent[0]!.card.description, /No roster problems or unfinished actions./);
     failCleanup = false;
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now });
@@ -541,7 +541,7 @@ test('targeted convergence after a dirty full audit cannot authorize legacy clea
     f.snapshot.discordMembers[0]!.displayName = original;
     await checkLeagueMember({ ...f.input, discordId: 'one', now: new Date(now.getTime() + 60_000) });
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards: port, now: new Date(now.getTime() + 60_000) });
-    assert.match(cards.sent[0]!.card.description, /All clear — no roster problems./);
+    assert.match(cards.sent[0]!.card.description, /No roster problems or unfinished actions./);
     assert.deepEqual(cleaned, []);
     const cleanAt = new Date(now.getTime() + 120_000);
     await runLeagueAudit({ ...input, trigger: 'scheduled', now: cleanAt });
@@ -561,8 +561,8 @@ test('transaction-only interruptions do not advertise an audit-repair recovery b
     await refreshLeagueOpsPanel({ db: f.db, guildId: 'g', cards, now });
     assert.ok(!cards.sent[0]!.card.actions?.some((action) => action.label === 'View unfinished fixes'));
     assert.doesNotMatch(cards.sent[0]!.card.description, /Select View unfinished fixes/);
-    assert.match(cards.sent[0]!.card.description, /transaction posts\/history for: old-transaction/);
-    assert.match(cards.sent[0]!.card.description, /Do not run the player change again/);
+    assert.match(cards.sent[0]!.card.description, /1 unfinished action/);
+    assert.doesNotMatch(cards.sent[0]!.card.description, /old-transaction/);
   } finally { f.worker.stop(); f.db.close(); }
 });
 
