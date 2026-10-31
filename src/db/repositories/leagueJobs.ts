@@ -141,8 +141,12 @@ export function completedLeagueTransactionSuccessor(db: Database.Database, job: 
   if (typeof selections !== 'string') return;
   let parsed: unknown;
   try { parsed = JSON.parse(selections); } catch { return; }
-  if (!Array.isArray(parsed) || parsed.length < 2 || parsed.some(value => typeof value !== 'string' || !value)
-    || !['trade', 'drop', 'self-drop', 'pickup', 'rename', 'departure'].includes(parsed[0])) return;
+  if (!Array.isArray(parsed) || parsed.length < 2 || parsed.length > 3) return;
+  const [kind, first, second] = parsed;
+  if (!['trade', 'drop', 'self-drop', 'pickup', 'rename', 'departure'].includes(kind)
+    || typeof first !== 'string' || !first) return;
+  const optionalReplacement = ['drop', 'self-drop', 'departure'].includes(kind);
+  if (!(typeof second === 'string' && second) && !(optionalReplacement && (second === null || second === undefined))) return;
   const row = db.prepare(`SELECT later.reference FROM league_jobs original
     JOIN league_jobs later ON later.guild_id=original.guild_id AND later.type='transaction'
       AND later.sequence>original.sequence AND later.status='COMPLETED'
@@ -157,7 +161,7 @@ export function completedLeagueTransactionSuccessor(db: Database.Database, job: 
       AND NOT EXISTS(SELECT 1 FROM league_account_replacements r WHERE r.reference=original.reference)
       AND NOT EXISTS(SELECT 1 FROM league_account_replacement_evidence e WHERE e.job_reference=original.reference)
       AND NOT EXISTS(SELECT 1 FROM league_reconciliation_tickets t WHERE t.reference=original.reference AND t.status='open')
-    ORDER BY later.sequence LIMIT 1`).get(parsed[0], job.reference, job.guildId, selections) as { reference: string } | undefined;
+    ORDER BY later.sequence LIMIT 1`).get(kind, job.reference, job.guildId, selections) as { reference: string } | undefined;
   return row?.reference;
 }
 export function transitionLeagueJob(

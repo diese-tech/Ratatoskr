@@ -9,16 +9,16 @@ import { enqueueLeagueJob, getLeagueJob, listActionableLeagueJobs, listUnfinishe
 import { LeagueOpsReviewService } from './leagueOpsReview.js';
 import { refreshLeagueOpsPanel, type LeagueAuditCard } from './leagueAudit.js';
 
-function fixture(actor = 'second-admin', path = ':memory:') {
+function fixture(actor = 'second-admin', path = ':memory:', choices: unknown[] = ['drop', 'outgoing', 'replacement']) {
   const db = openDatabase(path);
-  const selections = JSON.stringify(['drop', 'outgoing', 'replacement']);
+  const selections = JSON.stringify(choices);
   const original = enqueueLeagueJob(db, { guildId: 'g', type: 'transaction', dedupeKey: 'original',
     payload: { selections, actorUserId: 'first-admin', actorName: 'First admin' } });
   const error = 'Ratatoskr made no changes. Reconcile Discord, Current Rosters, Player Name History, and the public roster, then retry. League audit failed. Missing Player is in Current Rosters but is no longer in the Discord server. Confirm whether this is a departure before changing the roster.';
   transitionLeagueJob(db, original.reference, 'BLOCKED_REVIEW', { error });
   const retry = enqueueLeagueJob(db, { guildId: 'g', type: 'transaction', dedupeKey: 'retry',
     payload: { selections, actorUserId: actor, originalBlockedReference: original.reference } });
-  const canonical = (reference = retry.reference, status = 'completed', guild = 'g', kind = 'drop') => {
+  const canonical = (reference = retry.reference, status = 'completed', guild = 'g', kind = String(choices[0])) => {
     db.prepare('INSERT INTO league_transactions(reference,guild_id,kind,actor_user_id,payload_json,status) VALUES(?,?,?,?,?,?)')
       .run(reference, guild, kind, actor, '{}', status);
   };
@@ -63,6 +63,31 @@ test('same-staff queued and failed retries cannot hide a blocked original at enq
     transitionLeagueJob(f.db, f.retry.reference, 'FAILED');
     assert.ok(listActionableLeagueJobs(f.db, 'g').some(j => j.reference === f.original.reference));
   } finally { f.db.close(); }
+});
+
+test('all command selection shapes resolve, including standalone exits with null replacements', () => {
+  const choices = [
+    ...['trade', 'pickup', 'rename', 'drop', 'self-drop', 'departure'].map(kind => [kind, 'player', 'second']),
+    ...['drop', 'self-drop', 'departure'].flatMap(kind => [[kind, 'player', null], [kind, 'player']]),
+  ];
+  for (const selection of choices) {
+    const f = fixture('second-admin', ':memory:', selection);
+    try {
+      f.canonical(); transitionLeagueJob(f.db, f.retry.reference, 'COMPLETED');
+      assert.deepEqual(listUnfinishedLeagueMutationJobs(f.db, 'g'), [], JSON.stringify(selection));
+    } finally { f.db.close(); }
+  }
+});
+
+test('malformed action-specific selections never resolve an original', () => {
+  for (const selection of [['trade','player',null], ['pickup','player'], ['rename','player',null],
+    ['drop','player',false], ['drop',null,null], ['drop','player',''], ['drop','player',null,'extra'], ['other','player',null]]) {
+    const f = fixture('second-admin', ':memory:', selection);
+    try {
+      f.canonical(); transitionLeagueJob(f.db, f.retry.reference, 'COMPLETED');
+      assert.ok(listUnfinishedLeagueMutationJobs(f.db, 'g').some(j => j.reference === f.original.reference), JSON.stringify(selection));
+    } finally { f.db.close(); }
+  }
 });
 
 test('resolution survives reopening the database and works through a read-only connection', () => {
