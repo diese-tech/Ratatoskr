@@ -160,7 +160,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     kit.Button({ label: 'Saved actions', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; Object.assign(d, clearedPreview); d.notice = ''; }); event.ui.go('operations'); } }),
     kit.Button({ label: 'Check details', secondary: true, onClick: event => { if (!event.session.data.busy) { event.mutate(d => { d.page = 0; }); event.ui.go('checks'); } } }),
     kit.Button({ label: 'Refresh', secondary: true, onClick: refresh }),
-    kit.Button({ label: 'Close', secondary: true, onClick: event => event.ui.exit() }));
+    kit.Button({ label: 'Close panel', secondary: true, onClick: event => event.ui.exit() }));
   const issueScreen = screen<LeagueOpsPanelData>()((data, kit) => {
     const page = Math.min(data.page, Math.max(0, Math.ceil(data.snapshot.issues.length / PAGE_SIZE) - 1));
     const issues = data.snapshot.issues.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -217,7 +217,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
   const confirmation = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
     text({ title: 'League tools · Confirm changes' }, leagueOpsText(leagueOpsPreviewText(data), 3400)),
     text(data.notice || 'Nothing changes until you confirm.'), row({}, kit.Button({ label: 'Confirm changes', success: true, disabled: data.busy || !!data.queued, onClick: confirm }),
-      kit.Button({ label: 'Close', secondary: true, onClick: e => e.ui.exit() })), navigation(kit))));
+      kit.Button({ label: 'Close panel', secondary: true, onClick: e => e.ui.exit() })), navigation(kit))));
   return flow<LeagueOpsPanelData>('review', { screens: { issues: issueScreen, operations, issue, operation, preview, confirmation, checks },
     first: 'issues', initialData: { snapshot: { issues: [], operations: [] }, page: 0, busy: false, notice: 'Choose Roster problems or Saved actions. Nothing changes until you confirm.' }, ttlMs: 10 * 60_000,
     parting: { note: 'Use the main button on the latest League Status message in staff-ops. Start a new review; expired confirmations are not used again.' } },

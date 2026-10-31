@@ -4,7 +4,7 @@ import { draftSnapshotStatus } from './leagueStatusSnapshot.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { escapeMarkdown } from 'discord.js';
-import { getLeagueJob, getLeagueJobByDedupe, listUnfinishedLeagueMutationJobs, type LeagueJob } from '../db/repositories/leagueJobs.js';
+import { completedLeagueTransactionSuccessor, getLeagueJob, getLeagueJobByDedupe, listUnfinishedLeagueMutationJobs, type LeagueJob } from '../db/repositories/leagueJobs.js';
 import { getLeagueTransaction } from '../db/repositories/leagueOperations.js';
 import { getLeagueAuditRepair, getLeagueRepairResolution, listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 import { getAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
@@ -64,6 +64,7 @@ export class LeagueOpsReviewService {
       && !getAccountReplacement(db, guildId, job.reference);
   }
   private operation(job: LeagueJob): LeagueOpsOperation {
+    const successor = completedLeagueTransactionSuccessor(this.input.db, job);
     const payload = job.payload && typeof job.payload === 'object' ? job.payload as Record<string, unknown> : {};
     let selections: unknown[] = [];
     try { if (typeof payload.selections === 'string') selections = JSON.parse(payload.selections); } catch { /* evidence remains inspectable */ }
@@ -89,11 +90,13 @@ export class LeagueOpsReviewService {
     const originalReference = typeof payload.reconcileReference === 'string' ? payload.reconcileReference : payload.mode === 'reconcile' ? payload.reference : undefined;
     if (typeof originalReference === 'string') targets.push(`Checking the earlier saved action: ${originalReference}`);
     const acknowledged = job.result && typeof job.result === 'object' && 'manuallyReconciled' in job.result && job.result.manuallyReconciled;
-    return { reference: job.reference, type: job.type, status: acknowledged ? 'RECONCILED' : job.status, action: originalReference ? `reconcile ${job.type}` : action,
+    return { reference: job.reference, type: job.type, status: successor ? 'SUPERSEDED' : acknowledged ? 'RECONCILED' : job.status, action: originalReference ? `reconcile ${job.type}` : action,
       targets,
       actor: typeof payload.actorName === 'string' ? payload.actorName : typeof payload.actorUserId === 'string' ? this.memberLabel(payload.actorUserId) : 'Rat',
       createdAt: job.createdAt, attempts: job.attemptCount, error: job.lastError ?? 'No saved error.',
-      next: acknowledged ? 'Checked against the latest records and closed. The original change was not run again.' : next, canRepreview, canRecover };
+      next: successor ? `Resolved by ${successor}. That later action finished successfully. This original attempt made no changes and stays in history; do not run it again.`
+        : acknowledged ? 'Checked against the latest records and closed. The original change was not run again.' : next,
+      canRepreview: !successor && canRepreview, canRecover: !successor && canRecover };
   }
   private legacyRepair(reference: string): LeagueOpsOperation | undefined {
     const repair = getLeagueAuditRepair(this.input.db, reference);

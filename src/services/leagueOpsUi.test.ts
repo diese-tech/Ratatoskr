@@ -105,6 +105,21 @@ test('real Fluxcord flow releases slow preview work, requires modal confirmation
   } finally { h.release(); h.close(); }
 });
 
+test('Close panel dismisses a resolved history view without approving another action', async () => {
+  const h = await harness();
+  try {
+    h.snapshot.operations[0] = { ...h.snapshot.operations[0]!, status: 'SUPERSEDED',
+      next: 'Resolved by completed-action. The original attempt made no changes.', canRepreview: false, canRecover: false };
+    await h.click('Saved actions'); await h.click('View action');
+    const payload = JSON.stringify(h.edits.at(-1));
+    assert.match(payload, /Resolved by a later action/);
+    assert.match(payload, /completed-action/);
+    await h.click('Close panel');
+    assert.equal(h.count(), 0); assert.equal(h.recoveries(), 0);
+    assert.deepEqual(h.repairConfirmations, []);
+  } finally { h.release(); h.close(); }
+});
+
 test('cancelled previews release the panel for another issue and old modals cannot approve it', async () => {
   const h = await harness();
   try {

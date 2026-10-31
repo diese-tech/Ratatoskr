@@ -113,9 +113,6 @@ export function enqueueLeagueJob(
         );
         return decode(active);
       }
-      db.prepare(
-        `UPDATE league_jobs SET dismissed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE guild_id=? AND type='transaction' AND status='BLOCKED_REVIEW' AND json_extract(payload_json,'$.actorUserId')=? AND json_extract(payload_json,'$.selections')=?`,
-      ).run(input.guildId, payload.actorUserId, payload.selections);
     }
     const now = input.now ?? new Date();
     const reference = `YSL-JOB-${randomUUID().replaceAll('-', '').slice(0, 16).toUpperCase()}`;
@@ -133,6 +130,35 @@ export function enqueueLeagueJob(
     );
     return getLeagueJob(db, reference)!;
   })();
+}
+/** Read-only proof: a fully completed, explicitly linked retry resolves only a
+ * blocked attempt that has no evidence of an external mutation of its own.
+ * Stored outcomes stay untouched, including for records from older releases.
+ */
+export function completedLeagueTransactionSuccessor(db: Database.Database, job: LeagueJob): string | undefined {
+  if (job.type !== 'transaction' || job.status !== 'BLOCKED_REVIEW') return;
+  const selections = (job.payload as { selections?: unknown } | null)?.selections;
+  if (typeof selections !== 'string') return;
+  let parsed: unknown;
+  try { parsed = JSON.parse(selections); } catch { return; }
+  if (!Array.isArray(parsed) || parsed.length < 2 || parsed.some(value => typeof value !== 'string' || !value)
+    || !['trade', 'drop', 'self-drop', 'pickup', 'rename', 'departure'].includes(parsed[0])) return;
+  const row = db.prepare(`SELECT later.reference FROM league_jobs original
+    JOIN league_jobs later ON later.guild_id=original.guild_id AND later.type='transaction'
+      AND later.sequence>original.sequence AND later.status='COMPLETED'
+      AND json_extract(later.payload_json,'$.originalBlockedReference')=original.reference
+      AND json_extract(later.payload_json,'$.selections')=json_extract(original.payload_json,'$.selections')
+    JOIN league_transactions canonical ON canonical.reference=later.reference
+      AND canonical.guild_id=original.guild_id AND canonical.status='completed' AND canonical.kind=?
+    WHERE original.reference=? AND original.guild_id=? AND original.type='transaction' AND original.status='BLOCKED_REVIEW'
+      AND json_extract(original.payload_json,'$.selections')=?
+      AND NOT EXISTS(SELECT 1 FROM league_transactions t WHERE t.reference=original.reference)
+      AND NOT EXISTS(SELECT 1 FROM league_audit_repairs r WHERE r.reference=original.reference)
+      AND NOT EXISTS(SELECT 1 FROM league_account_replacements r WHERE r.reference=original.reference)
+      AND NOT EXISTS(SELECT 1 FROM league_account_replacement_evidence e WHERE e.job_reference=original.reference)
+      AND NOT EXISTS(SELECT 1 FROM league_reconciliation_tickets t WHERE t.reference=original.reference AND t.status='open')
+    ORDER BY later.sequence LIMIT 1`).get(parsed[0], job.reference, job.guildId, selections) as { reference: string } | undefined;
+  return row?.reference;
 }
 export function transitionLeagueJob(
   db: Database.Database,
@@ -181,7 +207,8 @@ export function recoverLeagueJobs(db: Database.Database, guildId: string): Leagu
 /** Presentation inventory includes work in progress as well as staff-review failures. */
 export function listUnfinishedLeagueMutationJobs(db: Database.Database, guildId: string): LeagueJob[] {
   return (db.prepare(`SELECT * FROM league_jobs WHERE guild_id=? AND dismissed_at IS NULL
-    AND type IN ('transaction','repair','account-replacement') AND status <> 'COMPLETED' ORDER BY sequence`).all(guildId) as Row[]).map(decode);
+    AND type IN ('transaction','repair','account-replacement') AND status <> 'COMPLETED' ORDER BY sequence`).all(guildId) as Row[])
+    .map(decode).filter(job => !completedLeagueTransactionSuccessor(db, job));
 }
 export function listActionableLeagueJobs(db: Database.Database, guildId: string): LeagueJob[] {
   return (
@@ -190,7 +217,7 @@ export function listActionableLeagueJobs(db: Database.Database, guildId: string)
         `SELECT * FROM league_jobs WHERE guild_id=? AND dismissed_at IS NULL AND status IN ('BLOCKED_REVIEW','RECONCILIATION_REQUIRED','FAILED') ORDER BY sequence`,
       )
       .all(guildId) as Row[]
-  ).map(decode);
+  ).map(decode).filter(job => !completedLeagueTransactionSuccessor(db, job));
 }
 // Background work can be scheduled again after completion; mutation keys are never recycled.
 export function releaseBackgroundDedupe(db: Database.Database, reference: string): void {
