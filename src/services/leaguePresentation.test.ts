@@ -25,6 +25,18 @@ test('saved failures retain the historical name-record cause without showing raw
   assert.doesNotMatch(unknown, /try|retry|again/i);
 });
 
+test('legacy no-change preamble cannot misclassify the departed-player audit cause', () => {
+  const message = 'Ratatoskr made no changes. Reconcile Discord, Current Rosters, Player Name History, and the public roster, then retry. League audit failed. Missing Player is in Current Rosters but is no longer in the Discord server. Confirm whether this is a departure before changing the roster.';
+  const text = savedLeagueErrorMessage(message);
+  assert.match(text, /left.*Discord|no longer in.*Discord/i);
+  assert.match(text, /departure/i);
+  assert.match(text, /No changes were made/);
+  assert.doesNotMatch(text, /name records need checking|try again|then retry/);
+  assert.match(savedLeagueErrorMessage(message.split('League audit failed.')[0] + 'League audit failed. Unknown issue token=private-value'), /No changes were made/);
+  assert.doesNotMatch(savedLeagueErrorMessage(message.split('League audit failed.')[0] + 'League audit failed. Unknown issue token=private-value'), /private-value|name records need checking/);
+  assert.equal(leagueStatusLabel('SUPERSEDED'), 'Resolved by a later action');
+});
+
 test('known no-write repair failures explain fresh-preview recovery without suggesting uncertain writes', () => {
   for (const message of [
     'This issue changed since this review page opened. Review the refreshed audit before trying again.',

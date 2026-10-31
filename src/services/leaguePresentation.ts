@@ -18,6 +18,7 @@ export function leagueStatusLabel(status: string): string {
     BLOCKED_REVIEW: 'Waiting for staff review', FAILED: 'Could not finish', COMPLETED: 'Finished',
     RECONCILIATION_REQUIRED: 'Needs checking — some changes may already have happened',
     RECONCILED: 'Checked and closed',
+    SUPERSEDED: 'Resolved by a later action',
   };
   return Object.hasOwn(labels, status) ? labels[status]! : 'Check the saved action';
 }
@@ -26,6 +27,17 @@ export function leagueStatusLabel(status: string): string {
  * recognized cause; never display an unknown technical error as user copy. */
 export function savedLeagueErrorMessage(message: string | null | undefined): string {
   if (!message || message === 'No saved error.') return 'No problem was recorded.';
+  // Older audit failures prefix every sheet name, regardless of the actual
+  // blocker. Classify the specific finding, preserving the known no-write result.
+  const legacyPrefix = 'Ratatoskr made no changes. Reconcile Discord, Current Rosters, Player Name History, and the public roster, then retry. ';
+  if (message.startsWith(legacyPrefix)) {
+    const cause = savedLeagueErrorMessage(message.slice(legacyPrefix.length));
+    const guidance = /Some changes may already have happened|Some changes may already|may be partial/i.test(cause)
+      ? 'The roster check needs staff review. Ask staff to check the current roster problems and saved action.' : cause;
+    return `${guidance} No changes were made by this attempt.`;
+  }
+  if (/is in Current Rosters but is no longer in the Discord server\. Confirm whether this is a departure/.test(message))
+    return 'A rostered player is no longer in the Discord server. Ask staff to review their departure before changing the roster.';
   if (/exactly one current[- ]name record|multiple current name records/i.test(message))
     return 'Player Name History needs exactly one current name for this player. Ask staff to check that sheet and the saved action.';
   if (/more than one current roster assignment|exactly one Current Rosters assignment/i.test(message))
