@@ -84,7 +84,8 @@ test('malformed action-specific selections never resolve an original', () => {
     ['drop','player',false], ['drop',null,null], ['drop','player',''], ['drop','player',null,'extra'], ['other','player',null]]) {
     const f = fixture('second-admin', ':memory:', selection);
     try {
-      f.canonical(); transitionLeagueJob(f.db, f.retry.reference, 'COMPLETED');
+      f.canonical(f.retry.reference, 'completed', 'g', selection[0] === 'other' ? 'drop' : String(selection[0]));
+      transitionLeagueJob(f.db, f.retry.reference, 'COMPLETED');
       assert.ok(listUnfinishedLeagueMutationJobs(f.db, 'g').some(j => j.reference === f.original.reference), JSON.stringify(selection));
     } finally { f.db.close(); }
   }
