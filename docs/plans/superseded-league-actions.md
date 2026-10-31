@@ -50,6 +50,11 @@ evidence-bearing originals stay visible. Use this proof for unfinished and
 actionable inventory; the dashboard and private panels already share these
 repository entrypoints. Avoid a second count/filter implementation.
 
+Follow explicitly linked retry chains when intervening retries also blocked
+before writing. Every blocked link must independently meet the same no-mutation,
+guild, exact-selection and increasing-sequence checks. A completed leaf must
+still have completed canonical evidence; never skip an uncertain intermediate.
+
 Remove enqueue-time actor-scoped dismissal of blocked transactions. Approval and
 dedupe behavior remain unchanged. Only completed linked canonical work resolves
 the original's outstanding presentation. Historical dismissal timestamps are not

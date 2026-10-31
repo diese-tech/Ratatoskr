@@ -65,6 +65,33 @@ test('same-staff queued and failed retries cannot hide a blocked original at enq
   } finally { f.db.close(); }
 });
 
+test('completed explicitly linked retry chains resolve every clean blocked ancestor', async () => {
+  for (const uncertainIntermediate of [false, true]) {
+    const f = fixture();
+    try {
+      transitionLeagueJob(f.db, f.retry.reference, 'BLOCKED_REVIEW', { error: f.error });
+      const final = enqueueLeagueJob(f.db, { guildId: 'g', type: 'transaction', dedupeKey: 'third',
+        payload: { selections: JSON.stringify(['drop', 'outgoing', 'replacement']), actorUserId: 'third-admin', originalBlockedReference: f.retry.reference } });
+      f.canonical(final.reference); transitionLeagueJob(f.db, final.reference, 'COMPLETED');
+      if (uncertainIntermediate) f.canonical(f.retry.reference, 'failed');
+      const unfinished = listUnfinishedLeagueMutationJobs(f.db, 'g');
+      if (uncertainIntermediate) {
+        assert.ok(unfinished.some(j => j.reference === f.original.reference));
+        assert.ok(unfinished.some(j => j.reference === f.retry.reference));
+      } else {
+        assert.deepEqual(unfinished, []);
+        assert.deepEqual(listActionableLeagueJobs(f.db, 'g'), []);
+        for (const reference of [f.original.reference, f.retry.reference]) {
+          const detail = await f.service.operationDetail('admin', reference);
+          assert.equal(detail.status, 'SUPERSEDED');
+          assert.ok(detail.next.includes(final.reference));
+          assert.equal(detail.canRepreview, false);
+        }
+      }
+    } finally { f.db.close(); }
+  }
+});
+
 test('all command selection shapes resolve, including standalone exits with null replacements', () => {
   const choices = [
     ...['trade', 'pickup', 'rename', 'drop', 'self-drop', 'departure'].map(kind => [kind, 'player', 'second']),

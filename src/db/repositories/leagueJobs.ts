@@ -147,21 +147,33 @@ export function completedLeagueTransactionSuccessor(db: Database.Database, job: 
     || typeof first !== 'string' || !first) return;
   const optionalReplacement = ['drop', 'self-drop', 'departure'].includes(kind);
   if (!(typeof second === 'string' && second) && !(optionalReplacement && (second === null || second === undefined))) return;
-  const row = db.prepare(`SELECT later.reference FROM league_jobs original
-    JOIN league_jobs later ON later.guild_id=original.guild_id AND later.type='transaction'
-      AND later.sequence>original.sequence AND later.status='COMPLETED'
-      AND json_extract(later.payload_json,'$.originalBlockedReference')=original.reference
-      AND json_extract(later.payload_json,'$.selections')=json_extract(original.payload_json,'$.selections')
-    JOIN league_transactions canonical ON canonical.reference=later.reference
-      AND canonical.guild_id=original.guild_id AND canonical.status='completed' AND canonical.kind=?
-    WHERE original.reference=? AND original.guild_id=? AND original.type='transaction' AND original.status='BLOCKED_REVIEW'
+  // Every blocked link must independently prove it never began a mutation.
+  // Increasing sequence numbers also prevent malformed retry cycles.
+  const row = db.prepare(`WITH RECURSIVE clean_blocked AS (
+    SELECT original.reference,original.guild_id,original.sequence,
+      json_extract(original.payload_json,'$.originalBlockedReference') AS retry_of
+    FROM league_jobs original
+    WHERE original.guild_id=? AND original.type='transaction' AND original.status='BLOCKED_REVIEW'
       AND json_extract(original.payload_json,'$.selections')=?
       AND NOT EXISTS(SELECT 1 FROM league_transactions t WHERE t.reference=original.reference)
       AND NOT EXISTS(SELECT 1 FROM league_audit_repairs r WHERE r.reference=original.reference)
       AND NOT EXISTS(SELECT 1 FROM league_account_replacements r WHERE r.reference=original.reference)
       AND NOT EXISTS(SELECT 1 FROM league_account_replacement_evidence e WHERE e.job_reference=original.reference)
       AND NOT EXISTS(SELECT 1 FROM league_reconciliation_tickets t WHERE t.reference=original.reference AND t.status='open')
-    ORDER BY later.sequence LIMIT 1`).get(kind, job.reference, job.guildId, selections) as { reference: string } | undefined;
+    ), chain AS (
+      SELECT * FROM clean_blocked WHERE reference=?
+      UNION ALL
+      SELECT child.* FROM clean_blocked child JOIN chain parent
+        ON child.retry_of=parent.reference AND child.sequence>parent.sequence
+    )
+    SELECT later.reference FROM chain original
+    JOIN league_jobs later ON later.guild_id=original.guild_id AND later.type='transaction'
+      AND later.sequence>original.sequence AND later.status='COMPLETED'
+      AND json_extract(later.payload_json,'$.originalBlockedReference')=original.reference
+      AND json_extract(later.payload_json,'$.selections')=?
+    JOIN league_transactions canonical ON canonical.reference=later.reference
+      AND canonical.guild_id=original.guild_id AND canonical.status='completed' AND canonical.kind=?
+    ORDER BY later.sequence LIMIT 1`).get(job.guildId, selections, job.reference, selections, kind) as { reference: string } | undefined;
   return row?.reference;
 }
 export function transitionLeagueJob(
