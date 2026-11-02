@@ -3,7 +3,7 @@
 - **Status:** Proposed (documents the established #156 implementation; pending documentation PR review)
 - **Recorded:** 2026-11-02
 - **Scope:** Guild-wide Discord member reads used by Ratatoskr league operations
-- **Implementation follow-up:** [#186](https://github.com/diese-tech/Ratatoskr/issues/186) (the specific reinstatement regression remains unfixed)
+- **Implementation:** [#186](https://github.com/diese-tech/Ratatoskr/issues/186) fixed by [PR #188](https://github.com/diese-tech/Ratatoskr/pull/188); the same no-change cooldown handling was applied to `/transaction` previews in [PR #190](https://github.com/diese-tech/Ratatoskr/pull/190)
 
 ## Context
 
@@ -27,7 +27,7 @@ On November 2, 2026, `/transaction reinstate` performed one full read in `League
 - New league features have an explicit integration seam and reviewable performance/safety contract.
 - Tests must cover number of whole-guild requests for multi-stage read-only flows, Gateway cooldown, snapshot invalidation, fresh confirmation/worker proof, and distinguish no-write failures from ambiguous partial writes.
 - Sharing read-only state is only a latency and rate-limit improvement; it does not relax approval or execution validation.
-- This ADR does not modify existing production behavior. The bug fix and operational validation belong in issue #186.
+- The #186 reinstatement fix shipped in PR #188 (snapshot reuse, observation redraws, private pre-write cooldown replies). PR #190 extended the private cooldown reply to ordinary `/transaction` previews. Live observation after deployment is tracked separately from this record.
 
 ## Related source and records
 
@@ -37,4 +37,5 @@ On November 2, 2026, `/transaction reinstate` performed one full read in `League
 - `src/services/interactionErrors.ts` and `src/services/operationalErrors.ts` — accurate phase-aware reporting
 - [#156](https://github.com/diese-tech/Ratatoskr/issues/156) — established member-fetch coalescing
 - [#183](https://github.com/diese-tech/Ratatoskr/issues/183) and [PR #185](https://github.com/diese-tech/Ratatoskr/pull/185) — reinstatement workflow
-- [#186](https://github.com/diese-tech/Ratatoskr/issues/186) — production regression
+- [#186](https://github.com/diese-tech/Ratatoskr/issues/186) — production regression, fixed by [PR #188](https://github.com/diese-tech/Ratatoskr/pull/188)
+- [PR #190](https://github.com/diese-tech/Ratatoskr/pull/190) — private cooldown reply for `/transaction` previews

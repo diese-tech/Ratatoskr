@@ -14,7 +14,7 @@ Multi-step **read-only** staff flows must pass their already verified complete m
 
 A Gateway throttle before enqueue/write is a **no-change, read-only deferral**: honor `retry_after`, explain the wait privately, and avoid false staff alerts claiming partial roster writes or uncertain public posts. Actual interrupted/ambiguous writes still require durable reconciliation and staff warnings. Preserve the scheduled full audit and existing job priorities.
 
-**Canonical decision:** [ADR 0001](docs/adr/0001-shared-league-member-reads.md). Existing coordinator: [#156](https://github.com/diese-tech/Ratatoskr/issues/156). Read-only reinstatement regression and tests: [#186](https://github.com/diese-tech/Ratatoskr/issues/186).
+**Canonical decision:** [ADR 0001](docs/adr/0001-shared-league-member-reads.md). Existing coordinator: [#156](https://github.com/diese-tech/Ratatoskr/issues/156). Read-only reinstatement regression and tests: [#186](https://github.com/diese-tech/Ratatoskr/issues/186), fixed in [PR #188](https://github.com/diese-tech/Ratatoskr/pull/188).
 
 ## Agent skills
 
