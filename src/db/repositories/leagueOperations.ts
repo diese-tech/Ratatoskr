@@ -12,7 +12,7 @@ export type LeagueTransactionStatus =
 export type LeagueTransaction = {
   reference: string;
   guildId: string;
-  kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure' | 'self-drop';
+  kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure' | 'self-drop' | 'reinstatement';
   actorUserId: string;
   payload: unknown;
   status: LeagueTransactionStatus;
@@ -297,4 +297,8 @@ export function getLegacyLeagueAlertCleanupCutoff(db: Database.Database, guildId
   const row = db.prepare('SELECT MAX(reference) reference FROM league_alert_cleanup WHERE guild_id=? AND reference LIKE ?')
     .get(guildId, `${prefix}%`) as { reference: string | null };
   return row.reference?.slice(prefix.length);
+}
+
+export function listLeagueTransactions(db: Database.Database, guildId: string): LeagueTransaction[] {
+  return (db.prepare('SELECT * FROM league_transactions WHERE guild_id=? ORDER BY created_at, reference').all(guildId) as TransactionRow[]).map(toTransaction);
 }

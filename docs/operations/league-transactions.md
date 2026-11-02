@@ -128,3 +128,39 @@ Passing tests and CI does not prove live acceptance. Before enabling staff use, 
 Sheets presentation reads use the existing shared service-account scheduler to coalesce identical concurrent GET/batchGet requests and reuse successful results for up to three seconds, with at most 128 entries. Roster autocomplete opts into this reuse. Full snapshots, targeted reconciliation, repair confirmations, and mutation preflight remain fresh and never join cached or in-flight presentation reads. Workbook writes invalidate that workbook's reusable results before and after the request, including ambiguous failures. Errors and incomplete batch responses are not retained; the existing two-second pacing and 429 cooldown still apply. Cache for presentation, never cache for proof.
 
 Legacy alert cleanup retains a successful scan cutoff in the existing cleanup repository. Later clean full audits scan only messages at or after that cutoff; failed deletions do not advance it. The first successful cleanup still checks the entire retained staff-ops history.
+
+
+## Staff-controlled reinstatement (#183)
+
+Use `/transaction reinstate player:<current name, old nickname, mention or Discord ID> [transaction:<exit reference>] [reason:<short optional reason>]` to preview a former player's return. Autocomplete searches Player Name History and names saved in canonical transactions, including inactive/suspended players and people who left Discord. A private paginated picker resolves multiple identities or exits; staff must choose the exact event. A missing, duplicate or conflicting History row requires reconciliation rather than a guessed match.
+
+The compact private card shows the selected departure/drop/self-drop, historical team/division, processor, stable identity, original Sheet effective date, proposed league date, role deltas, roster/name/public projections and preserved draft provenance. The destination is the original active team and the requested roster status is **Player**. Former captain access is not automatically granted. This is a new compensating event; original transactions, dates, aliases and draft ownership remain intact.
+
+Choose each substantive policy exception in the menu, then **Confirm reinstatement**. Current-season self-drop suspension and roster-count exceptions require explicit staff acknowledgement. Timing is informational only: it never requires acknowledgement, an override or an extra menu choice, even when exact elapsed time is unavailable. With no substantive exceptions, staff can confirm directly after reviewing the card. Approval stores the actor, actual approval time, selected exceptions, source event and optional reason in the existing durable queue. Current-season restoration never waives a next-season penalty: the original sanction and the explicit preservation decision remain in private records. A separate staff process must handle any future-season sanction decision.
+
+The current Sheet schema stores date-only league dates. Cards and the new public notice use that exact recorded `effectiveDate`; no midnight, native Discord timestamp or elapsed-time result is invented. A verified original job completion instant may be shown separately with its own label. Until both completed instants exist, the preview says exact elapsed time is unavailable. Deleted/missing original announcements do not block review. No original Sheet date or old public post is rewritten.
+
+Preview and confirmation are read-only externally. Actor-bound controls expire after 15 minutes; replacement, cancellation and changed fingerprints invalidate them. Repeated confirmation returns the same saved job. The worker independently checks staff access, source history, active identity, managed-role ownership, before-values and writable destinations before changing anything. A changed league date requires a new preview. At most one nonfailed compensating transaction may reserve a source exit (migration **37**); failed pre-write/rolled-back attempts remain inspectable.
+
+Technical limitations remain firm:
+
+- An absent player can be found and previewed, but must **rejoin before approval**. The existing transaction state machine cannot safely represent a restored roster with an unmet member/role step; Rat neither writes a split roster nor reports role restoration pending as completed.
+- Seven players is advisory. An eighth entry still needs a genuinely empty owned public cell. The fixed seven-cell blocks cannot represent an actually full return; staff must resolve the layout/roster through an explicitly approved manual process, then request a fresh preview. Rat never expands managed ranges, overwrites another player or silently truncates.
+- An exit already followed by another nonfailed roster action cannot be reused. Choose the latest applicable exit. Source ambiguity, duplicate active identity, drift, unrelated roster problems and incomplete earlier actions require technical resolution.
+
+Use **Open league tools → Saved actions → Find by reference** for completed history. Original and reinstatement details show their official Sheet dates and **View linked action** controls in both directions. Historical private cards need no backfill; old public messages and original ledger rows stay immutable. The new history row records the inbound movement, source reference and approved exceptions, regardless of how role projection is represented.
+
+Role/Sheet interruptions use existing private reconciliation; they never replay ambiguous writes. Verified roster changes whose notice/history is pending recover through the existing announcement pipeline, using the reference and exact expected reinstatement history values to prevent duplicates or false completion. Draft highlighting still follows the returning player's identity, not the vacated seat.
+
+### Deployment and acceptance checklist
+
+This implementation does not authorize deployment or a live roster correction.
+
+- [ ] Human reviews the PR, policy exception wording, absent-member limitation and current dependency audit findings.
+- [ ] Back up persistent SQLite and both workbooks; rehearse migration 37 on a stopped copy and verify original transaction/job/history preservation.
+- [ ] Separately approve deployment and command registration; run one bot instance and inspect startup recovery.
+- [ ] Read-only live preview: find the historical player without their job ID; compare original date/type/processor/team against Transaction History and private saved actions. The Manny regression is synthetic source-shaped evidence, not a live verification.
+- [ ] Verify staff-only private controls, disambiguation, stale/replayed confirmations, advisory choices and linked history navigation in Discord.
+- [ ] Obtain separate explicit staff approval for one exact live return. Confirm the member is present and the owned public cell is free; record policy exceptions and preserve future sanctions.
+- [ ] Observe the queued job finish; independently verify roles, both rosters, aliases, original draft ownership/highlights, one linked History row, one public announcement and a fresh clean audit. Match official Sheet/public dates exactly.
+- [ ] Exercise interrupted recovery in an isolated test environment; never manufacture a partial production write.

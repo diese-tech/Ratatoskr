@@ -9,7 +9,7 @@ import type { LeagueAccountReplacementService } from './leagueAccountReplacement
 import type { LeagueJobWorker } from './leagueJobWorker.js';
 import type { LeagueSheetsService } from './leagueSheets.js';
 import type { DiscordLeagueGateway } from './leagueDiscord.js';
-import { buildLeagueIntentPlan } from './leagueTransactionIntent.js';
+import { buildVerifiedTransactionIntent } from './leagueReinstatement.js';
 import { LeagueOpsReviewService } from './leagueOpsReview.js';
 import { createLeagueOpsFlow } from './leagueOpsFlow.js';
 import { previewLeagueAuditResolution } from './leagueAuditResolution.js';
@@ -36,7 +36,7 @@ export function deferredLeagueOpsSender(interaction: ButtonInteraction): ChatInp
   } as unknown as ChatInputCommandInteraction;
 }
 export function registerLeagueOpsUi(input: { scope: object; db: Database.Database; client: Client; guild: Guild;
-  worker: LeagueJobWorker; replacement: LeagueAccountReplacementService; sheets: Pick<LeagueSheetsService, 'load'>;
+  worker: LeagueJobWorker; replacement: LeagueAccountReplacementService; sheets: Pick<LeagueSheetsService, 'load'> & Partial<Pick<LeagueSheetsService, 'readTransactionHistory'>>;
   discord: Pick<DiscordLeagueGateway, 'getMembers'>; freeAgentRoleId: string }): () => void {
   const authorize = async (actor: string) => {
     const member = await input.guild.members.fetch({ user: actor, force: true });
@@ -44,9 +44,10 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
     return member.displayName;
   };
   const service = new LeagueOpsReviewService({ ...input, guildId: input.guild.id, authorize,
+    readTransactionHistory: input.sheets.readTransactionHistory?.bind(input.sheets),
     roleLabel: id => `${input.guild.roles.cache.get(id)?.name ?? 'Unknown team role'} (${id})`,
-    previewTransaction: async selections => buildLeagueIntentPlan(selections,
-      (await input.sheets.load(await input.discord.getMembers(), input.freeAgentRoleId)).snapshot),
+    previewTransaction: async selections => buildVerifiedTransactionIntent({ db: input.db, guildId: input.guild.id, sheets: input.sheets, selections,
+      loaded: await input.sheets.load(await input.discord.getMembers(), input.freeAgentRoleId) }),
     previewRepair: async (finding, action) => previewLeagueAuditResolution(
       await input.sheets.load(await input.discord.getMembers(), input.freeAgentRoleId), finding, action) });
   const sessions = new Map<string, { actor: string; messageId: string }>();

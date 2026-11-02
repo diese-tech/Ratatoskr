@@ -736,3 +736,34 @@ test('rollback preserves a newer manual role change and requires reconciliation'
   assert.equal(mutations, 0);
   assert.equal(cache.has('team-b'), true);
 });
+
+
+test('reinstatement validates exact inactive managed roles, safe role ownership and singular deltas without requiring Free Agent status', async () => {
+  const { buildReinstatementPlan } = await import('../domain/leagueOperations.js');
+  const cache = new Collection<string, unknown>([['unmanaged', {}]]);
+  const calls: string[] = [];
+  const member = { id: 'one', guild: { id: 'guild' }, user: { bot: false }, displayName: 'One', nickname: null,
+    roles: { cache, add: async (id: string) => { assert.equal(typeof id, 'string'); calls.push(`add:${id}`); cache.set(id, {}); },
+      remove: async (id: string) => { assert.equal(typeof id, 'string'); calls.push(`remove:${id}`); cache.delete(id); } } };
+  const roles = new Collection(['team', 'division', 'fa'].map(id => [id, { id, guild: { id: 'guild' }, editable: true, managed: false, permissions: new PermissionsBitField() }]));
+  const guild = { id: 'guild', roles: { fetch: async () => roles }, members: { fetch: async () => member } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'notices');
+  const snapshot: import('../domain/leagueOperations.js').LeagueSnapshot = {
+    teams: [{ teamKey: 'a', franchise: 'A', division: 'Vanaheim', teamRoleId: 'team', teamRole: 'A VD', divisionRoleId: 'division', active: true }],
+    rosters: [], names: [{ sheetRow: 6, discordId: 'one', currentLeagueName: 'One', knownName: 'One', nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: '', leagueStatus: 'Inactive' }],
+    discordMembers: [{ discordId: 'one', displayName: 'One', roleIds: ['unmanaged'] }], publicRosters: { Vanaheim: { teams: { A: [] }, freeAgents: [] } }, freeAgentRoleId: 'fa',
+  };
+  const source = { reference: 'exit', playerId: 'one', kind: 'departure' as const, effectiveDate: '2026-10-31', processedBy: 'Staff', processedById: 'staff', teamRoleId: 'team', franchise: 'A', division: 'Vanaheim' as const, resultingStatus: 'Inactive' };
+  const plan = buildReinstatementPlan(snapshot, { version: 1, kind: 'reinstate', playerId: 'one', sourceReference: 'exit', teamRoleId: 'team', returnStatus: 'Player', effectiveDate: '2026-11-02', overrides: ['timing'], preserveFutureSanction: true }, source);
+  await gateway.validateReinstatementRoles(plan, snapshot);
+  roles.get('team')!.permissions = new PermissionsBitField(PermissionFlagsBits.Administrator);
+  await assert.rejects(gateway.validateReinstatementRoles(plan, snapshot), /privileged/);
+  roles.get('team')!.permissions = new PermissionsBitField();
+  cache.set('division', {}); await assert.rejects(gateway.validateReinstatementRoles(plan, snapshot), /roles changed/); cache.delete('division');
+  const before = { configuredTeamRoleIds: ['team'], configuredDivisionRoleIds: ['division'], expectedTeamRoleId: null, divisionRoleId: 'division', freeAgentRoleId: 'fa', expectsFreeAgent: false, observedManagedRoleIds: [] };
+  const after = { ...before, expectedTeamRoleId: 'team', observedManagedRoleIds: undefined };
+  await gateway.applyRoleChange(plan.discordRoleChanges[0]!, before, after);
+  assert.deepEqual(calls, ['add:team', 'add:division']); assert.ok(cache.has('unmanaged'));
+  await gateway.rollbackRoleChange(plan.discordRoleChanges[0]!, before, after);
+  assert.deepEqual([...cache.keys()], ['unmanaged']);
+});

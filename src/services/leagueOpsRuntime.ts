@@ -1,3 +1,4 @@
+import { buildVerifiedTransactionIntent } from './leagueReinstatement.js';
 import type Database from 'better-sqlite3';
 import { type Client, type Guild } from 'discord.js';
 import { hasAccess } from './authorization.js';
@@ -26,7 +27,7 @@ import {
   type LeagueAuditResolutionAction,
 } from './leagueAuditResolution.js';
 import { LeagueMutationValidationError } from '../domain/leagueOperations.js';
-import { buildLeagueIntentPlan, type LeagueTransactionIntent } from './leagueTransactionIntent.js';
+import { type LeagueTransactionIntent } from './leagueTransactionIntent.js';
 import { LeagueJobBlockedError, LeagueJobWorker, registerLeagueJobWorker } from './leagueJobWorker.js';
 import { checkLeagueMember, scheduleDirtyLeagueCheck, startLeaguePanelHeartbeat } from './leagueReconciliation.js';
 import { refreshLeagueOpsPanel, runLeagueAudit, type LeagueAuditCardPort } from './leagueAudit.js';
@@ -52,7 +53,7 @@ type LeagueOpsSheets = Pick<
   LeagueSheetsService,
   'load' | 'loadMember' | 'assertUnchanged' | 'prepare' | 'apply' | 'appendTransactionHistory'
 > & Partial<Pick<LeagueSheetsService, 'prepareAccountReplacement' | 'assertAccountReplacementUnchanged'
-  | 'applyAccountReplacement' | 'verifyAccountReplacement' | 'checkDraftPickHealth' | 'lastDraftPickHealth'>>;
+  | 'applyAccountReplacement' | 'verifyAccountReplacement' | 'checkDraftPickHealth' | 'lastDraftPickHealth' | 'readTransactionHistory'>>;
 export function createLeagueOpsRuntime(input: {
   db: Database.Database;
   operationScope: object;
@@ -151,11 +152,13 @@ export function createLeagueOpsRuntime(input: {
             guildId,
             actorUserId: intent.actorUserId,
             actorName: intent.actorName,
+            approvedAt: intent.approvedAt,
             freeAgentRoleId,
             now: new Date(),
             sheets,
             discord,
-            buildPlan: (snapshot) => buildLeagueIntentPlan(intent.selections, snapshot),
+            buildPlan: (_snapshot, loaded) => buildVerifiedTransactionIntent({ db, guildId, sheets, selections: intent.selections, loaded }),
+            authorizeBeforeWrite: () => authorize(intent.actorUserId),
             expectedPlanFingerprint: intent.expectedPlanFingerprint,
             jobReference: job.reference,
             onPhase: phase,

@@ -375,6 +375,8 @@ export type LeagueTransactionRecord = {
   processedBy: string;
   announcementId?: string;
   approvalNote?: string;
+  approvedAt?: string;
+  processedAt?: string;
 };
 
 export type PreparedLeagueSheetMutation = {
@@ -690,6 +692,12 @@ export class LeagueSheetsService {
       sourceFingerprint: createHash('sha256').update(JSON.stringify({ sources: fresh.sources, drafts })).digest('hex') };
   }
 
+  async listHistoricalNames(): Promise<LeagueNameRow[]> {
+    return parseNames(await this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_NAMES_RANGE, { purpose: 'presentation' }));
+  }
+  async readTransactionHistory(): Promise<CellRows> {
+    return this.gateway.getValues(this.config.adminSpreadsheetId, "'Transaction History'!A6:M", { purpose: 'fresh' });
+  }
   async listRosterPlayers(): Promise<LeagueRosterRow[]> {
     const rows = await this.gateway.getValues(this.config.adminSpreadsheetId, ADMIN_ROSTERS_RANGE, { purpose: 'presentation' });
     return parseRosters(rows);
@@ -789,7 +797,7 @@ export class LeagueSheetsService {
         }
         if (change.from === '' && match) break;
       }
-      if (!match) throw new Error(`${change.from || 'No empty slot'} was found in the managed ${change.group} block.`);
+      if (!match) throw new LeagueSheetDriftError(`${change.from || 'No empty slot'} was found in the managed ${change.group} block. Staff must provide an empty owned cell or resolve this manually; policy approval cannot expand the fixed Sheet layout. Nothing was written.`);
       claimed.add(`${change.division}:${match.row}:${match.column}`);
       const column = String.fromCharCode(65 + match.column);
       return { range: `'${change.division} Roster'!${column}${match.row}`, values: [[change.to]] };
@@ -798,6 +806,12 @@ export class LeagueSheetsService {
 
   prepare(loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan): PreparedLeagueSheetMutation {
     const prepared: PreparedLeagueSheetMutation = { publicUpdates: this.resolvePublicChanges(loaded, plan.publicChanges) };
+    if (plan.kind === 'reinstatement') {
+      for (const row of plan.rosters.filter(next => !loaded.snapshot.rosters.some(old => old.sheetRow === next.sheetRow))) {
+        if ((loaded.sources.rosters[row.sheetRow - 5] ?? []).some(cell => String(cell ?? '').trim()))
+          throw new LeagueSheetDriftError('The new Current Rosters row contains existing data. Ask staff to provide an empty owned row, then preview again. Nothing was written.');
+      }
+    }
     if (plan.kind === 'self-drop') {
       const expectedLegend = ['Red row', 'Self-Drop: suspended for the current season and banned for the next YSL season.'];
       const actualLegend = loaded.sources.selfDropPresentation.legend[0] ?? [];
@@ -823,7 +837,7 @@ export class LeagueSheetsService {
   ): Promise<void> {
     await this.assertUnchanged(loaded);
     const originalRosters = loaded.snapshot.rosters;
-    const now = `${record.effectiveDate}T00:00:00.000Z`;
+    const now = record.processedAt ?? `${record.effectiveDate}T00:00:00.000Z`;
     const approvalNote = record.approvalNote ?? 'Ratatoskr approved transaction';
     const rosterValue = (row: LeagueRosterRow): Cell[] => [
       row.division, row.franchise, row.teamRoleId, row.team, row.discordId, row.player,
@@ -938,13 +952,19 @@ export class LeagueSheetsService {
     plan: LeagueMutationPlan,
     record: LeagueTransactionRecord,
   ): Promise<DraftPickMove[]> {
-    const existing = await this.gateway.getValues(this.config.adminSpreadsheetId, "'Transaction History'!A6:A");
-    if (existing.some((row) => String(row[0] ?? '') === record.reference)) return [];
+    const existing = await this.gateway.getValues(this.config.adminSpreadsheetId,
+      plan.reinstatement ? "'Transaction History'!A6:M" : "'Transaction History'!A6:A");
+    if (!plan.reinstatement && existing.some(row => String(row[0] ?? '') === record.reference)) return [];
     const exitDestination = plan.kind === 'drop'
       ? 'Free Agents'
       : plan.kind === 'departure' ? 'Inactive'
         : plan.kind === 'self-drop' ? SELF_DROP_LEAGUE_STATUS : undefined;
-    const transactionRows = exitDestination ? [
+    const transactionRows = plan.reinstatement ? [[
+      record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
+      plan.reinstatement.currentStatus, plan.teams[0]!.franchise, plan.playerIds[0]!, plan.players[0]!,
+      record.processedById, record.announcementId ?? '', 'Completed',
+      `${record.processedBy}; reinstates ${plan.reinstatement.source.reference}; approved advisories: ${plan.reinstatement.selection.overrides.join(', ')}; future sanction preserved${plan.reinstatement.selection.reason ? `; reason: ${plan.reinstatement.selection.reason}` : ''}`,
+    ]] : exitDestination ? [
       [
         record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
         plan.teams[0]!.franchise, exitDestination, plan.playerIds[0]!, plan.players[0]!,
@@ -971,6 +991,14 @@ export class LeagueSheetsService {
       plan.playerIds[0] ?? '',
       plan.players[0] ?? '', record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
     ]];
+    if (plan.reinstatement) {
+      const matches = existing.filter(row => String(row[0] ?? '') === record.reference);
+      if (matches.length) {
+        if (matches.length !== 1 || JSON.stringify(matches[0]!.slice(0, 12)) !== JSON.stringify(transactionRows[0]))
+          throw new LeagueSheetReconciliationRequiredError('The saved reinstatement history reference has conflicting values. Staff must inspect the original and linked rows; do not append again.');
+        return [];
+      }
+    }
     const tracking = plan.kind === 'rename' ? undefined : await this.loadDraftPicks();
     const picks = tracking?.picks ?? new Map<string, DraftPickMove>();
     const moved = new Map<string, DraftPickMove>();

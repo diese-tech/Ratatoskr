@@ -1,3 +1,5 @@
+import { openReinstatementCommand } from '../services/leagueReinstatementUi.js';
+import { historicalPlayerChoices, historicalPlayerIndex } from '../services/leagueReinstatement.js';
 import { leagueJobWorkerFor } from '../services/leagueJobWorker.js';
 import { buildLeagueIntentPlan, type LeagueTransactionIntent } from '../services/leagueTransactionIntent.js';
 import {
@@ -33,6 +35,10 @@ export const transactionCommand = new SlashCommandBuilder()
   .setName('transaction')
   .setDescription('Process approved YSL roster changes.')
   .setDMPermission(false)
+  .addSubcommand(subcommand => subcommand.setName('reinstate').setDescription('Review a former player’s return with linked exit history.')
+    .addStringOption(option => option.setName('player').setDescription('Player name, old nickname or Discord ID, including departed players.').setAutocomplete(true).setRequired(true))
+    .addStringOption(option => option.setName('transaction').setDescription('Optional original exit reference when several exits match.'))
+    .addStringOption(option => option.setName('reason').setDescription('Optional short staff reason for the return.').setMaxLength(300)))
   .addSubcommand((subcommand) => subcommand
     .setName('trade')
     .setDescription('Swap two players between teams in the same division.')
@@ -137,23 +143,24 @@ export function buildRosterPlayerAutocompleteChoices(
     }));
 }
 
-export async function handleTransactionAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
-  if (!['departure', 'self-drop'].includes(interaction.options.getSubcommand(false) ?? '')
+export async function handleTransactionAutocomplete(interaction: AutocompleteInteraction, db?: Database.Database): Promise<void> {
+  if (!['departure', 'self-drop', 'reinstate'].includes(interaction.options.getSubcommand(false) ?? '')
     || interaction.options.getFocused(true).name !== 'player'
     || !interaction.guild) {
     await interaction.respond([]);
     return;
   }
   try {
-    const member = interaction.guild.members.cache.get(interaction.user.id)
-      ?? await interaction.guild.members.fetch(interaction.user.id);
+    const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
     if (!hasAccess(member, 'OPERATIONS')) {
       await interaction.respond([]);
       return;
     }
     const { gateway, config } = createGoogleLeagueSheetsGateway();
     const sheets = new LeagueSheetsService(gateway, config);
-    const choices = buildRosterPlayerAutocompleteChoices(
+    const choices = interaction.options.getSubcommand() === 'reinstate'
+      ? historicalPlayerChoices(db ? historicalPlayerIndex(db, interaction.guild.id, await sheets.listHistoricalNames()) : await sheets.listHistoricalNames(), interaction.options.getFocused()).slice(0, 25)
+      : buildRosterPlayerAutocompleteChoices(
       await sheets.listRosterPlayers(),
       interaction.options.getFocused(),
     );
@@ -184,9 +191,13 @@ export async function handleTransactionCommand(
   }
   const guildId = interaction.guild.id;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
   if (!hasAccess(member,'OPERATIONS')) { await interaction.editReply('You do not have permission to use this command.'); return; }
 
+  if (interaction.options.getSubcommand() === 'reinstate') {
+    await openReinstatementCommand(interaction, db, operationScope);
+    return;
+  }
   const transactionEnvironment = loadLeagueOperationsConfig();
   const { gateway, config } = createGoogleLeagueSheetsGateway();
   const sheets = new LeagueSheetsService(gateway, config);
