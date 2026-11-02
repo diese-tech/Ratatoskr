@@ -68,7 +68,8 @@ export type DiscordRoleChange = { discordId: string; remove: string[]; add: stri
 export type DiscordNicknameChange = { discordId: string; before: string | null; beforeDisplayName: string; after: string };
 
 export type LeagueMutationPlan = {
-  kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure' | 'self-drop';
+  kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure' | 'self-drop' | 'reinstatement';
+  reinstatement?: ReinstatementDetails;
   rosters: LeagueRosterRow[];
   nameUpdates: LeagueNameRow[];
   nameHistoryAppend?: Omit<LeagueNameRow, 'sheetRow'>;
@@ -118,7 +119,7 @@ function canonicalNames(snapshot: LeagueSnapshot): Map<string, string> {
 
 export function auditLeagueRoster(
   snapshot: LeagueSnapshot,
-  options: { allowAbsentRosterMemberId?: string; allowDiscordNameRepairMemberId?: string } = {},
+  options: { allowAbsentRosterMemberId?: string; allowDiscordNameRepairMemberId?: string; allowReinstatementMemberId?: string } = {},
 ): string[] {
   const issues: string[] = [];
   const activeTeams = snapshot.teams.filter((team) => team.active);
@@ -225,6 +226,7 @@ export function auditLeagueRoster(
   }
 
   for (const member of snapshot.discordMembers) {
+    if (member.discordId === options.allowReinstatementMemberId) continue;
     const assignedTeamRoles = member.roleIds.filter((roleId) => teamsByRole.has(roleId));
     const roster = rosterById.get(member.discordId);
     if (assignedTeamRoles.length > 1) issues.push(`Discord member ${member.discordId} has multiple team roles.`);
@@ -262,6 +264,7 @@ export function auditLeagueRoster(
   for (const rows of currentNameRows.values()) {
     if (rows.length !== 1 || rows[0]!.leagueStatus !== 'Free Agent') continue;
     const row = rows[0]!;
+    if (row.discordId === options.allowReinstatementMemberId) continue;
     if (row.franchise.trim() !== '') {
       issues.push(`Current free agent ${row.discordId} must not retain a franchise assignment.`);
     }
@@ -613,4 +616,66 @@ export function buildDiscordRenamePlan(
     );
   }
   return buildRenamePlan(snapshot, discordId, discordName);
+}
+
+export type ReinstatementSource = {
+  reference: string; playerId: string; playerName?: string; kind: 'drop' | 'departure' | 'self-drop';
+  effectiveDate: string; processedBy: string; processedById: string;
+  teamRoleId: string; franchise: string; division: LeagueDivision; resultingStatus: string;
+  completedAt?: string; announcementId?: string;
+};
+export type ReinstatementSelection = {
+  version: 1; kind: 'reinstate'; playerId: string; sourceReference: string;
+  teamRoleId: string; returnStatus: 'Player'; effectiveDate: string;
+  overrides: string[]; preserveFutureSanction: true; reason?: string;
+};
+export type ReinstatementDetails = {
+  selection: ReinstatementSelection; source: ReinstatementSource; currentStatus: string;
+  advisories: { id: string; text: string }[]; blockers: string[];
+  beforeManagedRoleIds: string[]; sourceFingerprint?: string;
+};
+
+// Policy decisions are explicit staff choices. Structural checks cannot be overridden.
+export function buildReinstatementPlan(snapshot: LeagueSnapshot, selection: ReinstatementSelection,
+  source: ReinstatementSource): LeagueMutationPlan {
+  if (source.playerId !== selection.playerId || source.reference !== selection.sourceReference
+    || source.teamRoleId !== selection.teamRoleId || selection.returnStatus !== 'Player'
+    || selection.preserveFutureSanction !== true)
+    throw new LeagueMutationValidationError('The selected player, original action or return decision changed. Review a fresh preview.');
+  if (snapshot.rosters.some(row => row.discordId === selection.playerId))
+    throw new LeagueMutationValidationError('This player is already rostered. Review the current assignment; no reinstatement is needed.');
+  const name = currentNameRow(snapshot, selection.playerId);
+  if (name.franchise || name.leagueStatus !== source.resultingStatus || name.division !== source.division)
+    throw new LeagueMutationValidationError('The original exit no longer matches this player’s recorded status. Ask staff to reconcile the history first.');
+  const team = requireTeam(snapshot, selection.teamRoleId);
+  if (team.franchise !== source.franchise || team.division !== source.division)
+    throw new LeagueMutationValidationError('The original team changed. Ask staff to review the team configuration first.');
+  if (teamAreaUsesName(snapshot, team.teamRoleId, name.currentLeagueName))
+    throw new LeagueMutationValidationError('Another player already uses this name in the destination roster. Resolve the identity conflict first.');
+  const member = snapshot.discordMembers.find(row => row.discordId === selection.playerId);
+  const managed = new Set([snapshot.freeAgentRoleId, ...snapshot.teams.filter(t => t.active).flatMap(t => [t.teamRoleId, t.divisionRoleId])]);
+  const before = (member?.roleIds ?? []).filter(id => managed.has(id)).sort();
+  if (snapshot.teams.some(t => t.active && before.includes(t.teamRoleId)))
+    throw new LeagueMutationValidationError('This player already has a team role without a roster assignment. Reconcile the records first.');
+  if (member && member.displayName.trim() !== name.currentLeagueName)
+    throw new LeagueMutationValidationError('The player’s Discord name and recorded league name differ. Use the name repair tools first.');
+  const advisories = [{ id: 'timing', text: '24-hour reference window: exact elapsed time unavailable. Official Sheet dates do not provide clock times; staff decide whether to approve.' }];
+  const count = snapshot.rosters.filter(row => row.teamRoleId === team.teamRoleId).length;
+  if (count >= 7) advisories.push({ id: 'roster-count', text: `Roster count: ${count}/7 before return. Staff may approve a policy exception; the public block still needs an empty owned cell.` });
+  if (/suspend|ban|self-drop/i.test(name.leagueStatus)) advisories.push({ id: 'discipline', text: `Restore current-season Player status despite ${name.leagueStatus}. The original sanction and any next-season penalty remain recorded and are not waived.` });
+  const blockers = member ? [] : ['This player is absent from Discord. Ask them to rejoin, then request a fresh preview. Rat cannot safely save a roster return with roles still pending.'];
+  const nextRow = Math.max(5, ...snapshot.rosters.map(row => row.sheetRow)) + 1;
+  return { kind: 'reinstatement', rosters: [...snapshot.rosters.map(row => ({ ...row })), {
+    sheetRow: nextRow, division: team.division, franchise: team.franchise, teamRoleId: team.teamRoleId,
+    team: team.teamRole, discordId: selection.playerId, player: name.currentLeagueName, rosterStatus: 'Player',
+  }], nameUpdates: snapshot.names.map(row => row.sheetRow === name.sheetRow ? { ...row, franchise: team.franchise, leagueStatus: 'Player' } : { ...row }),
+    publicChanges: [
+      ...(name.leagueStatus === 'Free Agent' ? [{ division: name.division, area: 'free-agent' as const, group: 'Free Agents', from: name.currentLeagueName, to: '' }] : []),
+      { division: team.division, area: 'team', group: team.franchise, from: '', to: name.currentLeagueName },
+    ], discordRoleChanges: member ? [{ discordId: selection.playerId,
+      remove: before.filter(id => id !== team.teamRoleId && id !== team.divisionRoleId),
+      add: [team.teamRoleId, team.divisionRoleId].filter(id => !before.includes(id)) }] : [],
+    teams: [team], players: [name.currentLeagueName], playerIds: [selection.playerId],
+    reinstatement: { selection, source, currentStatus: name.leagueStatus, advisories, blockers, beforeManagedRoleIds: before },
+  };
 }

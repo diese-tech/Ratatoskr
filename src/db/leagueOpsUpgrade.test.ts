@@ -79,3 +79,26 @@ test('migration 34 adds replacement linkage without changing prior jobs, preview
     assert.equal((db.prepare('SELECT count(*) n FROM schema_migrations WHERE id=34').get() as { n: number }).n, 1);
   } finally { db.close(); }
 });
+
+
+test('migration 37 preserves original transaction payloads, timestamps and recovery state, and enforces one compensating event per source', () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec('CREATE TABLE schema_migrations(id INTEGER PRIMARY KEY,name TEXT NOT NULL)');
+    for (const migration of migrations.filter(m => m.id < 37)) {
+      db.exec(migration.sql); db.prepare('INSERT INTO schema_migrations VALUES(?,?)').run(migration.id, migration.name);
+    }
+    db.prepare("INSERT INTO league_transactions(reference,guild_id,kind,actor_user_id,payload_json,status,created_at,updated_at,announcement_id,reconciliation_alerted_at) VALUES('original','g','departure','actor','{\"original\":true}','completed','original-created','original-updated','post','original-alert')").run();
+    db.prepare("INSERT INTO league_transactions(reference,guild_id,kind,actor_user_id,payload_json,status,error_message) VALUES('partial','g','self-drop','actor','{}','reconciliation_required','do not replay')").run();
+    const before = db.prepare('SELECT * FROM league_transactions ORDER BY reference').all();
+    runMigrations(db); runMigrations(db);
+    assert.deepEqual(db.prepare('SELECT * FROM league_transactions ORDER BY reference').all(), before);
+    const insert = db.prepare("INSERT INTO league_transactions(reference,guild_id,kind,actor_user_id,payload_json,status) VALUES(?,'g','reinstatement','staff',?,'applying_discord')");
+    const payload = JSON.stringify({ plan: { reinstatement: { source: { reference: 'original' } } } });
+    insert.run('return', payload);
+    assert.throws(() => insert.run('duplicate', payload), /UNIQUE/);
+    db.prepare("UPDATE league_transactions SET status='failed' WHERE reference='return'").run();
+    insert.run('new-approved-attempt', payload);
+    assert.equal((db.prepare('SELECT count(*) n FROM league_reinstatement_reviews').get() as { n: number }).n, 0);
+  } finally { db.close(); }
+});

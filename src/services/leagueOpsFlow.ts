@@ -179,7 +179,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     const items = data.snapshot.operations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
     return view({}, container({ color: 0x2f6844 }, text({ title: 'League tools · Saved actions' }, `${data.snapshot.operations.length} unfinished actions. Open one to check progress or review a problem.`),
       ...items.flatMap(operation => [text(`${operation.reference} · ${leagueActionLabel(operation.type)} · ${leagueStatusLabel(operation.status)}`), row({}, kit.Button({ label: 'View action', disabled: data.busy, onClick: e => {
-        e.mutate(d => { d.selectedOperation = { ...operation, targets: [...operation.targets] }; d.notice = ''; }); e.ui.go('operation');
+        e.mutate(d => { d.selectedOperation = { ...operation, targets: [...operation.targets], historyDetails: operation.historyDetails ? [...operation.historyDetails] : undefined, linkedReferences: operation.linkedReferences ? [...operation.linkedReferences] : undefined }; d.notice = ''; }); e.ui.go('operation');
       } }))]), text(data.notice || 'Nothing changes until you confirm.'), row({}, kit.Button({ label: 'Previous', secondary: true, disabled: page === 0, onClick: e => e.mutate(d => { d.page = Math.max(0, d.page - 1); }) }),
         kit.Button({ label: 'Next', secondary: true, disabled: (page + 1) * PAGE_SIZE >= data.snapshot.operations.length, onClick: e => e.mutate(d => { d.page++; }) })),
       row({}, kit.Button({ label: 'Find by reference', disabled: data.busy, secondary: true, onClick: findOperation })), navigation(kit)));
@@ -196,7 +196,10 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     return view({}, container({ color: 0x2f6844 }, text({ title: 'League tools · Saved action' }, op ?
       [`Reference: ${op.reference}`, `Action: ${leagueActionLabel(op.action)}`, `Status: ${leagueStatusLabel(op.status)}`,
         `Requested: ${leagueEasternTime(op.createdAt)}; requested by: ${op.actor}`, `Affected players or teams: ${op.targets.join('; ') || 'See the saved problem'}`,
-        `What happened: ${savedLeagueErrorMessage(op.error)}`, `What to do: ${op.next}`].map(line => leagueOpsText(line, 1700)).join('\n') : 'Choose a saved action.'),
+        ...(op.historyDetails ?? []), `What happened: ${savedLeagueErrorMessage(op.error)}`, `What to do: ${op.next}`].map(line => leagueOpsText(line, 1700)).join('\n') : 'Choose a saved action.'),
+      ...(op?.linkedReferences ?? []).map(reference => row({}, kit.Button({ label: 'View linked action', secondary: true, disabled: data.busy, onClick: event => {
+        run(event, async () => ({ selectedOperation: await service.operationDetail(event.actorId, reference), notice: 'Linked history loaded.' }), true);
+      } }))),
       row({}, kit.Button({ label: 'Preview player change', disabled: !!data.queued || !op?.canRepreview, onClick: repreview }),
         kit.Button({ label: 'Check unfinished changes', disabled: !!data.queued || !op?.canRecover, secondary: true, onClick: recoveryPreview })), text(data.notice || 'Nothing changes until you confirm.'), navigation(kit)));
   });

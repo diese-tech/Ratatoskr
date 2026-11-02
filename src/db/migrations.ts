@@ -937,4 +937,48 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 37,
+    name: 'staff_reinstatement_reviews',
+    sql: `
+      CREATE TABLE league_transactions_v37 (
+        reference TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('trade', 'drop', 'pickup', 'rename', 'departure', 'self-drop', 'reinstatement')),
+        actor_user_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'applying_discord', 'applying_sheets', 'announcement_pending', 'completed', 'failed', 'reconciliation_required'
+        )),
+        announcement_id TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        reconciliation_alerted_at TEXT
+      );
+
+      INSERT INTO league_transactions_v37 (
+        reference, guild_id, kind, actor_user_id, payload_json, status,
+        announcement_id, error_message, created_at, updated_at, reconciliation_alerted_at
+      )
+      SELECT
+        reference, guild_id, kind, actor_user_id, payload_json, status,
+        announcement_id, error_message, created_at, updated_at, reconciliation_alerted_at
+      FROM league_transactions;
+
+      DROP TABLE league_transactions;
+      ALTER TABLE league_transactions_v37 RENAME TO league_transactions;
+      CREATE INDEX idx_league_transactions_guild_status
+        ON league_transactions (guild_id, status, created_at);
+
+      CREATE UNIQUE INDEX league_reinstatement_source ON league_transactions
+        (guild_id, json_extract(payload_json, '$.plan.reinstatement.source.reference'))
+        WHERE kind='reinstatement' AND status <> 'failed';
+      CREATE TABLE league_reinstatement_reviews (
+        token TEXT PRIMARY KEY, guild_id TEXT NOT NULL, actor_user_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL, expires_at TEXT NOT NULL,
+        cancelled INTEGER NOT NULL DEFAULT 0, job_reference TEXT
+      );
+    `,
+  },
 ];

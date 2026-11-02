@@ -2,7 +2,7 @@
 export function leagueActionLabel(action: string): string {
   const labels: Record<string, string> = {
     transaction: 'Player change', repair: 'Roster fix', 'account-replacement': 'Discord account change',
-    trade: 'Trade', drop: 'Drop', 'self-drop': 'Self-drop', pickup: 'Pickup', rename: 'Name change', departure: 'Departure',
+    reinstate: 'Reinstatement', reinstatement: 'Reinstatement', trade: 'Trade', drop: 'Drop', 'self-drop': 'Self-drop', pickup: 'Pickup', rename: 'Name change', departure: 'Departure',
     'use-discord-name': 'Use Discord name', 'use-league-name': 'Use league name', 'use-roster-name': 'Use roster name',
     'repair-roles': 'Fix Discord roles', 'sync-public-roster': 'Update public roster', 'mark-inactive': 'Mark player inactive',
     audit: 'Check rosters', panel: 'Update league message', heartbeat: 'Update league message',

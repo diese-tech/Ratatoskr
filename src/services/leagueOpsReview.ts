@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { escapeMarkdown } from 'discord.js';
 import { completedLeagueTransactionSuccessor, getLeagueJob, getLeagueJobByDedupe, listUnfinishedLeagueMutationJobs, type LeagueJob } from '../db/repositories/leagueJobs.js';
-import { getLeagueTransaction } from '../db/repositories/leagueOperations.js';
+import { getLeagueTransaction, listLeagueTransactions } from '../db/repositories/leagueOperations.js';
 import { getLeagueAuditRepair, getLeagueRepairResolution, listIncompleteLeagueAuditRepairs } from '../db/repositories/leagueAuditRepairs.js';
 import { getAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
 import { getVerifiedLeagueMember, listLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
@@ -31,7 +31,7 @@ export function leagueOpsRepairAction(finding: string): LeagueAuditResolutionAct
 export type ReviewAccountReplacementPreview = AccountReplacementPreview & { roleLabels?: Record<string, string> };
 export type LeagueOpsIssue = { key: string; finding: string; oldDiscordId?: string };
 export type LeagueOpsOperation = { reference: string; type: string; status: string; action: string; targets: string[];
-  actor: string; createdAt: string; attempts: number; error: string; next: string; canRepreview: boolean; canRecover: boolean };
+  actor: string; createdAt: string; attempts: number; error: string; next: string; canRepreview: boolean; canRecover: boolean; historyDetails?: string[]; linkedReferences?: string[] };
 export type LeagueOpsSnapshot = { issues: LeagueOpsIssue[]; operations: LeagueOpsOperation[]; checkDetails?: string[]; draftNeedsAttention?: boolean };
 export type ReviewTransactionPreview = { originalReference: string; selections: string; fingerprint: string; approval: string; plan: LeagueMutationPlan };
 export type ReviewRepairPreview = { issueKey: string; finding: string; action: LeagueAuditResolutionAction; fingerprint: string; approvalReference: string; description: string };
@@ -40,6 +40,7 @@ export type ReviewRecoveryPreview = { reference: string; type: 'repair' | 'accou
 export class LeagueOpsReviewService {
   constructor(private readonly input: { db: Database.Database; guildId: string; scope: object; worker: LeagueJobWorker;
     replacement: LeagueAccountReplacementService; authorize(actor: string): Promise<string>;
+    readTransactionHistory?(): Promise<(string | number | boolean | null)[][]>;
     roleLabel?(id: string): string;
     previewTransaction(selections: string): Promise<LeagueMutationPlan>;
     previewRepair(finding: string, action: LeagueAuditResolutionAction): Promise<{ fingerprint: string; description: string }> }) {}
@@ -110,13 +111,45 @@ export class LeagueOpsReviewService {
       next: reconciled ? 'Checked against the latest records and closed. The original change was not run again.' : repair.status === 'completed' ? 'Finished. The history is kept for review.'
         : 'Check that Discord and the sheets agree, then review the saved names and history before closing this action. The old change will not run again.' };
   }
+  private legacyTransaction(reference: string): LeagueOpsOperation | undefined {
+    const transaction = getLeagueTransaction(this.input.db, reference);
+    if (!transaction || transaction.guildId !== this.input.guildId) return;
+    const plan = (transaction.payload as { plan?: LeagueMutationPlan }).plan;
+    const timing = this.input.db.prepare('SELECT created_at FROM league_transactions WHERE reference=?').get(reference) as { created_at: string };
+    return { reference, type: 'transaction', action: transaction.kind, status: transaction.status === 'completed' ? 'COMPLETED' : transaction.status.toUpperCase(),
+      targets: plan?.players ?? [], actor: transaction.actorUserId, createdAt: timing.created_at, attempts: 0,
+      error: transaction.errorMessage ?? 'No saved error.', canRepreview: false, canRecover: false,
+      next: transaction.status === 'completed' ? 'Finished. The original history is preserved.' : 'Inspect this saved action and its records with staff. Do not repeat it.' };
+  }
+  private async linkedHistory(detail: LeagueOpsOperation): Promise<LeagueOpsOperation> {
+    const { db, guildId } = this.input;
+    const transaction = getLeagueTransaction(db, detail.reference);
+    if (!transaction || transaction.guildId !== guildId) return detail;
+    const plan = (transaction.payload as { plan?: LeagueMutationPlan }).plan;
+    const source = plan?.reinstatement?.source;
+    const returns = listLeagueTransactions(db, guildId).filter(item =>
+      (item.payload as { plan?: LeagueMutationPlan }).plan?.reinstatement?.source.reference === detail.reference);
+    if (!source && !returns.length) return detail;
+    const rows = await this.input.readTransactionHistory?.();
+    const matches = rows?.filter(row => String(row[0]) === detail.reference && String(row[6]) === plan?.playerIds[0]);
+    const date = matches?.length === 1 ? String(matches[0]![2]) : 'Unavailable — check Transaction History before relying on the date';
+    return { ...detail, action: transaction.kind, targets: plan?.players ?? detail.targets, historyDetails: [
+      `Official Sheet effective date: ${date}`,
+      ...(source ? [`Original ${source.kind}: ${source.reference}; official Sheet date at approval: ${source.effectiveDate}; processed by ${source.processedBy}.`,
+        `${source.franchise} → ${source.resultingStatus}; reinstatement destination: ${plan!.teams[0]!.franchise}.`,
+        `Approved staff advisories: ${plan!.reinstatement!.selection.overrides.join(', ')}. Next-season penalties were not waived.`,
+        ...(plan!.reinstatement!.selection.reason ? [`Staff reason: ${plan!.reinstatement!.selection.reason}`] : [])] : []),
+      ...returns.map(item => `Linked reinstatement: ${item.reference}; ${item.status === 'completed' ? 'Completed' : 'not completed; inspect saved action'}.`),
+      'Exact elapsed time unavailable. Requested/completed times are separate from the official Sheet date.',
+    ], linkedReferences: [...(source ? [source.reference] : []), ...returns.map(item => item.reference)] };
+  }
   async operationDetail(actor: string, reference: string): Promise<LeagueOpsOperation> {
     await this.authorize(actor);
     const job = getLeagueJob(this.input.db, reference);
     const detail = job?.guildId === this.input.guildId && ['transaction', 'repair', 'account-replacement'].includes(job.type)
-      ? this.operation(job) : this.legacyRepair(reference);
+      ? this.operation(job) : this.legacyRepair(reference) ?? this.legacyTransaction(reference);
     if (!detail) throw new LeagueMutationValidationError('This saved action was not found in this server. Check its reference.');
-    return detail;
+    return this.linkedHistory(detail);
   }
   async snapshot(actor: string): Promise<LeagueOpsSnapshot> {
     await this.authorize(actor);

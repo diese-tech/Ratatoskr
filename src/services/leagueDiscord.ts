@@ -7,7 +7,7 @@ import {
   type GuildMember,
   type GuildTextBasedChannel,
 } from 'discord.js';
-import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange, type DiscordNicknameChange } from '../domain/leagueOperations.js';
+import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange, type DiscordNicknameChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import type { AccountReplacementMember, AccountReplacementRoleChange } from '../domain/leagueAccountReplacement.js';
 import type { LeagueAnnouncement, LeagueDiscordPort, LeagueRoleState } from './leagueTransactions.js';
 import { readLeagueMembers, type LeagueMemberReadOptions, type MemberReadClock } from './leagueMemberReads.js';
@@ -25,6 +25,13 @@ function roleSnapshot(member: GuildMember): DiscordLeagueMember {
 }
 
 function assertMemberRoleState(member: GuildMember, expected: LeagueRoleState): void {
+  if (expected.observedManagedRoleIds) {
+    const managed = new Set([...expected.configuredTeamRoleIds, ...expected.configuredDivisionRoleIds, expected.freeAgentRoleId]);
+    const actual = [...member.roles.cache.keys()].filter(id => managed.has(id)).sort();
+    if (JSON.stringify(actual) !== JSON.stringify([...expected.observedManagedRoleIds].sort()))
+      throw new LeagueMutationValidationError('This player’s managed roles changed. Review a fresh reinstatement preview.');
+    return;
+  }
   const assignedTeamRoles = expected.configuredTeamRoleIds.filter((roleId) => member.roles.cache.has(roleId));
   const teamRolesMatch = expected.expectedTeamRoleId
     ? assignedTeamRoles.length === 1 && assignedTeamRoles[0] === expected.expectedTeamRoleId
@@ -120,6 +127,18 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     }
   }
 
+  async validateReinstatementRoles(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void> {
+    const member = await this.getAccountReplacementMember(plan.playerIds[0]!);
+    if (!member || member.bot) throw new LeagueMutationValidationError('The returning player must be a current human member of this server. Ask them to rejoin, then preview again.');
+    const change = plan.discordRoleChanges[0]!;
+    const before = plan.reinstatement!.beforeManagedRoleIds;
+    const after = [plan.teams[0]!.teamRoleId, plan.teams[0]!.divisionRoleId].sort();
+    const managedRoleIds = [...new Set([snapshot.freeAgentRoleId, ...snapshot.teams.filter(t => t.active).flatMap(t => [t.teamRoleId, t.divisionRoleId])])];
+    if (JSON.stringify(member.roleIds.filter(id => managedRoleIds.includes(id)).sort()) !== JSON.stringify(before))
+      throw new LeagueMutationValidationError('The returning player’s roles changed. Review a fresh preview.');
+    await this.assertAccountReplacementRoleOwnership([{ ...change, before, after, managedRoleIds }]);
+  }
+
   async getMembers(options: LeagueMemberReadOptions = {}): Promise<DiscordLeagueMember[]> {
     return (await readLeagueMembers(this.guild, options, this.memberReadOptions))
       .map(({ guildId: _guildId, bot: _bot, ...member }) => member);
@@ -210,8 +229,13 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
       );
     }
     try {
-      if (change.remove.length) await member.roles.remove(change.remove, 'Ratatoskr approved league transaction');
-      if (change.add.length) await member.roles.add(change.add, 'Ratatoskr approved league transaction');
+      if (before.observedManagedRoleIds) {
+        for (const role of change.remove) await member.roles.remove(role, 'Ratatoskr approved league transaction');
+        for (const role of change.add) await member.roles.add(role, 'Ratatoskr approved league transaction');
+      } else {
+        if (change.remove.length) await member.roles.remove(change.remove, 'Ratatoskr approved league transaction');
+        if (change.add.length) await member.roles.add(change.add, 'Ratatoskr approved league transaction');
+      }
       const verified = await fetchFreshMember(this.guild, change.discordId);
       assertMemberRoleState(verified, after);
     } catch (error) {
@@ -260,8 +284,13 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
         `Discord roles changed before Ratatoskr could roll back ${change.discordId}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    if (change.add.length) await member.roles.remove(change.add, 'Ratatoskr transaction rollback');
-    if (change.remove.length) await member.roles.add(change.remove, 'Ratatoskr transaction rollback');
+    if (expected.observedManagedRoleIds) {
+      for (const role of change.add) await member.roles.remove(role, 'Ratatoskr transaction rollback');
+      for (const role of change.remove) await member.roles.add(role, 'Ratatoskr transaction rollback');
+    } else {
+      if (change.add.length) await member.roles.remove(change.add, 'Ratatoskr transaction rollback');
+      if (change.remove.length) await member.roles.add(change.remove, 'Ratatoskr transaction rollback');
+    }
     const verified = await fetchFreshMember(this.guild, change.discordId);
     try {
       assertMemberRoleState(verified, expected);

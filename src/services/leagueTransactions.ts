@@ -5,6 +5,7 @@ import { auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameC
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
   createLeagueTransaction,
+  getLeagueTransaction,
   createOrGetLeagueReconciliationTicket,
   getLeagueReconciliationTicket,
   listInterruptedLeagueTransactions,
@@ -48,6 +49,7 @@ export type LeagueRoleState = {
   freeAgentRoleId: string;
   expectsFreeAgent: boolean;
   divisionRoleId: string;
+  observedManagedRoleIds?: string[];
 };
 
 export interface LeagueSheetsPort {
@@ -64,6 +66,7 @@ export interface LeagueSheetsPort {
 }
 
 export interface LeagueDiscordPort {
+  validateReinstatementRoles?(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void>;
   getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
   validateMemberAbsent(discordId: string, presentRemedy?: 'drop' | 'self-drop'): Promise<void>;
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
@@ -85,11 +88,13 @@ type ExecuteLeagueTransactionInput = {
   guildId: string;
   actorUserId: string;
   actorName: string;
+  approvedAt?: string;
   freeAgentRoleId: string;
   now: Date;
   sheets: LeagueSheetsPort;
   discord: LeagueDiscordPort;
-  buildPlan(snapshot: LeagueSnapshot): LeagueMutationPlan;
+  buildPlan(snapshot: LeagueSnapshot, loaded: LoadedLeagueSnapshot): LeagueMutationPlan | Promise<LeagueMutationPlan>;
+  authorizeBeforeWrite?(): Promise<void>;
   expectedPlanFingerprint?: string;
   jobReference?: string;
   onPhase?(phase: 'VALIDATING' | 'APPLYING' | 'VERIFYING'): void;
@@ -105,7 +110,7 @@ export function leagueTransactionPlanFingerprint(plan: LeagueMutationPlan): stri
   return createHash('sha256').update(JSON.stringify(plan)).digest('hex');
 }
 
-function dateInLeagueTimezone(now: Date): string {
+export function dateInLeagueTimezone(now: Date): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(now);
@@ -178,6 +183,10 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
     }
     const assignedTeamRoles = member.roleIds.filter((roleId) => teamsByRole.has(roleId));
     const roster = rosterRows[0];
+    if (plan.kind === 'reinstatement') {
+      if (roster || assignedTeamRoles.length) throw new LeagueMutationValidationError('The player already has a roster or team role. Reconcile the current assignment first.');
+      continue;
+    }
     if (roster) {
       const expectedTeam = teamsByRole.get(roster.teamRoleId);
       if (!expectedTeam) throw new Error(`Discord member ${discordId} is rostered to an inactive or unknown team.`);
@@ -254,7 +263,7 @@ function expectedRoleState(
   };
 }
 
-export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: string): LeagueAnnouncement | undefined {
+export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: string, effectiveDate?: string): LeagueAnnouncement | undefined {
   const mention = (roleId: string) => `<@&${roleId}>`;
   // Embed user mentions only resolve for members the viewer's client has cached (mobile often has not).
   // Mentioning present players in content ships their user objects with the message (no ping:
@@ -288,7 +297,8 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
     ? ` ${mention(team.teamRoleId)} picks up ${player(1)} in their place.`
     : '';
   let line: string;
-  if (plan.kind === 'departure') line = `${player(0)} leaves ${mention(team.teamRoleId)} and the YSL server.${replacement}`;
+  if (plan.kind === 'reinstatement') line = `${player(0)} returns to ${mention(team.teamRoleId)}.\n\nOfficial league date: ${effectiveDate ?? plan.reinstatement!.selection.effectiveDate}.`;
+  else if (plan.kind === 'departure') line = `${player(0)} leaves ${mention(team.teamRoleId)} and the YSL server.${replacement}`;
   else if (plan.kind === 'self-drop') line = `${player(0)} self-drops from ${mention(team.teamRoleId)}.${replacement}`;
   else if (plan.kind === 'drop' && plan.playerIds[1]) {
     line = `${mention(team.teamRoleId)} drops ${player(0)} into free agency and picks up ${player(1)}.`;
@@ -334,6 +344,14 @@ async function rollbackDiscord(
 export async function executeLeagueTransaction(input: ExecuteLeagueTransactionInput): Promise<{ reference: string; announcementId?: string }> {
   const release = await acquireLeagueTransaction(input.operationScope, input.guildId);
   try {
+    if (input.jobReference) {
+      const previous = getLeagueTransaction(input.db, input.jobReference);
+      if (previous) {
+        if (previous.guildId === input.guildId && previous.status === 'completed')
+          return { reference: previous.reference, announcementId: previous.announcementId ?? undefined };
+        throw errorWithReference(new Error('This saved action already started. Inspect its recovery status; do not replay it.'), input.jobReference);
+      }
+    }
     assertNoUnresolvedAccountReplacement(input.db, input.guildId);
     const members = input.discord.getMembers ? await input.discord.getMembers() : [];
     const auditDate = dateInLeagueTimezone(input.now);
@@ -344,7 +362,15 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       throw openReconciliationTicket(input, auditDate, error);
     }
     input.onPhase?.('VALIDATING');
-    const plan = input.buildPlan(loaded.snapshot);
+    const plan = await input.buildPlan(loaded.snapshot, loaded);
+    if (plan.reinstatement) {
+      const details = plan.reinstatement;
+      if (details.blockers.length) throw new LeagueMutationValidationError(details.blockers.join(' '));
+      if (details.selection.effectiveDate !== auditDate) throw new LeagueMutationValidationError('The league date changed after preview. Review a new reinstatement preview before approving.');
+      if (details.advisories.some(item => !details.selection.overrides.includes(item.id))
+        || details.selection.overrides.some(id => !details.advisories.some(item => item.id === id)))
+        throw new LeagueMutationValidationError('Choose each listed staff advisory you approve, then confirm the reviewed exceptions.');
+    }
     if (input.expectedPlanFingerprint && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {
       throw new LeagueTransactionPreviewChangedError(plan);
     }
@@ -353,7 +379,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     const issues = humanizeLeagueAuditIssues(
       loaded.snapshot,
       auditLeagueRoster(loaded.snapshot,
-        plan.kind === 'departure' || plan.kind === 'self-drop'
+        plan.kind === 'reinstatement' ? { allowReinstatementMemberId: plan.playerIds[0] }
+          : plan.kind === 'departure' || plan.kind === 'self-drop'
           ? { allowAbsentRosterMemberId: plan.playerIds[0] }
           : plan.kind === 'rename'
             ? { allowDiscordNameRepairMemberId: plan.playerIds[0] }
@@ -367,7 +394,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         new Error(`League audit failed. ${issues.slice(0, 5).join(' ')}`),
       );
     }
-    const auditPassDeferredUntilMutation = plan.kind === 'rename' || outgoingPlayerIsAbsent;
+    const auditPassDeferredUntilMutation = plan.kind === 'rename' || plan.kind === 'reinstatement' || outgoingPlayerIsAbsent;
     if (!auditPassDeferredUntilMutation) {
       recordLeagueAudit(input.db, { guildId: input.guildId, auditDate, status: 'passed', issues: [] });
     }
@@ -394,6 +421,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       discordId,
       expectedRoleState(loaded.snapshot, loaded.snapshot.rosters, loaded.snapshot.names, discordId),
     ]));
+    if (plan.reinstatement) beforeByPlayer.get(plan.playerIds[0]!)!.observedManagedRoleIds = plan.reinstatement.beforeManagedRoleIds;
     const afterByPlayer = new Map(roleValidationPlayerIds.map((discordId) => [
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
@@ -404,6 +432,15 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       }
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
+    }
+    if (plan.reinstatement) {
+      if (!input.discord.validateReinstatementRoles) throw new LeagueMutationValidationError('Managed role verification is unavailable. Ask staff to check the bot.');
+      await input.discord.validateReinstatementRoles(plan, loaded.snapshot);
+      await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+      await input.authorizeBeforeWrite?.();
+      const freshPlan = await input.buildPlan(loaded.snapshot, loaded);
+      if (leagueTransactionPlanFingerprint(freshPlan) !== leagueTransactionPlanFingerprint(plan))
+        throw new LeagueTransactionPreviewChangedError(freshPlan);
     }
     const nickname = plan.discordNicknameChange;
     if (nickname) {
@@ -423,7 +460,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
 
     const reference = input.jobReference ?? `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const record: LeagueTransactionRecord = {
-      reference, effectiveDate: auditDate, processedById: input.actorUserId, processedBy: input.actorName,
+      reference, effectiveDate: plan.reinstatement?.selection.effectiveDate ?? auditDate, processedById: input.actorUserId, processedBy: input.actorName,
+      ...(plan.reinstatement ? { approvedAt: input.approvedAt, processedAt: input.now.toISOString(), approvalNote: `Reinstates ${plan.reinstatement.source.reference}; approved by ${input.actorUserId}; future sanction preserved` } : {}),
     };
     createLeagueTransaction(input.db, {
       reference, guildId: input.guildId, kind: plan.kind, actorUserId: input.actorUserId,
@@ -491,7 +529,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
 
     input.onPhase?.('VERIFYING');
     transitionLeagueTransaction(input.db, reference, 'applying_sheets', 'announcement_pending');
-    const announcement = buildLeagueAnnouncement(plan, input.actorName);
+    const announcement = buildLeagueAnnouncement(plan, input.actorName, record.effectiveDate);
     let announcementId: string | undefined;
     if (announcement) {
       try {
@@ -570,7 +608,7 @@ export async function reconcilePendingLeagueTransactions(input: {
     try {
       const { plan, record } = pendingPayload(transaction.payload);
       let announcementId = transaction.announcementId ?? undefined;
-      const announcement = buildLeagueAnnouncement(plan, record.processedBy);
+      const announcement = buildLeagueAnnouncement(plan, record.processedBy, record.effectiveDate);
       if (announcement && !announcementId) {
         announcementId = await input.discord.findAnnouncement(transaction.reference)
           ?? await input.discord.announce(announcement, transaction.reference);
