@@ -93,6 +93,9 @@ export function reinstatementPreviewText(plan: LeagueMutationPlan): string {
     '**Reinstatement preview**',
     `${plan.players[0]} · Discord ID: ${plan.playerIds[0]}`,
     `Historical team: ${source.franchise} (${source.division}) · Current status: ${details.currentStatus}`,
+    ...(details.nicknameRestore ? ['', '**Name**',
+      `Recorded league name: ${details.nicknameRestore.restoredName} · Current Discord name: ${details.nicknameRestore.currentDisplayName}`,
+      `The restored roster keeps ${details.nicknameRestore.restoredName}. Rat will change their server nickname back to ${details.nicknameRestore.restoredName} as part of this reinstatement.`] : []),
     '', '**Original transaction**',
     `${source.kind} · ${source.franchise} → ${source.resultingStatus}`,
     `Processed by ${source.processedBy} (${source.processedById}) · ${source.reference}`,
@@ -194,6 +197,11 @@ export class LeagueReinstatementService {
       if (!details.blockers.length) {
         if (!discord.validateReinstatementRoles) throw new Error('Role ownership verification is unavailable. Ask staff to check the bot.');
         await discord.validateReinstatementRoles(plan, loaded.snapshot);
+        // A targeted fresh member check, not a whole-guild read: can Rat restore the nickname?
+        if (plan.discordNicknameChange) {
+          if (!discord.validateNicknameChange) throw new Error('Nickname verification is unavailable. Ask staff to check the bot.');
+          await discord.validateNicknameChange(plan.discordNicknameChange);
+        }
       }
     } catch (error) {
       console.error('Reinstatement preview technical verification failed', error);

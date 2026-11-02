@@ -184,7 +184,7 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     if (member.user.bot || (willWrite && (!member.manageable || !bot.permissions.has(PermissionFlagsBits.ManageNicknames))))
       throw new LeagueMutationValidationError('Ratatoskr cannot change this player’s nickname. Check its Manage Nicknames permission and role hierarchy.');
     if (member.nickname !== change.before || member.displayName !== change.beforeDisplayName)
-      throw new LeagueMutationValidationError('This player’s Discord nickname or display name changed. Review a fresh rename preview.');
+      throw new LeagueMutationValidationError('This player’s Discord nickname or display name changed. Review a fresh preview.');
     return member;
   }
 

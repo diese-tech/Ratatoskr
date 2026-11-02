@@ -437,7 +437,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     if (plan.reinstatement) {
       if (!input.discord.validateReinstatementRoles) throw new LeagueMutationValidationError('Managed role verification is unavailable. Ask staff to check the bot.');
       await input.discord.validateReinstatementRoles(plan, loaded.snapshot);
-      await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+      // A planned nickname restore is checked against the exact approved before-state below.
+      if (!plan.discordNicknameChange) await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
       await input.authorizeBeforeWrite?.();
       const freshPlan = await input.buildPlan(loaded.snapshot, loaded);
       if (leagueTransactionPlanFingerprint(freshPlan) !== leagueTransactionPlanFingerprint(plan))
@@ -445,7 +446,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     }
     const nickname = plan.discordNicknameChange;
     if (nickname) {
-      if (plan.kind !== 'rename' || !input.discord.validateNicknameChange || !input.discord.applyNicknameChange
+      if ((plan.kind !== 'rename' && plan.kind !== 'reinstatement') || !input.discord.validateNicknameChange || !input.discord.applyNicknameChange
         || !input.discord.verifyNicknameChange || !input.discord.rollbackNicknameChange)
         throw new LeagueMutationValidationError('The approved nickname change cannot be executed safely. No changes were made.');
       await input.discord.validateNicknameChange(nickname);
