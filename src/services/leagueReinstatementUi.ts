@@ -7,7 +7,7 @@ import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from './leagueSh
 import { DiscordLeagueGateway } from './leagueDiscord.js';
 import { leagueJobWorkerFor } from './leagueJobWorker.js';
 import { LeagueReinstatementService, reinstatementPreviewText, type ReinstatementReview } from './leagueReinstatement.js';
-import { LeagueMutationValidationError } from '../domain/leagueOperations.js';
+import { reinstatementPolicyExceptions, LeagueMutationValidationError } from '../domain/leagueOperations.js';
 import { leagueStatusLabel } from './leaguePresentation.js';
 
 export function reinstatementReviewMessage(review: ReinstatementReview) {
@@ -28,16 +28,17 @@ export function reinstatementReviewMessage(review: ReinstatementReview) {
       allowedMentions: { parse: [] as never[] } };
   }
   const details = review.payload.plan.reinstatement!;
-  const exceptions = new StringSelectMenuBuilder().setCustomId(id('exceptions')).setPlaceholder('Choose each advisory or exception you approve')
-    .setMinValues(0).setMaxValues(details.advisories.length).addOptions(details.advisories.map(item => ({
-      label: item.id === 'timing' ? 'Approve timing advisory' : item.id === 'discipline' ? 'Override current-season suspension; keep future penalty' : 'Approve roster-count exception',
+  const policyExceptions = reinstatementPolicyExceptions(details);
+  const exceptions = policyExceptions.length ? new StringSelectMenuBuilder().setCustomId(id('exceptions')).setPlaceholder('Choose each policy exception you approve')
+    .setMinValues(0).setMaxValues(policyExceptions.length).addOptions(policyExceptions.map(item => ({
+      label: item.id === 'discipline' ? 'Override current-season suspension; keep future penalty' : 'Approve roster-count exception',
       value: item.id, default: details.selection.overrides.includes(item.id),
-    })));
+    }))) : undefined;
   return { content: '', embeds: [new EmbedBuilder().setDescription(reinstatementPreviewText(review.payload.plan)).setColor(details.blockers.length ? 0xb45435 : 0x466a65)],
-    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(exceptions),
+    components: [...(exceptions ? [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(exceptions)] : []),
       new ActionRowBuilder<ButtonBuilder>().addComponents(cancel,
         new ButtonBuilder().setCustomId(id('confirm')).setLabel('Confirm reinstatement').setStyle(ButtonStyle.Primary)
-          .setDisabled(!!details.blockers.length || details.advisories.some(item => !details.selection.overrides.includes(item.id))))],
+          .setDisabled(!!details.blockers.length || policyExceptions.some(item => !details.selection.overrides.includes(item.id))))],
     allowedMentions: { parse: [] as never[] } };
 }
 

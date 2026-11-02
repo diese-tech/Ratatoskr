@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { assertNoUnresolvedAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
-import { auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { reinstatementPolicyExceptions, auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
   createLeagueTransaction,
@@ -367,8 +367,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       const details = plan.reinstatement;
       if (details.blockers.length) throw new LeagueMutationValidationError(details.blockers.join(' '));
       if (details.selection.effectiveDate !== auditDate) throw new LeagueMutationValidationError('The league date changed after preview. Review a new reinstatement preview before approving.');
-      if (details.advisories.some(item => !details.selection.overrides.includes(item.id))
-        || details.selection.overrides.some(id => !details.advisories.some(item => item.id === id)))
+      if (reinstatementPolicyExceptions(details).some(item => !details.selection.overrides.includes(item.id))
+        || details.selection.overrides.some(id => id !== 'timing' && !reinstatementPolicyExceptions(details).some(item => item.id === id)))
         throw new LeagueMutationValidationError('Choose each listed staff advisory you approve, then confirm the reviewed exceptions.');
     }
     if (input.expectedPlanFingerprint && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {

@@ -46,6 +46,7 @@ export function buildLeagueIntentPlan(selections: string, snapshot: LeagueSnapsh
 const reinstateSchema = z.object({
   version: z.literal(1), kind: z.literal('reinstate'), playerId: z.string().min(1),
   sourceReference: z.string().min(1), teamRoleId: z.string().min(1), returnStatus: z.literal('Player'),
+  // Keep legacy timing markers readable; timing is never required for approval.
   effectiveDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), overrides: z.array(z.enum(['timing', 'discipline', 'roster-count'])),
   preserveFutureSanction: z.literal(true), reason: z.string().trim().max(300).optional(),
 }).strict();

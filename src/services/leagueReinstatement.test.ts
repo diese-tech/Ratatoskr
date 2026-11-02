@@ -79,7 +79,7 @@ for (const kind of ['departure', 'drop', 'self-drop'] as const) test(`${kind} is
     assert.equal(f.gateway.writes.length, 0); assert.equal(f.roleCalls, 0);
     const text = reinstatementPreviewText(view.payload.plan);
     assert.match(text, /FuegoMyEggo/); assert.match(text, /2026-10-31/); assert.match(text, /2026-11-02/); assert.doesNotMatch(text, /<t:|T00:00/);
-    await assert.rejects(f.service.confirm('staff', view.token), /Choose each/);
+    if (kind === 'self-drop') await assert.rejects(f.service.confirm('staff', view.token), /Choose each/);
     const approved = f.install(await f.service.exceptions('staff', view.token, view.payload.plan.reinstatement!.advisories.map(item => item.id)), view.token);
     const [job, duplicate] = await Promise.all([f.service.confirm('staff', approved.token), f.service.confirm('staff', approved.token)]);
     assert.equal(job.reference, duplicate.reference);
@@ -228,7 +228,7 @@ test('history retries reject conflicting reference rows rather than falsely comp
 });
 
 test('legacy intents remain supported; source identity, provenance, override and date changes participate in deterministic fingerprints', async () => {
-  const f = await fixture();
+  const f = await fixture('self-drop');
   try {
     const view = await f.approve(); assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') return;
     const selection = parseReinstatementSelection(view.payload.selections)!;
@@ -387,11 +387,80 @@ test('private previews translate unrelated member and role-configuration drift w
       const text = message.embeds[0]!.toJSON().description!;
       assert.ok(text.includes(blockers.split(' ').slice(0, 8).join(' ')));
       assert.doesNotMatch(text, /Discord member two|Role b is configured/);
-      assert.equal(message.components[1]!.components.at(-1)!.toJSON().disabled, true);
+      assert.equal(message.components.at(-1)!.components.at(-1)!.toJSON().disabled, true);
       await assert.rejects(f.service.confirm('staff', view.token));
       assert.equal(f.roleCalls, 0); assert.equal(f.gateway.writes.length, 0);
     } finally { f.close(); }
   }
   assert.match(JSON.stringify(diagnostics), /Discord member two is rostered without its team role/);
   assert.match(JSON.stringify(diagnostics), /Role b is configured as both a team role and a division role/);
+});
+
+
+test('timing alone never requires acknowledgement: date-only and >24h returns confirm and execute directly without an exception menu', async () => {
+  for (const kind of ['departure', 'drop'] as const) {
+    const f = await fixture(kind);
+    try {
+      const view = f.install(await f.service.open('staff', 'One'));
+      assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') continue;
+      assert.deepEqual(view.payload.plan.reinstatement!.advisories, []);
+      assert.deepEqual(view.payload.plan.reinstatement!.selection.overrides, []);
+      const message = reinstatementReviewMessage(view);
+      const controls = message.components.flatMap(row => row.components.map(control => control.toJSON()));
+      assert.equal(controls.some(control => control.type === 3), false);
+      assert.equal(controls.find(control => 'label' in control && control.label === 'Confirm reinstatement')!.disabled, false);
+      const text = message.embeds[0]!.toJSON().description!;
+      assert.match(text, /Original: 2026-10-31.*2026-11-02/);
+      assert.match(text, /informational only.*Exact elapsed time unavailable/);
+      assert.doesNotMatch(text, /Approve timing|\[Review\].*24-hour/);
+      const job = await f.service.confirm('staff', view.token);
+      const selection = parseReinstatementSelection((job.payload as { selections: string }).selections)!;
+      assert.deepEqual(selection.overrides, []);
+      await f.execute(job);
+      assert.equal(getLeagueTransaction(f.db, job.reference)!.status, 'completed');
+    } finally { f.close(); }
+  }
+});
+
+test('substantive suspension and roster-count exceptions still require explicit acknowledgement, independently of timing', async () => {
+  const f = await fixture('self-drop');
+  try {
+    const view = f.install(await f.service.open('staff', 'One'));
+    assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') return;
+    assert.deepEqual(view.payload.plan.reinstatement!.advisories.map(item => item.id), ['discipline']);
+    let message = reinstatementReviewMessage(view);
+    assert.equal(message.components.at(-1)!.components.at(-1)!.toJSON().disabled, true);
+    assert.deepEqual(message.components[0]!.toJSON().components.filter(control => control.type === 3).flatMap(control => control.options.map(option => option.value)), ['discipline']);
+    await assert.rejects(f.service.confirm('staff', view.token), /Choose each/);
+    await assert.rejects(f.service.exceptions('staff', view.token, ['timing']), /Choose only/);
+    const unapproved = f.serviceInput.enqueue({ selections: view.payload.selections, expectedPlanFingerprint: view.payload.fingerprint }, 'unapproved-policy');
+    await assert.rejects(f.execute(unapproved), /Choose each/);
+    const approved = f.install(await f.service.exceptions('staff', view.token, ['discipline']), view.token);
+    message = reinstatementReviewMessage(approved);
+    assert.equal(message.components.at(-1)!.components.at(-1)!.toJSON().disabled, false);
+    const plan = approved.payload.kind === 'preview' ? structuredClone(approved.payload.plan) : undefined;
+    assert.ok(plan);
+    plan.reinstatement!.advisories.push({ id: 'roster-count', text: 'Staff may approve the roster-count exception.' });
+    const rosterReview = { ...approved, payload: { ...approved.payload, kind: 'preview' as const, plan, selections: view.payload.selections, fingerprint: view.payload.fingerprint } };
+    assert.equal(reinstatementReviewMessage(rosterReview).components.at(-1)!.components.at(-1)!.toJSON().disabled, true);
+    plan.reinstatement!.selection.overrides.push('roster-count');
+    assert.equal(reinstatementReviewMessage(rosterReview).components.at(-1)!.components.at(-1)!.toJSON().disabled, false);
+    const job = await f.service.confirm('staff', approved.token);
+    await f.execute(job); assert.equal(getLeagueTransaction(f.db, job.reference)!.status, 'completed');
+  } finally { f.close(); }
+});
+
+test('legacy stored timing markers remain readable provenance and do not create a new required acknowledgement', async () => {
+  const f = await fixture();
+  try {
+    const view = f.install(await f.service.open('staff', 'One'));
+    assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') return;
+    const selection = { ...parseReinstatementSelection(view.payload.selections)!, overrides: ['timing'] };
+    const selections = JSON.stringify(selection);
+    const loaded = await f.sheets.load([...f.members.values()], 'fa');
+    const plan = await buildVerifiedTransactionIntent({ db: f.db, guildId: 'g', sheets: f.sheets, loaded, selections });
+    assert.deepEqual(plan.reinstatement!.advisories, []);
+    const job = f.serviceInput.enqueue({ selections, expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan) }, 'legacy-timing-marker');
+    await f.execute(job); assert.equal(getLeagueTransaction(f.db, job.reference)!.status, 'completed');
+  } finally { f.close(); }
 });

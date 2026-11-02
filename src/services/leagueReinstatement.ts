@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { saveLeagueTransactionPreview, getLeaguePreviewApproval, listLeagueTransactions, listLeagueMutationProblems, hasPendingLeagueDeliveries } from '../db/repositories/leagueOperations.js';
 import { getLeagueJob, type LeagueJob } from '../db/repositories/leagueJobs.js';
-import { auditLeagueRoster, LeagueMutationValidationError, type LeagueMutationPlan, type LeagueNameRow, type ReinstatementSource } from '../domain/leagueOperations.js';
+import { reinstatementPolicyExceptions, auditLeagueRoster, LeagueMutationValidationError, type LeagueMutationPlan, type LeagueNameRow, type ReinstatementSource } from '../domain/leagueOperations.js';
 import { buildLeagueIntentPlan, parseReinstatementSelection } from './leagueTransactionIntent.js';
 import { LeagueSheetDriftError, type LeagueSheetsService, type LoadedLeagueSnapshot, type LeagueTransactionRecord } from './leagueSheets.js';
 
@@ -99,14 +99,15 @@ export function reinstatementPreviewText(plan: LeagueMutationPlan): string {
     '', '**Timing — official Sheet dates**',
     `Original: ${source.effectiveDate} · Proposed reinstatement: ${details.selection.effectiveDate} (league date)`,
     ...(source.completedAt ? [`Separately verified job Completed: ${source.completedAt} (staff advisory only).`] : []),
-    'Exact elapsed time unavailable. No deadline prevents staff approval.',
+    '24-hour timing guidance is informational only. Exact elapsed time unavailable. No timing acknowledgement or override is required.',
     '', '**Proposed changes**',
     `${details.currentStatus} → Player · destination: ${plan.teams[0]!.franchise}`,
     roles ? `Discord roles: remove ${roles.remove.map(id => `<@&${id}>`).join(', ') || 'none'}; add ${roles.add.map(id => `<@&${id}>`).join(', ') || 'none'}.` : 'Discord roles: no changes can be made while the player is absent.',
     'Update Current Rosters, Player Name History and the public roster. Keep historical aliases and original draft ownership; top-four highlighting follows player identity.',
     `Append one new linked reinstatement; preserve ${source.reference} and its sanction. Next-season penalties are not waived.`,
-    '', '**Staff advisories — choose each exception you approve**',
-    ...details.advisories.map(item => `${details.selection.overrides.includes(item.id) ? '[Approved]' : '[Review]'} ${item.text}`),
+    '', '**Staff policy exceptions**',
+    ...(reinstatementPolicyExceptions(details).length ? [] : ['No policy exceptions require acknowledgement.']),
+    ...reinstatementPolicyExceptions(details).map(item => `${details.selection.overrides.includes(item.id) ? '[Approved]' : '[Review]'} ${item.text}`),
     ...(details.selection.reason ? [`Staff reason: ${details.selection.reason}`] : []),
     '', '**Technical status**',
     ...(details.blockers.length ? [...details.blockers.slice(0, 5), ...(details.blockers.length > 5 ? [`${details.blockers.length - 5} more roster problems need review in league tools.`] : [])] : ['Preview checks passed. Confirmation and the worker recheck identity, permissions, source history, roles and owned Sheet values.']),
@@ -210,7 +211,7 @@ export class LeagueReinstatementService {
   async exceptions(actor: string, token: string, overrides: string[]) {
     const { row, payload } = await this.stored(actor, token);
     if (row.job_reference || payload.kind !== 'preview') throw new LeagueMutationValidationError('Open a fresh preview before choosing exceptions.');
-    if (new Set(overrides).size !== overrides.length || overrides.some(id => !payload.plan.reinstatement!.advisories.some(item => item.id === id)))
+    if (new Set(overrides).size !== overrides.length || overrides.some(id => !reinstatementPolicyExceptions(payload.plan.reinstatement!).some(item => item.id === id)))
       throw new LeagueMutationValidationError('Choose only the advisories shown in this preview.');
     return this.preview(actor, { ...parseReinstatementSelection(payload.selections)!, overrides: [...overrides].sort() });
   }
@@ -225,7 +226,7 @@ export class LeagueReinstatementService {
     if (payload.kind !== 'preview') throw new LeagueMutationValidationError('Select an original action and review it before confirming.');
     const details = payload.plan.reinstatement!;
     if (details.blockers.length) throw new LeagueMutationValidationError(details.blockers.join(' '));
-    if (details.advisories.some(item => !details.selection.overrides.includes(item.id)))
+    if (reinstatementPolicyExceptions(details).some(item => !details.selection.overrides.includes(item.id)))
       throw new LeagueMutationValidationError('Choose each listed staff advisory you approve, then confirm.');
     const fresh = await this.preview(actor, details.selection);
     if (fresh.payload.kind !== 'preview' || fresh.payload.plan.reinstatement!.blockers.length || fresh.payload.fingerprint !== payload.fingerprint)

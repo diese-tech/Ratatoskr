@@ -659,7 +659,7 @@ export function buildReinstatementPlan(snapshot: LeagueSnapshot, selection: Rein
     throw new LeagueMutationValidationError('This player already has a team role without a roster assignment. Reconcile the records first.');
   if (member && member.displayName.trim() !== name.currentLeagueName)
     throw new LeagueMutationValidationError('The player’s Discord name and recorded league name differ. Use the name repair tools first.');
-  const advisories = [{ id: 'timing', text: '24-hour reference window: exact elapsed time unavailable. Official Sheet dates do not provide clock times; staff decide whether to approve.' }];
+  const advisories: ReinstatementDetails['advisories'] = [];
   const count = snapshot.rosters.filter(row => row.teamRoleId === team.teamRoleId).length;
   if (count >= 7) advisories.push({ id: 'roster-count', text: `Roster count: ${count}/7 before return. Staff may approve a policy exception; the public block still needs an empty owned cell.` });
   if (/suspend|ban|self-drop/i.test(name.leagueStatus)) advisories.push({ id: 'discipline', text: `Restore current-season Player status despite ${name.leagueStatus}. The original sanction and any next-season penalty remain recorded and are not waived.` });
@@ -678,4 +678,10 @@ export function buildReinstatementPlan(snapshot: LeagueSnapshot, selection: Rein
     teams: [team], players: [name.currentLeagueName], playerIds: [selection.playerId],
     reinstatement: { selection, source, currentStatus: name.leagueStatus, advisories, blockers, beforeManagedRoleIds: before },
   };
+}
+
+// Timing is informational. Older saved intents may retain a timing marker as
+// provenance, but it never becomes a required exception or a selectable override.
+export function reinstatementPolicyExceptions(details: Pick<ReinstatementDetails, 'advisories'>) {
+  return details.advisories.filter(item => item.id !== 'timing');
 }
