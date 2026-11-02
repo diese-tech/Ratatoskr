@@ -25,7 +25,7 @@ test('nickname writes force-check permission, hierarchy and exact before state',
   await assert.rejects(() => f.gateway.applyNicknameChange(f.change), /Manage Nicknames/);
   f.permissions.add(PermissionFlagsBits.ManageNicknames);
   f.setNickname('Changed by staff');
-  await assert.rejects(() => f.gateway.applyNicknameChange(f.change), /fresh rename preview/);
+  await assert.rejects(() => f.gateway.applyNicknameChange(f.change), /fresh preview/);
   f.setNickname(null); f.unmanageable();
   await assert.rejects(() => f.gateway.applyNicknameChange(f.change), /hierarchy/);
   assert.equal(f.writes, 0);
@@ -46,7 +46,7 @@ test('ambiguous nickname responses require reconciliation and rollback cannot ov
   await assert.rejects(() => f.gateway.applyNicknameChange(f.change), error => !!error && typeof error === 'object' && 'reconciliationRequired' in error);
   assert.equal(f.member.nickname, 'One Prime');
   f.setNickname('Later staff edit');
-  await assert.rejects(() => f.gateway.rollbackNicknameChange(f.change), /fresh rename preview/);
+  await assert.rejects(() => f.gateway.rollbackNicknameChange(f.change), /fresh preview/);
   assert.equal(f.member.nickname, 'Later staff edit');
   assert.equal(f.writes, 1);
 });

@@ -5,7 +5,7 @@ import { readLeagueMembers, LeagueMemberGatewayThrottleError, LeagueMemberSnapsh
 import { openDatabase } from '../db/client.js';
 import { createLeagueTransaction, getLeagueTransaction, listLeagueTransactions } from '../db/repositories/leagueOperations.js';
 import { enqueueLeagueJob, getLeagueJob, recoverLeagueJobs, transitionLeagueJob } from '../db/repositories/leagueJobs.js';
-import { buildDeparturePlan, buildDropPlan, buildSelfDropPlan, buildReinstatementPlan, type LeagueMutationPlan, type ReinstatementSelection, type ReinstatementSource } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDropPlan, buildSelfDropPlan, buildReinstatementPlan, auditLeagueRoster, LeagueMutationValidationError, type LeagueMutationPlan, type ReinstatementSelection, type ReinstatementSource } from '../domain/leagueOperations.js';
 import { buildLeagueIntentPlan, parseReinstatementSelection } from './leagueTransactionIntent.js';
 import { buildLeagueAnnouncement, executeLeagueTransaction, reconcilePendingLeagueTransactions, leagueTransactionPlanFingerprint, type LeagueDiscordPort } from './leagueTransactions.js';
 import { accountReplacementSources } from './accountReplacement.test-support.js';
@@ -630,4 +630,171 @@ test('an incomplete member list during an advisory choice is answered privately;
     assert.equal(reinstatementMemberReadMessage(new LeagueMemberGatewayThrottleError(400), 'open'),
       'Discord asked Rat to wait before checking the member list again. No changes were made. Run /transaction reinstate again in 1 second.');
   } finally { f.close(); }
+});
+
+// #189: a player who left the server loses their nickname. The recorded league name is their
+// in-game name, so the reinstatement restores it as the server nickname in the same transaction.
+const nameRows = (f: Awaited<ReturnType<typeof fixture>>, id = 'one') => f.gateway.rows('admin', 'Player Name History').filter(row => row[0] === id);
+const jobCount = (f: Awaited<ReturnType<typeof fixture>>) => (f.db.prepare('SELECT count(*) n FROM league_jobs').get() as { n: number }).n;
+function returnsWithNewName(f: Awaited<ReturnType<typeof fixture>>, displayName = 'Uno') {
+  const member = f.members.get('one')!;
+  Object.assign(member, { displayName, nickname: null });
+  const state = { applies: 0, rollbacks: 0, manageable: true, failApply: undefined as undefined | Error };
+  const exact = (change: import('../domain/leagueOperations.js').DiscordNicknameChange, nickname: string | null, display: string) => {
+    const current = f.members.get(change.discordId)!;
+    if (!state.manageable) throw new LeagueMutationValidationError('Ratatoskr cannot change this player’s nickname. Check its Manage Nicknames permission and role hierarchy.');
+    if ((current.nickname ?? null) !== nickname || current.displayName !== display)
+      throw new LeagueMutationValidationError('This player’s Discord nickname or display name changed. Review a fresh preview.');
+  };
+  Object.assign(f.discord, {
+    validateNicknameChange: async (change: import('../domain/leagueOperations.js').DiscordNicknameChange) => exact(change, change.before, change.beforeDisplayName),
+    applyNicknameChange: async (change: import('../domain/leagueOperations.js').DiscordNicknameChange) => {
+      exact(change, change.before, change.beforeDisplayName);
+      if (state.failApply) throw state.failApply;
+      state.applies++; Object.assign(f.members.get(change.discordId)!, { nickname: change.after, displayName: change.after });
+    },
+    verifyNicknameChange: async (change: import('../domain/leagueOperations.js').DiscordNicknameChange) => {
+      const current = f.members.get(change.discordId)!;
+      if (current.nickname !== change.after || current.displayName !== change.after) throw Error('nickname did not converge');
+    },
+    rollbackNicknameChange: async (change: import('../domain/leagueOperations.js').DiscordNicknameChange) => {
+      state.rollbacks++; Object.assign(f.members.get(change.discordId)!, { nickname: change.before, displayName: change.beforeDisplayName });
+    },
+  });
+  return state;
+}
+
+for (const kind of ['departure', 'drop'] as const) test(`a returning ${kind} with a changed Discord name is restored under the recorded name, nickname included, without a rename first`, async () => {
+  const f = await fixture(kind);
+  try {
+    const nickname = returnsWithNewName(f);
+    const original = structuredClone(getLeagueTransaction(f.db, reference));
+    const originalExit = structuredClone(f.gateway.rows('admin', 'Transaction History').find(row => row[0] === reference));
+    const draft = structuredClone(f.gateway.rows('admin', 'Draft Picks').map(row => row.slice(0, 8)));
+    const names = structuredClone(nameRows(f));
+    const calls = countingMembers(f);
+    const view = f.install(await f.service.open('staff', 'One alias'));
+    assert.deepEqual(calls, ['fresh'], 'still one complete member read for the first preview');
+    assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') return;
+    const plan = view.payload.plan;
+    assert.deepEqual(plan.reinstatement!.blockers, []);
+    assert.deepEqual(plan.reinstatement!.nicknameRestore, { currentDisplayName: 'Uno', restoredName: 'One' });
+    assert.deepEqual(plan.discordNicknameChange, { discordId: 'one', before: null, beforeDisplayName: 'Uno', after: 'One' });
+    assert.deepEqual(plan.players, ['One']);
+    assert.equal(plan.nameHistoryAppend, undefined);
+    const text = reinstatementPreviewText(plan);
+    assert.match(text, /Recorded league name: One · Current Discord name: Uno/);
+    assert.match(text, /restored roster keeps One\. Rat will change their server nickname back to One/);
+    assert.equal(nickname.applies, 0); assert.equal(f.gateway.writes.length, 0); assert.equal(f.roleCalls, 0);
+
+    const approved = f.install(await f.service.exceptions('staff', view.token, plan.reinstatement!.advisories.map(a => a.id)), view.token);
+    const job = await f.service.confirm('staff', approved.token);
+    assert.equal(nickname.applies, 0); assert.equal(f.gateway.writes.length, 0, 'nothing is written before the worker');
+    await f.execute(job);
+    assert.equal(getLeagueTransaction(f.db, job.reference)!.status, 'completed');
+    assert.equal(nickname.applies, 1);
+    assert.equal(f.members.get('one')!.nickname, 'One'); assert.equal(f.members.get('one')!.displayName, 'One');
+
+    const after = await f.sheets.load([...f.members.values()], 'fa');
+    assert.deepEqual(after.snapshot.rosters.filter(row => row.discordId === 'one').map(row => [row.player, row.franchise, row.rosterStatus]), [['One', 'Dream Walkers', 'Player']]);
+    assert.deepEqual(nameRows(f).map(row => row.slice(0, 4)), names.map(row => row.slice(0, 4)), 'no name rewrite or alias append');
+    assert.ok(after.snapshot.publicRosters.Vanaheim!.teams['Dream Walkers']!.includes('One'));
+    assert.ok(!after.snapshot.publicRosters.Vanaheim!.teams['Dream Walkers']!.includes('Uno'));
+    assert.deepEqual(f.members.get('one')!.roleIds.filter(id => ['a', 'division'].includes(id)).sort(), ['a', 'division']);
+    const history = f.gateway.rows('admin', 'Transaction History').filter(row => row[0] === job.reference);
+    assert.equal(history.length, 1); assert.equal(history[0]![7], 'One'); assert.match(String(history[0]![11]), new RegExp(reference));
+    assert.deepEqual(f.gateway.rows('admin', 'Transaction History').find(row => row[0] === reference), originalExit);
+    assert.deepEqual(getLeagueTransaction(f.db, reference), original);
+    assert.deepEqual(f.gateway.rows('admin', 'Draft Picks').map(row => row.slice(0, 8)), draft);
+    assert.equal(f.announceCalls, 1); assert.equal(f.gateway.appends, 1);
+    // The post-write roster audit agrees: Discord, Sheets and public roster all show the recorded name.
+    assert.deepEqual(auditLeagueRoster(after.snapshot), []);
+  } finally { f.close(); }
+});
+
+test('an unchanged name keeps the existing reinstatement with no nickname change or name section', async () => {
+  const f = await fixture();
+  try {
+    const nickname = returnsWithNewName(f, 'One');
+    const names = structuredClone(nameRows(f));
+    const approved = await f.approve();
+    assert.equal(approved.payload.kind, 'preview'); if (approved.payload.kind !== 'preview') return;
+    assert.equal(approved.payload.plan.discordNicknameChange, undefined);
+    assert.equal(approved.payload.plan.reinstatement!.nicknameRestore, undefined);
+    assert.doesNotMatch(reinstatementPreviewText(approved.payload.plan), /Recorded league name/);
+    await f.execute(await f.service.confirm('staff', approved.token));
+    assert.equal(nickname.applies, 0);
+    assert.deepEqual(nameRows(f).map(row => row.slice(0, 4)), names.map(row => row.slice(0, 4)));
+  } finally { f.close(); }
+});
+
+test('a nickname Rat cannot restore, an unknown nickname, an unusable recorded name or a destination clash are refused before anything is saved', async () => {
+  for (const problem of ['unmanageable', 'unknown-nickname', 'recorded-too-long', 'destination'] as const) {
+    const f = await fixture();
+    try {
+      const nickname = returnsWithNewName(f);
+      if (problem === 'unmanageable') {
+        nickname.manageable = false;
+        const view = f.install(await f.service.open('staff', 'One alias'));
+        assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') return;
+        assert.match(view.payload.plan.reinstatement!.blockers.join(' '), /cannot change this player’s nickname/);
+        await assert.rejects(f.service.confirm('staff', view.token), /nickname/);
+      } else {
+        if (problem === 'unknown-nickname') delete (f.members.get('one') as { nickname?: unknown }).nickname;
+        if (problem === 'recorded-too-long') for (const row of nameRows(f)) row[1] = 'O'.repeat(33);
+        if (problem === 'destination') {
+          f.gateway.rows('admin', 'Current Rosters').push(['Vanaheim', 'Dream Walkers', 'a', 'Dream Walkers VD', 'three', 'One', 'Player']);
+          f.gateway.rows('admin', 'Player Name History').push(['three', 'One', 'One', 'Current Discord Name', 'Vanaheim', 'Dream Walkers', 'Player']);
+          f.members.set('three', { guildId: 'g', bot: false, discordId: 'three', displayName: 'One', roleIds: ['a', 'division'] });
+        }
+        await assert.rejects(f.service.open('staff', 'One alias'),
+          problem === 'unknown-nickname' ? /nickname could not be checked/ : problem === 'recorded-too-long' ? /cannot be used as a Discord nickname/ : /destination roster/);
+      }
+      assert.equal(jobCount(f), 0); assert.equal(nickname.applies, 0);
+      assert.equal(f.gateway.writes.length, 0); assert.equal(f.roleCalls, 0);
+    } finally { f.close(); }
+  }
+});
+
+test('a Discord name change after preview or after confirmation blocks the stale approval with no writes', async () => {
+  for (const when of ['before-confirm', 'before-worker', 'player-fixed-it-before-worker'] as const) {
+    const f = await fixture();
+    try {
+      const nickname = returnsWithNewName(f);
+      const approved = await f.approve();
+      if (when === 'before-confirm') {
+        f.members.get('one')!.displayName = 'Unos';
+        await assert.rejects(f.service.confirm('staff', approved.token), /changed/);
+        assert.equal(jobCount(f), 0);
+      } else {
+        const job = await f.service.confirm('staff', approved.token);
+        Object.assign(f.members.get('one')!, when === 'before-worker' ? { displayName: 'Unos' } : { displayName: 'One', nickname: 'One' });
+        await assert.rejects(f.execute(job));
+        assert.notEqual(getLeagueTransaction(f.db, job.reference)?.status, 'completed');
+      }
+      assert.equal(nickname.applies, 0); assert.equal(nickname.rollbacks, 0);
+      assert.equal(f.gateway.writes.length, 0); assert.equal(f.roleCalls, 0); assert.equal(f.announceCalls, 0);
+    } finally { f.close(); }
+  }
+});
+
+test('nickname failures roll back or reconcile, and a Sheet failure after the nickname is never reported clean', async () => {
+  for (const failure of ['nickname-refused', 'nickname-uncertain', 'sheet'] as const) {
+    const f = await fixture();
+    try {
+      const nickname = returnsWithNewName(f);
+      const job = await f.service.confirm('staff', (await f.approve()).token);
+      if (failure === 'nickname-refused') nickname.failApply = new LeagueMutationValidationError('Ratatoskr cannot change this player’s nickname.');
+      if (failure === 'nickname-uncertain') nickname.failApply = Object.assign(Error('nickname write may be partial'), { reconciliationRequired: true });
+      if (failure === 'sheet') f.gateway.failWorkbook = 'admin';
+      await assert.rejects(f.execute(job));
+      const status = getLeagueTransaction(f.db, job.reference)!.status;
+      assert.equal(status, failure === 'nickname-refused' ? 'failed' : 'reconciliation_required');
+      if (failure !== 'sheet') { assert.equal(f.roleCalls, 0); assert.equal(f.gateway.writes.length, 0); }
+      f.gateway.failWorkbook = undefined;
+      await reconcilePendingLeagueTransactions({ db: f.db, sheets: f.sheets, discord: f.discord });
+      assert.equal(getLeagueTransaction(f.db, job.reference)!.status, status, 'recovery never marks a partial write clean');
+      assert.equal(f.announceCalls, 0); assert.equal(f.gateway.appends, 0);
+    } finally { f.close(); }
+  }
 });

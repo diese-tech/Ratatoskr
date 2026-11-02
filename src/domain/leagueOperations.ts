@@ -215,7 +215,8 @@ export function auditLeagueRoster(
   for (const [discordId, rows] of currentNameRows) {
     if (rows.length !== 1 || !['Captain', 'Player', 'Free Agent'].includes(rows[0]!.leagueStatus)) continue;
     const member = memberById.get(discordId);
-    if (!member) continue;
+    // A returning player's nickname is restored and verified by the reinstatement itself.
+    if (!member || discordId === options.allowReinstatementMemberId) continue;
     const roster = rosterById.get(discordId);
     const managedNamesAgree = !roster || roster.player === rows[0]!.currentLeagueName;
     const expectedDiscordRename = discordId === options.allowDiscordNameRepairMemberId && managedNamesAgree;
@@ -633,6 +634,8 @@ export type ReinstatementDetails = {
   selection: ReinstatementSelection; source: ReinstatementSource; currentStatus: string;
   advisories: { id: string; text: string }[]; blockers: string[];
   beforeManagedRoleIds: string[]; sourceFingerprint?: string;
+  /** Present only when the verified Discord display name differs from the recorded league name. */
+  nicknameRestore?: { currentDisplayName: string; restoredName: string };
 };
 
 // Policy decisions are explicit staff choices. Structural checks cannot be overridden.
@@ -657,8 +660,17 @@ export function buildReinstatementPlan(snapshot: LeagueSnapshot, selection: Rein
   const before = (member?.roleIds ?? []).filter(id => managed.has(id)).sort();
   if (snapshot.teams.some(t => t.active && before.includes(t.teamRoleId)))
     throw new LeagueMutationValidationError('This player already has a team role without a roster assignment. Reconcile the records first.');
-  if (member && member.displayName.trim() !== name.currentLeagueName)
-    throw new LeagueMutationValidationError('The player’s Discord name and recorded league name differ. Use the name repair tools first.');
+  // Identity is the Discord ID and verified exit, never the name. If the player changed their
+  // Discord name while away, the same transaction sets their server nickname back to the
+  // recorded league name; Sheets and history keep that name unchanged (#189).
+  const recordedName = name.currentLeagueName;
+  const nicknameChange: DiscordNicknameChange | undefined = member && member.displayName.trim() !== recordedName ? (() => {
+    if (member.nickname === undefined)
+      throw new LeagueMutationValidationError('The player’s current Discord nickname could not be checked. Request a fresh preview.');
+    if (!recordedName.trim() || recordedName.length > 32 || /[\u0000-\u001f\u007f]/.test(recordedName))
+      throw new LeagueMutationValidationError('The recorded league name cannot be used as a Discord nickname. Ask staff to correct Player Name History first.');
+    return { discordId: selection.playerId, before: member.nickname, beforeDisplayName: member.displayName, after: recordedName };
+  })() : undefined;
   const advisories: ReinstatementDetails['advisories'] = [];
   const count = snapshot.rosters.filter(row => row.teamRoleId === team.teamRoleId).length;
   if (count >= 7) advisories.push({ id: 'roster-count', text: `Roster count: ${count}/7 before return. Staff may approve a policy exception; the public block still needs an empty owned cell.` });
@@ -675,8 +687,10 @@ export function buildReinstatementPlan(snapshot: LeagueSnapshot, selection: Rein
     ], discordRoleChanges: member ? [{ discordId: selection.playerId,
       remove: before.filter(id => id !== team.teamRoleId && id !== team.divisionRoleId),
       add: [team.teamRoleId, team.divisionRoleId].filter(id => !before.includes(id)) }] : [],
+    ...(nicknameChange ? { discordNicknameChange: nicknameChange } : {}),
     teams: [team], players: [name.currentLeagueName], playerIds: [selection.playerId],
-    reinstatement: { selection, source, currentStatus: name.leagueStatus, advisories, blockers, beforeManagedRoleIds: before },
+    reinstatement: { selection, source, currentStatus: name.leagueStatus, advisories, blockers, beforeManagedRoleIds: before,
+      ...(nicknameChange ? { nicknameRestore: { currentDisplayName: nicknameChange.beforeDisplayName, restoredName: recordedName } } : {}) },
   };
 }
 

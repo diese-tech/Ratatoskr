@@ -1,4 +1,5 @@
 import { openReinstatementCommand } from '../services/leagueReinstatementUi.js';
+import { logMemberReadDeferral, memberReadDeferralMessage } from '../services/leagueMemberReadMessages.js';
 import { historicalPlayerChoices, historicalPlayerIndex } from '../services/leagueReinstatement.js';
 import { leagueJobWorkerFor } from '../services/leagueJobWorker.js';
 import { buildLeagueIntentPlan, type LeagueTransactionIntent } from '../services/leagueTransactionIntent.js';
@@ -220,6 +221,8 @@ export async function handleTransactionCommand(
     );
   };
 
+  // Set once a job exists. Member-read failures before that point are read-only previews.
+  let enqueued = false;
   try {
     if (interaction.options.getBoolean('confirm') !== true) {
       await showPreview();
@@ -236,6 +239,7 @@ export async function handleTransactionCommand(
 
     const actorName = (member as GuildMember).displayName || interaction.user.globalName || interaction.user.username;
     const worker = leagueJobWorkerFor(operationScope,interaction.guild.id);
+    enqueued = true;
     const job = worker.enqueue('transaction', {
       selections: previewIntent, actorUserId: interaction.user.id, actorName, expectedPlanFingerprint,
     } satisfies LeagueTransactionIntent, `transaction:${interaction.user.id}:${previewIntent}:${getLeaguePreviewApproval(db,guildId,interaction.user.id,previewIntent)}`);
@@ -245,6 +249,15 @@ export async function handleTransactionCommand(
     }
     await interaction.editReply(`${leagueStatusLabel(job.status)}. Reference: ${job.reference}\nUse Open league tools on the League Status message to check this action. Do not submit it again.`);
   } catch (error) {
+    // A Discord cooldown while building a preview is a private, no-change deferral, not the
+    // generic staff alert about possible partial changes (#186). Keep any earlier preview.
+    const deferred = enqueued ? undefined
+      : memberReadDeferralMessage(error, { unchanged: 'No changes were made.', retry: 'Run the same /transaction command again' });
+    if (deferred) {
+      logMemberReadDeferral(guildId, `/transaction ${interaction.options.getSubcommand()}`, error);
+      await interaction.editReply(deferred);
+      return;
+    }
     if (!(await replyToTransactionValidation(interaction, error))) throw error;
     deleteLeagueTransactionPreview(db, guildId, interaction.user.id, previewIntent);
   }

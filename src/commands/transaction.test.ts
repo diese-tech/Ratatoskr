@@ -182,3 +182,40 @@ test('a trade preview still escalates inconsistent roster data as an operational
   assert.equal(handled, false);
   assert.match((thrown as Error).message, /multiple roster assignments/i);
 });
+
+test('a Discord cooldown while building a /transaction preview is a private no-change reply, not a staff incident', async (t) => {
+  const db = openDatabase(':memory:');
+  const warn = t.mock.method(console, 'warn', () => {});
+  const configured = { ROLE_FREE_AGENT_ID: 'fa', YSL_TRANSACTIONS_CHANNEL_ID: 'notices',
+    YSL_ADMIN_SPREADSHEET_ID: 'test-admin', YSL_PUBLIC_SPREADSHEET_ID: 'test-public',
+    GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: 'bot@example.com', private_key: 'synthetic-test-key' }) };
+  const previous = Object.fromEntries(Object.keys(configured).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, configured);
+  try {
+    // An earlier reviewed preview for a different intent must survive a read-only deferral.
+    saveLeagueTransactionPreview(db, { guildId: 'g', actorUserId: 'valk-admin', intentKey: 'other', planFingerprint: 'kept' });
+    let wholeGuildFetches = 0;
+    const staff = { displayName: 'Staff', roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } };
+    const guild = { id: 'g', members: { fetch: async (options?: unknown) => {
+      if (options) return staff;
+      wholeGuildFetches += 1;
+      throw Object.assign(new Error('Request with opcode 8 was rate limited.'), { data: { opcode: 8, retry_after: 30 } });
+    } } };
+    for (const confirm of [false, true]) {
+      const replies: string[] = [];
+      await handleTransactionCommand({ guild, user: { id: 'valk-admin' },
+        options: { getSubcommand: () => 'trade', getBoolean: () => confirm,
+          getUser: (name: string) => ({ id: name === 'player_one' ? 'one' : 'two' }) },
+        deferReply: async () => {}, editReply: async (reply: string) => { replies.push(reply); } } as never, db, db);
+      assert.equal(replies.length, 1);
+      assert.match(replies[0]!, /^Discord asked Rat to wait before checking the member list again\. No changes were made\. Run the same \/transaction command again in 3\d seconds\.$/);
+    }
+    assert.equal(wholeGuildFetches, 1, 'the shared cooldown defers the second attempt without another request');
+    assert.equal(warn.mock.callCount(), 2);
+    assert.equal((db.prepare('SELECT count(*) n FROM league_jobs').get() as { n: number }).n, 0);
+    assert.equal((db.prepare("SELECT count(*) n FROM league_transaction_previews WHERE plan_fingerprint='kept'").get() as { n: number }).n, 1);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    db.close();
+  }
+});

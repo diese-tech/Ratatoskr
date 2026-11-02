@@ -9,7 +9,7 @@ import { leagueJobWorkerFor } from './leagueJobWorker.js';
 import { LeagueReinstatementService, reinstatementPreviewText, type ReinstatementReview } from './leagueReinstatement.js';
 import { reinstatementPolicyExceptions, LeagueMutationValidationError } from '../domain/leagueOperations.js';
 import { leagueStatusLabel } from './leaguePresentation.js';
-import { LeagueMemberGatewayThrottleError, LeagueMemberSnapshotUnavailableError } from './leagueMemberReads.js';
+import { logMemberReadDeferral, memberReadDeferralMessage } from './leagueMemberReadMessages.js';
 
 export type ReinstatementStep = 'open' | 'choose' | 'exceptions' | 'confirm';
 
@@ -21,20 +21,10 @@ export type ReinstatementStep = 'open' | 'choose' | 'exceptions' | 'confirm';
  * Errors after enqueue never reach this path; the worker owns those and their recovery.
  */
 export function reinstatementMemberReadMessage(error: unknown, step: ReinstatementStep): string | undefined {
-  const retry = step === 'open' ? 'Run /transaction reinstate again' : step === 'confirm' ? 'Press Confirm reinstatement again' : 'Make your choice again';
-  const unchanged = step === 'confirm' ? 'Your approval was not saved and no changes were made.' : 'No changes were made.';
-  if (error instanceof LeagueMemberGatewayThrottleError) {
-    const seconds = Math.max(1, Math.ceil(error.retryAfterMs / 1_000));
-    return `Discord asked Rat to wait before checking the member list again. ${unchanged} ${retry} in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`;
-  }
-  if (error instanceof LeagueMemberSnapshotUnavailableError)
-    return `Rat could not check every Discord member just now. ${unchanged} ${retry} in a moment.`;
-  return undefined;
-}
-
-function logMemberReadDeferral(guildId: string, step: ReinstatementStep, error: Error) {
-  console.warn('Reinstatement member check deferred before any change', { guildId, step, error: error.name,
-    ...(error instanceof LeagueMemberGatewayThrottleError ? { retryAfterMs: error.retryAfterMs } : {}) });
+  return memberReadDeferralMessage(error, {
+    retry: step === 'open' ? 'Run /transaction reinstate again' : step === 'confirm' ? 'Press Confirm reinstatement again' : 'Make your choice again',
+    unchanged: step === 'confirm' ? 'Your approval was not saved and no changes were made.' : 'No changes were made.',
+  });
 }
 
 export function reinstatementReviewMessage(review: ReinstatementReview) {
@@ -92,7 +82,7 @@ export async function openReinstatementCommand(interaction: ChatInputCommandInte
   } catch (error) {
     const deferred = reinstatementMemberReadMessage(error, 'open');
     if (deferred) {
-      logMemberReadDeferral(interaction.guildId ?? '', 'open', error as Error);
+      logMemberReadDeferral(interaction.guildId ?? '', 'reinstate open', error);
       await interaction.editReply({ content: deferred, components: [], embeds: [] });
       return;
     }
@@ -127,7 +117,7 @@ export async function handleReinstatementInteraction(interaction: Interaction, d
     const deferred = step && reinstatementMemberReadMessage(error, step);
     if (deferred) {
       // Leave the current review and its controls in place; they stay valid until it expires.
-      logMemberReadDeferral(interaction.guildId ?? '', step, error as Error);
+      logMemberReadDeferral(interaction.guildId ?? '', `reinstate ${step}`, error);
       await interaction.followUp({ content: deferred, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
       return true;
     }
