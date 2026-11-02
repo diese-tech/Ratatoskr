@@ -87,6 +87,7 @@ for (const kind of ['departure', 'drop', 'self-drop'] as const) test(`${kind} is
     assert.equal((await restarted.confirm('staff', approved.token)).reference, job.reference);
     await f.execute(job); await f.execute(job);
     assert.equal(getLeagueTransaction(f.db, job.reference)!.status, 'completed');
+    assert.equal((getLeagueTransaction(f.db, job.reference)!.payload as { record: { approvedAt: string } }).record.approvedAt, now.toISOString());
     assert.deepEqual(getLeagueTransaction(f.db, reference), original);
     const after = await f.sheets.load([...f.members.values()], 'fa');
     assert.equal(after.snapshot.rosters.filter(row => row.discordId === 'one').length, 1);
@@ -330,12 +331,15 @@ test('Manny incident is a read-only fixture: historical departure, exact Sheet d
 test('private saved-action details link the original and completed reinstatement in both directions with Sheet dates', async () => {
   const f = await fixture();
   try {
-    const view = await f.approve(); const job = await f.service.confirm('staff', view.token); await f.execute(job);
-    transitionLeagueJob(f.db, job.reference, 'COMPLETED');
+    const view = await f.approve(); const job = await f.service.confirm('staff', view.token);
     const { LeagueOpsReviewService } = await import('./leagueOpsReview.js');
     const review = new LeagueOpsReviewService({ db: f.db, guildId: 'g', scope: f.db, worker: {} as never, replacement: {} as never,
       authorize: async () => 'Staff', readTransactionHistory: () => f.sheets.readTransactionHistory(),
       previewTransaction: async () => { throw Error('unused'); }, previewRepair: async () => { throw Error('unused'); } });
+    const waiting = await review.operationDetail('staff', job.reference);
+    assert.equal(waiting.action, 'reinstate'); assert.ok(waiting.targets.some(target => target.includes(reference)));
+    await f.execute(job);
+    transitionLeagueJob(f.db, job.reference, 'COMPLETED');
     const original = await review.operationDetail('staff', reference);
     const returned = await review.operationDetail('staff', job.reference);
     assert.deepEqual(original.linkedReferences, [job.reference]); assert.deepEqual(returned.linkedReferences, [reference]);
