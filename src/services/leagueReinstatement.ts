@@ -1,3 +1,4 @@
+import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import { dateInLeagueTimezone, leagueTransactionPlanFingerprint, type LeagueDiscordPort } from './leagueTransactions.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
@@ -171,7 +172,9 @@ export class LeagueReinstatementService {
     const loaded = await sheets.load(await discord.getMembers!(), freeAgentRoleId);
     const plan = await buildVerifiedTransactionIntent({ db, guildId, sheets, selections, loaded });
     const details = plan.reinstatement!;
-    details.blockers.push(...auditLeagueRoster(loaded.snapshot, { allowReinstatementMemberId: selection.playerId }));
+    const auditIssues = auditLeagueRoster(loaded.snapshot, { allowReinstatementMemberId: selection.playerId });
+    if (auditIssues.length) console.error('Reinstatement preview roster audit failed', { guildId, playerId: selection.playerId, issues: auditIssues });
+    details.blockers.push(...humanizeLeagueAuditIssues(loaded.snapshot, auditIssues));
     try {
       sheets.prepare(loaded, plan);
       if (!details.blockers.length) {

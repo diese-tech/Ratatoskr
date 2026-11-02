@@ -366,3 +366,32 @@ test('delayed precise job completion remains a labeled advisory, never a replace
     await assert.rejects(f.service.open('staff', 'One'), /No matching completed exit/);
   } finally { f.close(); }
 });
+
+
+test('private previews translate unrelated member and role-configuration drift while keeping raw diagnostics in logs', async t => {
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => { diagnostics.push(args); });
+  for (const drift of ['member', 'configuration'] as const) {
+    const f = await fixture();
+    try {
+      if (drift === 'member') f.members.get('two')!.roleIds = ['division'];
+      else f.gateway.rows('admin', 'League Teams')[6]![7] = 'b';
+      const view = f.install(await f.service.open('staff', 'One'));
+      assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') continue;
+      const blockers = view.payload.plan.reinstatement!.blockers.join(' ');
+      assert.ok(blockers.length);
+      assert.doesNotMatch(blockers, /Discord member two|Role b is configured|Division role b|Team role b/);
+      if (drift === 'member') assert.match(blockers, /Two is listed on The Sewer VD.*missing that team role.*Restore the role/);
+      else assert.match(blockers, /The Sewer VD is used as both a team role and a division role in League Teams.*Give each purpose/);
+      const message = reinstatementReviewMessage(view);
+      const text = message.embeds[0]!.toJSON().description!;
+      assert.ok(text.includes(blockers.split(' ').slice(0, 8).join(' ')));
+      assert.doesNotMatch(text, /Discord member two|Role b is configured/);
+      assert.equal(message.components[1]!.components.at(-1)!.toJSON().disabled, true);
+      await assert.rejects(f.service.confirm('staff', view.token));
+      assert.equal(f.roleCalls, 0); assert.equal(f.gateway.writes.length, 0);
+    } finally { f.close(); }
+  }
+  assert.match(JSON.stringify(diagnostics), /Discord member two is rostered without its team role/);
+  assert.match(JSON.stringify(diagnostics), /Role b is configured as both a team role and a division role/);
+});
