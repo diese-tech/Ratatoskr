@@ -1,6 +1,6 @@
 # ADR 0001: Shared Discord member reads for league operations
 
-- **Status:** Proposed (documents the established #156 implementation; pending documentation PR review)
+- **Status:** Accepted (documents the established #156 implementation and the #186 fix)
 - **Recorded:** 2026-11-02
 - **Scope:** Guild-wide Discord member reads used by Ratatoskr league operations
 - **Implementation:** [#186](https://github.com/diese-tech/Ratatoskr/issues/186) fixed by [PR #188](https://github.com/diese-tech/Ratatoskr/pull/188); the same no-change cooldown handling was applied to `/transaction` previews in [PR #190](https://github.com/diese-tech/Ratatoskr/pull/190)
