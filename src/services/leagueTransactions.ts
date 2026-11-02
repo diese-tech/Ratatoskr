@@ -29,6 +29,7 @@ import {
   draftPickLabel,
 } from './leagueSheets.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
+import type { LeagueMemberReadOptions } from './leagueMemberReads.js';
 import {
   listIncompleteLeagueAuditRepairs,
   markLeagueAuditRepairReconciliationRequired,
@@ -67,7 +68,7 @@ export interface LeagueSheetsPort {
 
 export interface LeagueDiscordPort {
   validateReinstatementRoles?(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void>;
-  getMembers?(): Promise<LeagueSnapshot['discordMembers']>;
+  getMembers?(options?: LeagueMemberReadOptions): Promise<LeagueSnapshot['discordMembers']>;
   validateMemberAbsent(discordId: string, presentRemedy?: 'drop' | 'self-drop'): Promise<void>;
   validateRoleState(discordId: string, expected: LeagueRoleState): Promise<void>;
   validateDisplayName(discordId: string, expectedDisplayName: string): Promise<void>;

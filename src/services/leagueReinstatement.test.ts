@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Collection, MessageFlags, type Guild } from 'discord.js';
+import { readLeagueMembers, LeagueMemberGatewayThrottleError, LeagueMemberSnapshotUnavailableError } from './leagueMemberReads.js';
 import { openDatabase } from '../db/client.js';
 import { createLeagueTransaction, getLeagueTransaction, listLeagueTransactions } from '../db/repositories/leagueOperations.js';
 import { enqueueLeagueJob, getLeagueJob, recoverLeagueJobs, transitionLeagueJob } from '../db/repositories/leagueJobs.js';
@@ -10,7 +12,7 @@ import { accountReplacementSources } from './accountReplacement.test-support.js'
 import { LeagueReinstatementService, buildVerifiedTransactionIntent, historicalPlayerChoices, historicalPlayerIndex, reinstatementPreviewText, reinstatementSources, leagueDate, type ReinstatementReview } from './leagueReinstatement.js';
 process.env.ROLE_ALLFATHER_ID ??= 'allfather-test-role';
 process.env.ROLE_AESIR_ID ??= 'aesir-test-role';
-const { reinstatementReviewMessage } = await import('./leagueReinstatementUi.js');
+const { reinstatementReviewMessage, openReinstatementCommand, handleReinstatementInteraction, reinstatementMemberReadMessage } = await import('./leagueReinstatementUi.js');
 const { transactionCommand } = await import('../commands/transaction.js');
 
 const reference = 'YSL-JOB-A4EAFBAF38A5439A';
@@ -462,5 +464,170 @@ test('legacy stored timing markers remain readable provenance and do not create 
     assert.deepEqual(plan.reinstatement!.advisories, []);
     const job = f.serviceInput.enqueue({ selections, expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan) }, 'legacy-timing-marker');
     await f.execute(job); assert.equal(getLeagueTransaction(f.db, job.reference)!.status, 'completed');
+  } finally { f.close(); }
+});
+
+// #186: one logical read-only review must not ask Discord for every member twice.
+function countingMembers(f: Awaited<ReturnType<typeof fixture>>) {
+  const calls: Array<'fresh' | 'observation'> = [];
+  const read = f.discord.getMembers!;
+  f.discord.getMembers = async options => { calls.push(options?.observation ? 'observation' : 'fresh'); return read(options); };
+  return calls;
+}
+// Routes the fixture through the real shared coordinator so Gateway request counts are exact.
+function coordinatedMembers(f: Awaited<ReturnType<typeof fixture>>, throttleOn = new Set<number>(), retryAfter = 22) {
+  const state = { fetches: 0 };
+  const guild = { id: 'g', members: { fetch: async () => {
+    state.fetches += 1;
+    if (throttleOn.has(state.fetches)) throw Object.assign(Error('Request with opcode 8 was rate limited.'), { data: { opcode: 8, retry_after: retryAfter } });
+    return new Collection([...f.members.values()].map(member => [member.discordId, { id: member.discordId, displayName: member.displayName,
+      nickname: null, partial: false, user: { bot: member.bot }, roles: { cache: new Collection(member.roleIds.map(id => [id, {}])) } }]));
+  } } } as unknown as Guild;
+  f.discord.getMembers = async options => (await readLeagueMembers(guild, options)).map(({ guildId: _g, bot: _b, ...member }) => ({ ...member, guildId: 'g', bot: false }));
+  return state;
+}
+
+test('a direct match opens its first private preview from one complete member read; confirm still reads fresh', async () => {
+  const f = await fixture();
+  try {
+    const calls = countingMembers(f);
+    const view = f.install(await f.service.open('staff', 'One alias'));
+    assert.equal(view.payload.kind, 'preview');
+    assert.deepEqual(calls, ['fresh']);
+    const approved = f.install(await f.service.exceptions('staff', view.token, view.payload.kind === 'preview' ? view.payload.plan.reinstatement!.advisories.map(a => a.id) : []), view.token);
+    assert.deepEqual(calls, ['fresh', 'observation']);
+    const job = await f.service.confirm('staff', approved.token);
+    assert.deepEqual(calls, ['fresh', 'observation', 'fresh']);
+    assert.equal(job.status, 'QUEUED');
+  } finally { f.close(); }
+});
+
+test('through the shared coordinator, open → advisory choice → confirm makes exactly two whole-guild fetches', async () => {
+  const f = await fixture();
+  try {
+    const gateway = coordinatedMembers(f);
+    const view = f.install(await f.service.open('staff', 'One alias'));
+    assert.equal(gateway.fetches, 1);
+    assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') return;
+    const approved = f.install(await f.service.exceptions('staff', view.token, view.payload.plan.reinstatement!.advisories.map(a => a.id)), view.token);
+    assert.equal(gateway.fetches, 1, 'redrawing advisory choices reuses the bounded read-only snapshot');
+    await f.service.confirm('staff', approved.token);
+    assert.equal(gateway.fetches, 2, 'confirmation is the safety boundary and always fetches fresh');
+  } finally { f.close(); }
+});
+
+test('the source picker is chosen without an immediate second whole-guild fetch', async () => {
+  const f = await fixture();
+  try {
+    const source = getLeagueTransaction(f.db, reference)!;
+    createLeagueTransaction(f.db, { reference: 'exit-older', guildId: 'g', kind: 'departure', actorUserId: 'fuego', payload: source.payload });
+    f.db.prepare("UPDATE league_transactions SET status='completed',created_at='2026-10-01T00:00:00Z' WHERE reference='exit-older'").run();
+    f.gateway.rows('admin', 'Transaction History').push(['exit-older', 'departure', '2026-10-01', 'Vanaheim', 'Dream Walkers', 'Inactive', 'one', 'One', 'fuego', '', 'Completed', 'FuegoMyEggo']);
+    const gateway = coordinatedMembers(f);
+    const picker = f.install(await f.service.open('staff', 'One'));
+    assert.equal(picker.payload.kind, 'picker'); if (picker.payload.kind !== 'picker') return;
+    assert.equal(gateway.fetches, 1);
+    const index = picker.payload.candidates.findIndex(item => item.reference === reference);
+    const chosen = await f.service.choose('staff', picker.token, String(index));
+    assert.equal(chosen.payload.kind, 'preview');
+    assert.equal(gateway.fetches, 1);
+  } finally { f.close(); }
+});
+
+test('a reused read-only snapshot never authorizes a write: changed roles are caught at confirmation', async () => {
+  const f = await fixture();
+  try {
+    const gateway = coordinatedMembers(f);
+    const view = f.install(await f.service.open('staff', 'One alias'));
+    assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') return;
+    f.members.get('one')!.roleIds.push('division');
+    // The advisory redraw may still show the earlier snapshot ...
+    const approved = f.install(await f.service.exceptions('staff', view.token, view.payload.plan.reinstatement!.advisories.map(a => a.id)), view.token);
+    assert.equal(gateway.fetches, 1);
+    // ... but confirmation reads fresh and refuses the drift before anything is saved.
+    await assert.rejects(f.service.confirm('staff', approved.token), /changed/);
+    assert.equal(gateway.fetches, 2);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM league_jobs').get() as { n: number }).n, 0);
+    assert.equal(f.roleCalls, 0); assert.equal(f.gateway.writes.length, 0); assert.equal(f.announceCalls, 0);
+  } finally { f.close(); }
+});
+
+function fakeOpen(guildId = 'g') {
+  const replies: Array<{ content: string; components?: unknown[]; embeds?: unknown[] }> = [];
+  const interaction = { guildId, guild: { id: guildId }, user: { id: 'staff' },
+    options: { getString: (name: string) => name === 'player' ? 'One alias' : null },
+    editReply: async (payload: { content: string }) => { replies.push(payload); } };
+  return { interaction: interaction as unknown as import('discord.js').ChatInputCommandInteraction, replies };
+}
+function fakeComponent(action: string, token: string, values: string[] = []) {
+  const followUps: Array<{ content: string; flags?: unknown }> = []; const edits: unknown[] = [];
+  const interaction = { guildId: 'g', guild: { id: 'g' }, user: { id: 'staff' }, customId: `reinstate:${action}:${token}`, values,
+    isButton: () => action === 'confirm' || action === 'cancel', isStringSelectMenu: () => action === 'choose' || action === 'exceptions',
+    deferUpdate: async () => {}, editReply: async (payload: unknown) => { edits.push(payload); },
+    followUp: async (payload: { content: string; flags?: unknown }) => { followUps.push(payload); } };
+  return { interaction: interaction as unknown as import('discord.js').Interaction, followUps, edits };
+}
+
+test('a Discord cooldown during the initial review is a private, no-change deferral with the real wait time', async t => {
+  const f = await fixture();
+  const warn = t.mock.method(console, 'warn', () => {});
+  try {
+    const gateway = coordinatedMembers(f, new Set([1]));
+    const { interaction, replies } = fakeOpen();
+    await openReinstatementCommand(interaction, f.db, f.db, f.service);
+    assert.equal(gateway.fetches, 1, 'no hot retry inside a long Discord cooldown');
+    assert.equal(replies.length, 1);
+    assert.match(replies[0]!.content, /Discord asked Rat to wait/);
+    assert.match(replies[0]!.content, /No changes were made\./);
+    assert.match(replies[0]!.content, /in 2[23] seconds/);
+    assert.doesNotMatch(replies[0]!.content, /may already|partial|post/i);
+    assert.equal(warn.mock.callCount(), 1);
+    // The cooldown is shared: an immediate retry is deferred without another Gateway request.
+    const again = fakeOpen();
+    await openReinstatementCommand(again.interaction, f.db, f.db, f.service);
+    assert.equal(gateway.fetches, 1);
+    assert.match(again.replies[0]!.content, /No changes were made/);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM league_jobs').get() as { n: number }).n, 0);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM league_reinstatement_reviews').get() as { n: number }).n, 0);
+    assert.equal(listLeagueTransactions(f.db, 'g').length, 1);
+    assert.equal(f.roleCalls, 0); assert.equal(f.gateway.writes.length, 0); assert.equal(f.announceCalls, 0);
+  } finally { f.close(); }
+});
+
+test('a Discord cooldown at confirmation saves no approval or job and keeps the review usable', async t => {
+  const f = await fixture();
+  t.mock.method(console, 'warn', () => {});
+  try {
+    const gateway = coordinatedMembers(f, new Set([2]));
+    const approved = await f.approve();
+    const { interaction, followUps, edits } = fakeComponent('confirm', approved.token);
+    assert.equal(await handleReinstatementInteraction(interaction, f.db, f.db, () => f.service), true);
+    assert.equal(gateway.fetches, 2);
+    assert.equal(edits.length, 0, 'the existing review card is left in place');
+    assert.equal(followUps.length, 1);
+    assert.equal(followUps[0]!.flags, MessageFlags.Ephemeral);
+    assert.match(followUps[0]!.content, /Your approval was not saved and no changes were made\. Press Confirm reinstatement again in 2[23] seconds\./);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM league_jobs').get() as { n: number }).n, 0);
+    assert.equal((f.db.prepare('SELECT job_reference FROM league_reinstatement_reviews WHERE token=?').get(approved.token) as { job_reference: string | null }).job_reference, null);
+    assert.equal(f.roleCalls, 0); assert.equal(f.gateway.writes.length, 0); assert.equal(f.announceCalls, 0);
+  } finally { f.close(); }
+});
+
+test('an incomplete member list during an advisory choice is answered privately; other failures still reach staff reporting', async t => {
+  const f = await fixture();
+  t.mock.method(console, 'warn', () => {});
+  try {
+    const view = f.install(await f.service.open('staff', 'One alias'));
+    assert.equal(view.payload.kind, 'preview'); if (view.payload.kind !== 'preview') return;
+    f.discord.getMembers = async () => { throw new LeagueMemberSnapshotUnavailableError(); };
+    const choice = fakeComponent('exceptions', view.token, view.payload.plan.reinstatement!.advisories.map(a => a.id));
+    await handleReinstatementInteraction(choice.interaction, f.db, f.db, () => f.service);
+    assert.match(choice.followUps[0]!.content, /Rat could not check every Discord member just now\. No changes were made\. Make your choice again in a moment\./);
+    // Unknown failures are not reclassified: they propagate to handleInteractionError and its staff alert.
+    f.discord.getMembers = async () => { throw new Error('unexpected'); };
+    await assert.rejects(handleReinstatementInteraction(fakeComponent('exceptions', view.token, []).interaction, f.db, f.db, () => f.service), /unexpected/);
+    assert.equal(reinstatementMemberReadMessage(new Error('unexpected'), 'confirm'), undefined);
+    assert.equal(reinstatementMemberReadMessage(new LeagueMemberGatewayThrottleError(400), 'open'),
+      'Discord asked Rat to wait before checking the member list again. No changes were made. Run /transaction reinstate again in 1 second.');
   } finally { f.close(); }
 });

@@ -154,6 +154,8 @@ export class LeagueReinstatementService {
   }
   async open(actor: string, query: string, transaction?: string, reason?: string): Promise<ReinstatementReview> {
     await this.input.authorize(actor);
+    // The single complete member read for this initial review. It is passed to the
+    // first preview below so one lookup never asks Discord for every member twice (#186).
     const loaded = await this.input.sheets.load(await this.input.discord.getMembers!(), this.input.freeAgentRoleId);
     const normalized = query.trim().replace(/^<@!?(\d+)>$/, '$1');
     const exactIdentity = loaded.snapshot.names.some(row => row.discordId === normalized);
@@ -165,12 +167,23 @@ export class LeagueReinstatementService {
     if (sources.length > 1) return this.review(actor, { kind: 'picker', candidates: sources, page: 0, reason });
     return this.preview(actor, { version: 1, kind: 'reinstate', playerId: sources[0]!.playerId,
       sourceReference: sources[0]!.reference, teamRoleId: sources[0]!.teamRoleId, returnStatus: 'Player', effectiveDate: leagueDate(this.now()),
-      overrides: [], preserveFutureSanction: true, ...(reason ? { reason } : {}) });
+      overrides: [], preserveFutureSanction: true, ...(reason ? { reason } : {}) }, { loaded });
   }
-  private async preview(actor: string, selection: import('../domain/leagueOperations.js').ReinstatementSelection): Promise<ReinstatementReview> {
+  /**
+   * Member data for a preview comes from one of three places, all through the shared
+   * member-read coordinator (leagueMemberReads.ts):
+   * - `loaded`: the complete snapshot already verified by this same read-only lookup;
+   * - `observation`: the coordinator's bounded read-only snapshot, for redrawing picker
+   *   and advisory choices without another whole-guild request;
+   * - neither: a fresh complete read. confirm() always uses this, and the worker rechecks
+   *   again before writing, so a reused snapshot never authorizes a change.
+   */
+  private async preview(actor: string, selection: import('../domain/leagueOperations.js').ReinstatementSelection,
+    members: { loaded?: LoadedLeagueSnapshot; observation?: boolean } = {}): Promise<ReinstatementReview> {
     const { db, guildId, sheets, discord, freeAgentRoleId } = this.input;
     const selections = JSON.stringify(selection);
-    const loaded = await sheets.load(await discord.getMembers!(), freeAgentRoleId);
+    const loaded = members.loaded
+      ?? await sheets.load(await discord.getMembers!(members.observation ? { observation: true } : undefined), freeAgentRoleId);
     const plan = await buildVerifiedTransactionIntent({ db, guildId, sheets, selections, loaded });
     const details = plan.reinstatement!;
     const auditIssues = auditLeagueRoster(loaded.snapshot, { allowReinstatementMemberId: selection.playerId });
@@ -199,7 +212,7 @@ export class LeagueReinstatementService {
       throw new LeagueMutationValidationError('Choose an original action from the current list.');
     return this.preview(actor, { version: 1, kind: 'reinstate', playerId: source.playerId, sourceReference: source.reference,
       teamRoleId: source.teamRoleId, returnStatus: 'Player', effectiveDate: leagueDate(this.now()), overrides: [], preserveFutureSanction: true,
-      ...(payload.reason ? { reason: payload.reason } : {}) });
+      ...(payload.reason ? { reason: payload.reason } : {}) }, { observation: true });
   }
   async page(actor: string, token: string, delta: number) {
     const { row, payload } = await this.stored(actor, token);
@@ -213,7 +226,7 @@ export class LeagueReinstatementService {
     if (row.job_reference || payload.kind !== 'preview') throw new LeagueMutationValidationError('Open a fresh preview before choosing exceptions.');
     if (new Set(overrides).size !== overrides.length || overrides.some(id => !reinstatementPolicyExceptions(payload.plan.reinstatement!).some(item => item.id === id)))
       throw new LeagueMutationValidationError('Choose only the advisories shown in this preview.');
-    return this.preview(actor, { ...parseReinstatementSelection(payload.selections)!, overrides: [...overrides].sort() });
+    return this.preview(actor, { ...parseReinstatementSelection(payload.selections)!, overrides: [...overrides].sort() }, { observation: true });
   }
   async cancel(actor: string, token: string) {
     const { row } = await this.stored(actor, token);
@@ -228,6 +241,8 @@ export class LeagueReinstatementService {
     if (details.blockers.length) throw new LeagueMutationValidationError(details.blockers.join(' '));
     if (reinstatementPolicyExceptions(details).some(item => !details.selection.overrides.includes(item.id)))
       throw new LeagueMutationValidationError('Choose each listed staff advisory you approve, then confirm.');
+    // Always a fresh complete read: the saved view may have used a reused snapshot.
+    // Any member-read failure here happens before enqueue, so nothing has changed.
     const fresh = await this.preview(actor, details.selection);
     if (fresh.payload.kind !== 'preview' || fresh.payload.plan.reinstatement!.blockers.length || fresh.payload.fingerprint !== payload.fingerprint)
       throw new LeagueMutationValidationError('The roster, source history, roles or Sheet values changed. Run /transaction reinstate and review a new preview. No changes were made.');
