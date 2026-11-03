@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { assertNoUnresolvedAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
-import { reinstatementPolicyExceptions, auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { isOneWayTrade, reinstatementPolicyExceptions, auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
   createLeagueTransaction,
@@ -56,6 +56,7 @@ export type LeagueRoleState = {
 export interface LeagueSheetsPort {
   load(discordMembers: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot>;
   assertUnchanged(loaded: LoadedLeagueSnapshot): Promise<void>;
+  assertOneWayTradeDestination?(prepared: PreparedLeagueSheetMutation): Promise<void>;
   prepare(loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan): PreparedLeagueSheetMutation;
   apply(
     loaded: LoadedLeagueSnapshot,
@@ -67,6 +68,7 @@ export interface LeagueSheetsPort {
 }
 
 export interface LeagueDiscordPort {
+  validateOneWayTradeRoles?(plan: LeagueMutationPlan): Promise<void>;
   validateReinstatementRoles?(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void>;
   getMembers?(options?: LeagueMemberReadOptions): Promise<LeagueSnapshot['discordMembers']>;
   validateMemberAbsent(discordId: string, presentRemedy?: 'drop' | 'self-drop'): Promise<void>;
@@ -104,6 +106,29 @@ type ExecuteLeagueTransactionInput = {
 export class LeagueTransactionPreviewChangedError extends Error {
   constructor(readonly plan: LeagueMutationPlan) {
     super('League state changed after the transaction preview. Review the updated preview before confirming again.');
+  }
+}
+
+export async function validateOneWayTradePreview(
+  loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan,
+  sheets: Pick<LeagueSheetsPort, 'prepare' | 'assertOneWayTradeDestination'>,
+  discord: Pick<LeagueDiscordPort, 'validateOneWayTradeRoles' | 'validateDisplayName'>,
+): Promise<void> {
+  const issues = auditLeagueRoster(loaded.snapshot);
+  if (issues.length) {
+    console.error('One-way trade preview roster audit failed:', issues);
+    throw new LeagueMutationValidationError(humanizeLeagueAuditIssues(loaded.snapshot, issues).slice(0, 3).join(' '));
+  }
+  try {
+    if (!sheets.assertOneWayTradeDestination || !discord.validateOneWayTradeRoles) throw new Error('Trade checks unavailable.');
+    await sheets.assertOneWayTradeDestination(sheets.prepare(loaded, plan));
+    await discord.validateOneWayTradeRoles(plan);
+    await discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+  } catch (error) {
+    if (error instanceof LeagueMutationValidationError) throw error;
+    if (error instanceof LeagueSheetDriftError) throw new LeagueMutationValidationError(error.message);
+    console.error('One-way trade preview verification failed:', error);
+    throw new LeagueMutationValidationError('Rat could not verify the receiving roster or Discord roles. Check the roster and Rat’s permissions, then preview again.');
   }
 }
 
@@ -288,7 +313,9 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
         `Ratatoskr carries news of an agreement between ${mention(firstTeam!.teamRoleId)} and ${mention(secondTeam!.teamRoleId)}.`,
         '',
         `${player(0)} leaves ${mention(firstTeam!.teamRoleId)} to join ${mention(secondTeam!.teamRoleId)}.`,
-        `${player(1)} leaves ${mention(secondTeam!.teamRoleId)} to join ${mention(firstTeam!.teamRoleId)}.`,
+        isOneWayTrade(plan)
+          ? 'This is a one-way transfer. No player moves in return.'
+          : `${player(1)} leaves ${mention(secondTeam!.teamRoleId)} to join ${mention(firstTeam!.teamRoleId)}.`,
       ].join('\n'),
       footer: `Posted by ${actorName}`,
     };
@@ -413,6 +440,10 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     let prepared: PreparedLeagueSheetMutation;
     try {
       prepared = input.sheets.prepare(loaded, plan);
+      if (isOneWayTrade(plan)) {
+        if (!input.sheets.assertOneWayTradeDestination) throw new Error('Destination verification is unavailable.');
+        await input.sheets.assertOneWayTradeDestination(prepared);
+      }
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
@@ -427,6 +458,13 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
     ]));
+    if (isOneWayTrade(plan)) {
+      const change = plan.discordRoleChanges[0]!;
+      const before = beforeByPlayer.get(change.discordId)!;
+      const after = afterByPlayer.get(change.discordId)!;
+      before.observedManagedRoleIds = [change.remove[0]!, before.divisionRoleId];
+      after.observedManagedRoleIds = [change.add[0]!, after.divisionRoleId];
+    }
     try {
       for (const discordId of roleValidationPlayerIds) {
         await input.discord.validateRoleState(discordId, beforeByPlayer.get(discordId)!);
@@ -443,6 +481,12 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       const freshPlan = await input.buildPlan(loaded.snapshot, loaded);
       if (leagueTransactionPlanFingerprint(freshPlan) !== leagueTransactionPlanFingerprint(plan))
         throw new LeagueTransactionPreviewChangedError(freshPlan);
+    }
+    if (isOneWayTrade(plan)) {
+      if (!input.discord.validateOneWayTradeRoles) throw new LeagueMutationValidationError('Discord role verification is unavailable.');
+      await input.discord.validateOneWayTradeRoles(plan);
+      await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+      await input.authorizeBeforeWrite?.();
     }
     const nickname = plan.discordNicknameChange;
     if (nickname) {

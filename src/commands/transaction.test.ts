@@ -1,3 +1,5 @@
+import { DiscordLeagueGateway } from '../services/leagueDiscord.js';
+import { LeagueSheetsService } from '../services/leagueSheets.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
@@ -31,7 +33,7 @@ test('Valkyrie-only staff can confirm a saved transaction preview into the canon
     saveLeagueTransactionPreview(db, { guildId: 'g', actorUserId: 'valk-admin', intentKey: '["trade","one","two"]', planFingerprint: 'reviewed' });
     await handleTransactionCommand({ guild: { id: 'g', members: { fetch: async () => ({ displayName: 'Staff',
       roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } }) } }, user: { id: 'valk-admin' },
-      options: { getSubcommand: () => 'trade', getBoolean: () => true,
+      options: { getSubcommand: () => 'trade', getBoolean: () => true, getRole: () => null,
         getUser: (name: string) => ({ id: name === 'player_one' ? 'one' : 'two' }) },
       deferReply: async () => {}, editReply: async (reply: string) => { replies.push(reply); } } as never, db, db);
     assert.equal(replies.length, 1);
@@ -204,7 +206,7 @@ test('a Discord cooldown while building a /transaction preview is a private no-c
     for (const confirm of [false, true]) {
       const replies: string[] = [];
       await handleTransactionCommand({ guild, user: { id: 'valk-admin' },
-        options: { getSubcommand: () => 'trade', getBoolean: () => confirm,
+        options: { getSubcommand: () => 'trade', getBoolean: () => confirm, getRole: () => null,
           getUser: (name: string) => ({ id: name === 'player_one' ? 'one' : 'two' }) },
         deferReply: async () => {}, editReply: async (reply: string) => { replies.push(reply); } } as never, db, db);
       assert.equal(replies.length, 1);
@@ -218,4 +220,89 @@ test('a Discord cooldown while building a /transaction preview is a private no-c
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     db.close();
   }
+});
+
+test('trade offers an optional counterpart and a receiving team role, and rejects both or neither privately', async () => {
+  const command = transactionCommand.toJSON().options?.find(option => option.name === 'trade');
+  const options = command && 'options' in command ? command.options : [];
+  assert.equal(options?.find(option => option.name === 'player_two')?.required ?? false, false);
+  assert.equal(options?.find(option => option.name === 'receiving_team')?.type, 8);
+  const db = openDatabase(':memory:');
+  try {
+    for (const supplied of [true, false]) {
+      const replies: string[] = [];
+      await handleTransactionCommand({
+        guild: { id: 'g', members: { fetch: async () => ({ roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } }) } },
+        user: { id: 'staff' },
+        options: { getSubcommand: () => 'trade', getBoolean: () => true,
+          getUser: (name: string) => name === 'player_one' ? { id: 'one' } : supplied ? { id: 'two' } : null,
+          getRole: () => supplied ? { id: 'team-b' } : null },
+        deferReply: async (reply: { flags: number }) => assert.equal(reply.flags, 64),
+        editReply: async (reply: string) => { replies.push(reply); },
+      } as never, db, db);
+      assert.equal(replies.length, 1);
+      assert.match(replies[0]!, /player_two.*receiving_team.*Choose exactly one.*No changes were made/);
+    }
+    assert.deepEqual(db.prepare('SELECT count(*) n FROM league_jobs').get(), { n: 0 });
+    assert.deepEqual(db.prepare('SELECT count(*) n FROM league_transaction_previews').get(), { n: 0 });
+  } finally { db.close(); }
+});
+
+test('one-way command previews privately, refreshes stale approval, and queues one matching intent', async (t) => {
+  const db = openDatabase(':memory:');
+  t.after(() => db.close());
+  const worker = new LeagueJobWorker(db, 'g', {} as Record<LeagueJobType, LeagueJobHandler>, async () => {});
+  worker.stop();
+  registerLeagueJobWorker(db, worker);
+  for (const [key, value] of Object.entries({ ROLE_FREE_AGENT_ID: 'fa', YSL_TRANSACTIONS_CHANNEL_ID: 'notices',
+    YSL_ADMIN_SPREADSHEET_ID: 'test-admin', YSL_PUBLIC_SPREADSHEET_ID: 'test-public',
+    GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: 'bot@example.com', private_key: 'synthetic-test-key' }) })) {
+    const old = process.env[key];
+    process.env[key] = value;
+    t.after(() => { if (old === undefined) delete process.env[key]; else process.env[key] = old; });
+  }
+  const snapshot: LeagueSnapshot = {
+    teams: ['A', 'B'].map(franchise => ({
+      teamKey: 'Vanaheim|' + franchise, franchise, division: 'Vanaheim', teamRoleId: franchise,
+      teamRole: franchise + ' VD', divisionRoleId: 'division', active: true,
+    })),
+    rosters: [{ sheetRow: 6, division: 'Vanaheim', franchise: 'A', teamRoleId: 'A', team: 'A VD',
+      discordId: 'one', player: 'One', rosterStatus: 'Player' }],
+    names: [{ sheetRow: 6, discordId: 'one', currentLeagueName: 'One', knownName: 'One',
+      nameStatus: 'Current Discord Name', division: 'Vanaheim', franchise: 'A', leagueStatus: 'Player' }],
+    discordMembers: [{ discordId: 'one', displayName: 'One', roleIds: ['A', 'division'] }],
+    publicRosters: { Vanaheim: { teams: { A: ['One'], B: [] }, freeAgents: [] } },
+    freeAgentRoleId: 'fa',
+  };
+  const memberReads = t.mock.method(DiscordLeagueGateway.prototype, 'getMembers', async () => snapshot.discordMembers);
+  t.mock.method(DiscordLeagueGateway.prototype, 'validateOneWayTradeRoles', async () => {});
+  t.mock.method(DiscordLeagueGateway.prototype, 'validateDisplayName', async () => {});
+  t.mock.method(LeagueSheetsService.prototype, 'load', async () => ({ snapshot, sources: {} as never }));
+  t.mock.method(LeagueSheetsService.prototype, 'prepare', () => ({ publicUpdates: [] }));
+  t.mock.method(LeagueSheetsService.prototype, 'assertOneWayTradeDestination', async () => {});
+  t.mock.method(LeagueSheetsService.prototype, 'apply', async () => assert.fail('Preview or confirm wrote Sheets'));
+  t.mock.method(DiscordLeagueGateway.prototype, 'applyRoleChange', async () => assert.fail('Preview or confirm wrote roles'));
+  const invoke = async (confirm: boolean) => {
+    const replies: string[] = [];
+    await handleTransactionCommand({
+      guild: { id: 'g', members: { fetch: async () => ({ displayName: 'Staff', roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } }) } },
+      user: { id: 'staff' },
+      options: { getSubcommand: () => 'trade', getBoolean: () => confirm,
+        getUser: (name: string) => name === 'player_one' ? { id: 'one' } : null, getRole: () => ({ id: 'B' }) },
+      deferReply: async (reply: { flags: number }) => assert.equal(reply.flags, 64),
+      editReply: async (reply: string) => { replies.push(reply); },
+    } as never, db, db);
+    return replies.join('\n');
+  };
+  assert.match(await invoke(false), /1-for-0.*\nOne.*A → B\nA roster: 1 → 0\nB roster: 0 → 1/);
+  assert.equal(memberReads.mock.callCount(), 1);
+  snapshot.teams[1]!.teamRole = 'Renamed B VD';
+  assert.match(await invoke(true), /changed after your review/);
+  assert.deepEqual(db.prepare('SELECT count(*) n FROM league_jobs').get(), { n: 0 });
+  const queued = await invoke(true);
+  assert.match(queued, /YSL-JOB-/);
+  assert.equal(await invoke(true), queued);
+  assert.equal(memberReads.mock.callCount(), 3);
+  assert.deepEqual(db.prepare("SELECT json_extract(payload_json, '$.selections') AS selections FROM league_jobs").all(),
+    [{ selections: '["trade-one-way","one","B"]' }]);
 });

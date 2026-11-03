@@ -388,6 +388,38 @@ export function buildTradePlan(snapshot: LeagueSnapshot, firstId: string, second
   };
 }
 
+export function isOneWayTrade(plan: LeagueMutationPlan): boolean {
+  return plan.kind === 'trade' && plan.playerIds.length === 1;
+}
+
+export function buildOneWayTradePlan(snapshot: LeagueSnapshot, playerId: string, receivingRoleId: string): LeagueMutationPlan {
+  const roster = requireRoster(snapshot, playerId);
+  const sender = requireTeam(snapshot, roster.teamRoleId);
+  const receiver = requireTeam(snapshot, receivingRoleId);
+  if (sender.division !== receiver.division) throw new LeagueMutationValidationError('Cross-division trades are not supported.');
+  if (sender.teamRoleId === receiver.teamRoleId) throw new LeagueMutationValidationError('The player is already on the receiving team.');
+  const member = snapshot.discordMembers.find(candidate => candidate.discordId === playerId);
+  if (!member) throw new LeagueMutationValidationError('That player is not currently in the Discord server.');
+  if (!member.roleIds.includes(sender.teamRoleId)) throw new LeagueMutationValidationError('The player does not have their current team role.');
+  const name = currentNameRow(snapshot, playerId);
+  if (teamAreaUsesName(snapshot, receiver.teamRoleId, name.currentLeagueName)) {
+    throw new LeagueMutationValidationError('A traded player name is already used in the destination roster area.');
+  }
+  return {
+    kind: 'trade',
+    rosters: snapshot.rosters.map(row => row.discordId === playerId ? replaceRosterTeam(row, receiver) : { ...row }),
+    nameUpdates: snapshot.names.map(row => row.sheetRow === name.sheetRow ? { ...row, franchise: receiver.franchise } : { ...row }),
+    publicChanges: [
+      { division: sender.division, area: 'team', group: sender.franchise, from: name.currentLeagueName, to: '' },
+      { division: receiver.division, area: 'team', group: receiver.franchise, from: '', to: name.currentLeagueName },
+    ],
+    discordRoleChanges: [{ discordId: playerId, remove: [sender.teamRoleId], add: [receiver.teamRoleId] }],
+    teams: [sender, receiver],
+    players: [name.currentLeagueName],
+    playerIds: [playerId],
+  };
+}
+
 type ExitKind = 'drop' | 'departure' | 'self-drop';
 
 function buildExitPlan(

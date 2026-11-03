@@ -1,3 +1,4 @@
+import { isOneWayTrade } from '../domain/leagueOperations.js';
 import { parseReinstatementSelection } from './leagueTransactionIntent.js';
 import { listLeagueMutationProblems, listOpenLeagueReconciliationTickets } from '../db/repositories/leagueOperations.js';
 import { leagueEasternTime } from './leaguePresentation.js';
@@ -73,8 +74,8 @@ export class LeagueOpsReviewService {
     try { if (typeof payload.selections === 'string') reinstatement = parseReinstatementSelection(payload.selections); } catch { /* malformed stored evidence cannot authorize a preview */ }
     try { if (typeof payload.selections === 'string') selections = JSON.parse(payload.selections); } catch { /* evidence remains inspectable */ }
     if (!Array.isArray(selections)) selections = [];
-    const action = reinstatement ? 'reinstate' : typeof payload.action === 'string' ? payload.action : typeof selections[0] === 'string' ? selections[0] : job.type;
-    const playerSelections = reinstatement ? [reinstatement.playerId] : selections[0] === 'pickup' || selections[0] === 'rename' ? selections.slice(1, 2) : selections.slice(1);
+    const action = reinstatement ? 'reinstate' : typeof payload.action === 'string' ? payload.action : selections[0] === 'trade-one-way' ? 'trade' : typeof selections[0] === 'string' ? selections[0] : job.type;
+    const playerSelections = reinstatement ? [reinstatement.playerId] : selections[0] === 'pickup' || selections[0] === 'trade-one-way' || selections[0] === 'rename' ? selections.slice(1, 2) : selections.slice(1);
     const ids = [payload.oldDiscordId, payload.newDiscordId, ...playerSelections].filter((id): id is string => typeof id === 'string' && /^\d{16,20}$/.test(id));
     const expectedFinding = typeof payload.expectedFinding === 'string' ? payload.expectedFinding : '';
     const canRepreview = this.prewrite(job) && typeof payload.selections === 'string' && selections.length >= 2;
@@ -90,7 +91,7 @@ export class LeagueOpsReviewService {
       : 'Check the latest records and settings with staff before trying another action.';
     const targets = ids.length ? ids.map(id => this.memberLabel(id)) : expectedFinding ? [expectedFinding] : [];
     if (reinstatement) targets.push(`Original exit: ${reinstatement.sourceReference}; requested status: ${reinstatement.returnStatus}; official proposed date: ${reinstatement.effectiveDate}.`);
-    if (selections[0] === 'pickup' && typeof selections[2] === 'string') targets.push(`Team role: ${this.input.roleLabel?.(selections[2]) ?? selections[2]}`);
+    if ((selections[0] === 'pickup' || selections[0] === 'trade-one-way') && typeof selections[2] === 'string') targets.push(`Team role: ${this.input.roleLabel?.(selections[2]) ?? selections[2]}`);
     if (selections[0] === 'rename' && typeof selections[2] === 'string') targets.push(`Requested league name: ${selections[2]}`);
     const originalReference = typeof payload.reconcileReference === 'string' ? payload.reconcileReference : payload.mode === 'reconcile' ? payload.reference : undefined;
     if (typeof originalReference === 'string') targets.push(`Checking the earlier saved action: ${originalReference}`);
@@ -215,6 +216,14 @@ export class LeagueOpsReviewService {
     if (!original || original.guildId !== this.input.guildId || !this.prewrite(original)
       || (original.payload as { selections: string }).selections !== preview.selections)
       throw new LeagueMutationValidationError('The original operation changed. Refresh and request a new preview.');
+    if (isOneWayTrade(preview.plan)) {
+      const fresh = await this.input.previewTransaction(preview.selections);
+      await this.authorize(actor);
+      const alreadyQueued = getLeagueJobByDedupe(this.input.db, this.input.guildId, key);
+      if (alreadyQueued) return alreadyQueued;
+      if (leagueTransactionPlanFingerprint(fresh) !== preview.fingerprint || !this.prewrite(original))
+        throw new LeagueMutationValidationError('The trade changed after your review. Request a fresh preview.');
+    }
     return this.input.worker.enqueue('transaction', { actorUserId: actor, actorName, selections: preview.selections,
       expectedPlanFingerprint: preview.fingerprint, originalBlockedReference: preview.originalReference }, key);
   }
