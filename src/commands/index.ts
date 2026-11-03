@@ -35,6 +35,8 @@ export async function handleInteraction(
   scoutSignupDependencies: ScoutSignupDependencies,
 ) {
   const db = storage.legacyDatabase;
+  const { handleGroupTradeInteraction } = await import('../services/leagueGroupTradeUi.js');
+  if (await handleGroupTradeInteraction(interaction, db, storage.operationScope)) return;
   const { handleReinstatementInteraction } = await import('../services/leagueReinstatementUi.js');
   if (await handleReinstatementInteraction(interaction, db, storage.operationScope)) return;
   const { handleLeagueOpsUi } = await import('../services/leagueOpsUi.js');

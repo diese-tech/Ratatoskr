@@ -67,7 +67,26 @@ export type PublicRosterChange = {
 export type DiscordRoleChange = { discordId: string; remove: string[]; add: string[] };
 export type DiscordNicknameChange = { discordId: string; before: string | null; beforeDisplayName: string; after: string };
 
+export type GroupTradeSelection = {
+  teamA: string;
+  teamB: string;
+  outboundA: string[];
+  outboundB: string[];
+  reason?: string;
+};
+
+export type GroupTradeDetails = {
+  selection: GroupTradeSelection;
+  before: [string[], string[]];
+  after: [string[], string[]];
+  advisories: string[];
+  protectedPicks?: { playerId: string; ownerId: string; label: string }[];
+  sheetFingerprint?: string;
+  rosterRevision?: number;
+};
+
 export type LeagueMutationPlan = {
+  groupTrade?: GroupTradeDetails;
   kind: 'trade' | 'drop' | 'pickup' | 'rename' | 'departure' | 'self-drop' | 'reinstatement';
   reinstatement?: ReinstatementDetails;
   rosters: LeagueRosterRow[];
@@ -417,6 +436,72 @@ export function buildOneWayTradePlan(snapshot: LeagueSnapshot, playerId: string,
     teams: [sender, receiver],
     players: [name.currentLeagueName],
     playerIds: [playerId],
+  };
+}
+
+const groupTradeRatios = new Set(['1:1', '2:1', '1:2', '2:2', '3:2', '2:3']);
+
+export function buildGroupTradePlan(snapshot: LeagueSnapshot, selection: GroupTradeSelection): LeagueMutationPlan {
+  const outboundA = [...selection.outboundA].sort();
+  const outboundB = [...selection.outboundB].sort();
+  if (!groupTradeRatios.has(`${outboundA.length}:${outboundB.length}`))
+    throw new LeagueMutationValidationError('Choose a supported exchange: 1-for-1, 2-for-1, 1-for-2, 2-for-2, 3-for-2 or 2-for-3.');
+  const ids = [...outboundA, ...outboundB];
+  if (new Set(ids).size !== ids.length)
+    throw new LeagueMutationValidationError('Choose each player only once.');
+  const teamA = requireTeam(snapshot, selection.teamA);
+  const teamB = requireTeam(snapshot, selection.teamB);
+  if (teamA.teamRoleId === teamB.teamRoleId) throw new LeagueMutationValidationError('Choose two different teams.');
+  if (teamA.division !== teamB.division) throw new LeagueMutationValidationError('Cross-division trades are not supported.');
+  const movers = ids.map((id, index) => {
+    const [from, to] = index < outboundA.length ? [teamA, teamB] : [teamB, teamA];
+    const roster = requireRoster(snapshot, id);
+    const name = currentNameRow(snapshot, id);
+    const member = snapshot.discordMembers.find(item => item.discordId === id);
+    if (!member) throw new LeagueMutationValidationError('That player is not currently in the Discord server.');
+    if (roster.teamRoleId !== from.teamRoleId || roster.division !== from.division || !member.roleIds.includes(from.teamRoleId))
+      throw new LeagueMutationValidationError('A selected player is no longer on the team shown. Check their roster and Discord roles.');
+    return { id, from, to, roster, name };
+  });
+  const byId = new Map(movers.map(mover => [mover.id, mover]));
+  const rosters = snapshot.rosters.map(row => {
+    const move = byId.get(row.discordId);
+    return move ? replaceRosterTeam(row, move.to) : { ...row };
+  });
+  const teams = [teamA, teamB] as const;
+  const composition = (rows: LeagueRosterRow[]) => teams.map(team =>
+    rows.filter(row => row.teamRoleId === team.teamRoleId).map(row => row.player)) as [string[], string[]];
+  const before = composition(snapshot.rosters);
+  const after = composition(rosters);
+  if (after.some(hasDuplicateNames))
+    throw new LeagueMutationValidationError('A traded player name is already used in the destination roster area.');
+  const advisories = movers.filter(move => move.roster.rosterStatus === 'Captain')
+    .map(move => `${move.name.currentLeagueName} is a captain. Review captain access separately.`);
+  teams.forEach((team, index) => {
+    const count = after[index]!.length;
+    if (count !== before[index]!.length) advisories.push(`${team.franchise} would have ${count} players. Review league roster-size rules.`);
+  });
+  advisories.push('Confirm trade timing and any current discipline with staff. Rat does not determine eligibility or change sanctions.');
+  return {
+    kind: 'trade',
+    groupTrade: { selection: { ...selection, outboundA, outboundB }, before, after, advisories },
+    rosters,
+    nameUpdates: snapshot.names.map(row => {
+      const move = byId.get(row.discordId);
+      return move && row.sheetRow === move.name.sheetRow ? { ...row, franchise: move.to.franchise } : { ...row };
+    }),
+    publicChanges: teams.flatMap(team => {
+      const outgoing = movers.filter(move => move.from === team);
+      const incoming = movers.filter(move => move.to === team);
+      return Array.from({ length: Math.max(outgoing.length, incoming.length) }, (_, index) => ({
+        division: team.division, area: 'team' as const, group: team.franchise,
+        from: outgoing[index]?.name.currentLeagueName ?? '', to: incoming[index]?.name.currentLeagueName ?? '',
+      }));
+    }),
+    discordRoleChanges: movers.map(({ id, from, to }) => ({ discordId: id, remove: [from.teamRoleId], add: [to.teamRoleId] })),
+    teams: [...teams],
+    players: movers.map(move => move.name.currentLeagueName),
+    playerIds: ids,
   };
 }
 

@@ -1,4 +1,4 @@
-import { parseReinstatementSelection } from './leagueTransactionIntent.js';
+import { parseGroupTradeIntent, parseReinstatementSelection } from './leagueTransactionIntent.js';
 import { listLeagueMutationProblems, listOpenLeagueReconciliationTickets } from '../db/repositories/leagueOperations.js';
 import { leagueEasternTime } from './leaguePresentation.js';
 import { draftSnapshotStatus } from './leagueStatusSnapshot.js';
@@ -73,11 +73,13 @@ export class LeagueOpsReviewService {
     try { if (typeof payload.selections === 'string') reinstatement = parseReinstatementSelection(payload.selections); } catch { /* malformed stored evidence cannot authorize a preview */ }
     try { if (typeof payload.selections === 'string') selections = JSON.parse(payload.selections); } catch { /* evidence remains inspectable */ }
     if (!Array.isArray(selections)) selections = [];
-    const action = reinstatement ? 'reinstate' : typeof payload.action === 'string' ? payload.action : selections[0] === 'trade-one-way' ? 'trade' : typeof selections[0] === 'string' ? selections[0] : job.type;
-    const playerSelections = reinstatement ? [reinstatement.playerId] : selections[0] === 'pickup' || selections[0] === 'trade-one-way' || selections[0] === 'rename' ? selections.slice(1, 2) : selections.slice(1);
+    let group: ReturnType<typeof parseGroupTradeIntent>;
+    try { if (typeof payload.selections === 'string') group = parseGroupTradeIntent(payload.selections); } catch { /* malformed evidence remains inspectable */ }
+    const action = group ? 'trade' : reinstatement ? 'reinstate' : typeof payload.action === 'string' ? payload.action : selections[0] === 'trade-one-way' ? 'trade' : typeof selections[0] === 'string' ? selections[0] : job.type;
+    const playerSelections = group ? [...group.outboundA, ...group.outboundB] : reinstatement ? [reinstatement.playerId] : selections[0] === 'pickup' || selections[0] === 'trade-one-way' || selections[0] === 'rename' ? selections.slice(1, 2) : selections.slice(1);
     const ids = [payload.oldDiscordId, payload.newDiscordId, ...playerSelections].filter((id): id is string => typeof id === 'string' && /^\d{16,20}$/.test(id));
     const expectedFinding = typeof payload.expectedFinding === 'string' ? payload.expectedFinding : '';
-    const canRepreview = this.prewrite(job) && typeof payload.selections === 'string' && selections.length >= 2;
+    const canRepreview = !group && this.prewrite(job) && typeof payload.selections === 'string' && selections.length >= 2;
     const canRecover = job.status === 'RECONCILIATION_REQUIRED'
       && (job.type === 'repair' ? getLeagueAuditRepair(this.input.db, job.reference)?.status === 'reconciliation_required'
         : job.type === 'account-replacement' && getAccountReplacement(this.input.db, this.input.guildId, job.reference)?.status === 'reconciliation_required');
@@ -89,6 +91,7 @@ export class LeagueOpsReviewService {
       : job.type === 'repair' ? 'Check Roster problems for this player. If the problem is gone, no new fix is needed. Earlier attempts stay in history.'
       : 'Check the latest records and settings with staff before trying another action.';
     const targets = ids.length ? ids.map(id => this.memberLabel(id)) : expectedFinding ? [expectedFinding] : [];
+    if (group) targets.push(`${group.outboundA.length}-for-${group.outboundB.length} trade`);
     if (reinstatement) targets.push(`Original exit: ${reinstatement.sourceReference}; requested status: ${reinstatement.returnStatus}; official proposed date: ${reinstatement.effectiveDate}.`);
     if ((selections[0] === 'pickup' || selections[0] === 'trade-one-way') && typeof selections[2] === 'string') targets.push(`Team role: ${this.input.roleLabel?.(selections[2]) ?? selections[2]}`);
     if (selections[0] === 'rename' && typeof selections[2] === 'string') targets.push(`Requested league name: ${selections[2]}`);
@@ -202,6 +205,8 @@ export class LeagueOpsReviewService {
     if (!job || job.guildId !== this.input.guildId || !this.prewrite(job))
       throw new LeagueMutationValidationError('Only a proven pre-write blocked transaction can receive a fresh preview.');
     const selections = (job.payload as { selections: string }).selections;
+    if (parseGroupTradeIntent(selections))
+      throw new LeagueMutationValidationError('Open a new two-team trade review from /transaction trade to select and review the players again.');
     const plan = await this.input.previewTransaction(selections);
     await this.authorize(actor);
     return { originalReference: reference, selections, fingerprint: leagueTransactionPlanFingerprint(plan), approval: randomUUID(), plan };

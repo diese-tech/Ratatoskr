@@ -1,7 +1,12 @@
+import { openDatabase } from '../db/client.js';
+import { getLeagueTransaction } from '../db/repositories/leagueOperations.js';
+import { buildVerifiedTransactionIntent } from './leagueReinstatement.js';
+import { groupTradeIntent } from './leagueTransactionIntent.js';
+import { executeLeagueTransaction, leagueTransactionPlanFingerprint, reconcilePendingLeagueTransactions, type LeagueDiscordPort } from './leagueTransactions.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DRAFT_PICK_HEADERS } from './draftPicks.js';
-import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan, buildGroupTradePlan } from '../domain/leagueOperations.js';
 import {
   createLeagueSheetsReadSchedule,
   createGoogleLeagueSheetsGateway,
@@ -36,7 +41,9 @@ class FakeGateway implements LeagueSheetsGateway {
   key(spreadsheetId: string, range: string) { return `${spreadsheetId}:${range}`; }
   async getValues(spreadsheetId: string, range: string): Promise<Rows> {
     this.reads.push({ spreadsheetId, range });
-    const rows = structuredClone(this.data.get(this.key(spreadsheetId, range)) ?? []);
+    const cell = /^'([^']+) Roster'!([A-O])(\d+)$/.exec(range);
+    const fallback = cell ? [[this.data.get(this.key(spreadsheetId, `'${cell[1]} Roster'!A1:O99`))?.[Number(cell[3]) - 1]?.[cell[2]!.charCodeAt(0) - 65] ?? '']] : [];
+    const rows = structuredClone(this.data.get(this.key(spreadsheetId, range)) ?? fallback);
     if (range === "'Draft Picks'!A5:J5" && !this.data.has(this.key(spreadsheetId, range))) return [DRAFT_PICK_HEADERS];
     if (this.changed && range.includes('Current Rosters')) rows[1]![5] = 'Manual edit';
     return rows;
@@ -844,3 +851,192 @@ test('one-way transfer refuses a full receiving block or a formula that displays
   assert.throws(() => service.prepare(loaded, plan), /No empty slot/);
   assert.equal(gateway.writes.length, 0);
 });
+
+function groupTradeSheets() {
+  const { gateway, service } = serviceFixture();
+  const rosterRows = gateway.data.get(gateway.key('admin', "'Current Rosters'!A5:J"))!;
+  const names = gateway.data.get(gateway.key('admin', "'Player Name History'!A5:K"))!;
+  const publicRows = gateway.data.get(gateway.key('public', "'Vanaheim Roster'!A1:O99"))!;
+  const players = structuredClone(members);
+  for (const [team, franchise, start, column] of [
+    ['team-a', 'Dream Walkers', 4, 2], ['team-b', 'The Sewer', 15, 6],
+  ] as const) {
+    for (const index of [1, 2]) {
+      const name = franchise + ' ' + index;
+      const id = team + index;
+      rosterRows.push(['Vanaheim', franchise, team, franchise + ' VD', id, name, 'Player', 'OK', 'audit', 'now']);
+      names.push([id, name, name, 'Current Discord Name', 'Vanaheim', franchise, 'Player']);
+      publicRows[start + index]![column] = name;
+      players.push({ discordId: id, displayName: name, roleIds: [team, 'division-v'] });
+    }
+  }
+  gateway.data.set(gateway.key('admin', "'Draft Picks'!A6:J"), [
+    ['Vanaheim', 'Dream Walkers', '1', '3', 'Original One', 'one', 'One', 'Member Directory', 'On drafted team'],
+  ]);
+  return { gateway, service, players, publicRows };
+}
+
+for (const [a, b] of [[1, 1], [2, 1], [1, 2], [2, 2], [3, 2], [2, 3]] as const) {
+  test(`grouped ${a}-for-${b} writes simultaneous rosters and one attributed history row per mover`, async () => {
+    const { gateway, service, players } = groupTradeSheets();
+    const loaded = await service.load(players, 'free-agent');
+    const plan = buildGroupTradePlan(loaded.snapshot, {
+      teamA: 'team-a', teamB: 'team-b', outboundA: ['one', 'team-a1', 'team-a2'].slice(0, a),
+      outboundB: ['two', 'team-b1', 'team-b2'].slice(0, b), reason: 'Staff reviewed',
+    });
+    await service.verifyGroupTradeSheets(loaded, plan);
+    const details = plan.groupTrade!;
+    assert.deepEqual(details.after.map(team => team.length), [3 - a + b, 3 - b + a]);
+    assert.ok(details.advisories.some(line => line.includes('captain')));
+    assert.ok(details.advisories.some(line => line.includes('protected top-four')));
+    assert.equal(details.advisories.some(line => line.includes('roster-size')), a !== b);
+    const record = { reference: 'trade-ref', effectiveDate: '2026-11-03', processedBy: 'Staff', processedById: 'staff', announcementId: 'post' };
+    await service.apply(loaded, plan, record, service.prepare(loaded, plan));
+    const next = (await service.load(players, 'free-agent')).snapshot;
+    assert.deepEqual(next.rosters, plan.rosters);
+    assert.deepEqual(next.names.map(row => row.franchise), plan.nameUpdates.map(row => row.franchise));
+    for (const [i, team] of plan.teams.entries())
+      assert.deepEqual([...next.publicRosters.Vanaheim!.teams[team.franchise]!].sort(), [...details.after[i]!].sort());
+    assert.equal(new Set(plan.discordRoleChanges.map(change => change.discordId)).size, a + b);
+    const [pick] = await service.appendTransactionHistory(plan, record);
+    assert.equal(pick?.team, 'Dream Walkers');
+    assert.equal(pick?.discordId, 'one');
+    assert.equal(gateway.draftHighlights.length, 1);
+    const rows = gateway.appends[0]!.values;
+    assert.equal(rows.length, a + b);
+    for (const [index, row] of rows.entries()) {
+      const change = plan.discordRoleChanges[index]!;
+      assert.deepEqual(row.slice(0, 2), ['trade-ref', 'trade']);
+      assert.deepEqual(row.slice(4, 8), [
+        plan.teams.find(team => team.teamRoleId === change.remove[0])!.franchise,
+        plan.teams.find(team => team.teamRoleId === change.add[0])!.franchise,
+        change.discordId, plan.players[index],
+      ]);
+      assert.match(String(row[11]), /Staff reviewed/);
+    }
+    const historyRange = gateway.key('admin', "'Transaction History'!A6:M");
+    gateway.data.set(historyRange, rows);
+    await service.appendTransactionHistory(plan, record);
+    assert.equal(gateway.appends.length, 1, 'a lost append response does not append again');
+    gateway.data.set(historyRange, rows.slice(1));
+    await assert.rejects(() => service.appendTransactionHistory(plan, record), /incomplete or conflicting History/);
+    assert.equal(gateway.appends.length, 1, 'partial history is not replayed');
+  });
+}
+
+test('grouped trade uses owned vacated slots and refuses full blocks or blank formulas', async () => {
+  const { gateway, service, players, publicRows } = groupTradeSheets();
+  const loaded = await service.load(players, 'free-agent');
+  const plan = buildGroupTradePlan(loaded.snapshot, {
+    teamA: 'team-a', teamB: 'team-b', outboundA: ['one', 'team-a1'], outboundB: ['two'],
+  });
+  const prepared = service.prepare(loaded, plan);
+  const blank = prepared.publicUpdates[plan.publicChanges.findIndex(change => change.from === '')]!;
+  gateway.data.set(gateway.key('public', blank.range), [['=""']]);
+  await assert.rejects(() => service.assertGroupTradeCells(plan, prepared), /value or formula/);
+  for (let row = 18; row <= 21; row++) publicRows[row]![6] = 'Occupied ' + row;
+  const full = await service.load(players, 'free-agent');
+  assert.throws(() => service.prepare(full, plan), /No empty slot/);
+  assert.equal(gateway.writes.length, 0);
+});
+
+for (const outcome of ['complete', 'uncertain role', 'uncertain Sheet', 'lost history response', 'stale draft'] as const) {
+  test(`grouped worker preserves one agreement through ${outcome}`, async () => {
+    const db = openDatabase(':memory:');
+    const { gateway, service, players } = groupTradeSheets();
+    const draft = gateway.data.get(gateway.key('admin', "'Draft Picks'!A6:J"))!;
+    const historyRange = gateway.key('admin', "'Transaction History'!A6:M");
+    players[0]!.displayName = 'One';
+    players[1]!.displayName = 'Two';
+    players[2]!.displayName = 'Free';
+    players.forEach(member => member.roleIds.push('unrelated'));
+    const selection = groupTradeIntent({ teamA: 'team-a', teamB: 'team-b', outboundA: ['one', 'team-a1', 'team-a2'], outboundB: ['two', 'team-b1'] });
+    let notice: string | undefined;
+    let roleWrites = 0;
+    let historyWrites = 0;
+    let noticeWrites = 0;
+    const discord: LeagueDiscordPort = {
+      getMembers: async () => structuredClone(players),
+      validateGroupTradeRoles: async () => {},
+      validateRoleState: async (id, state) => {
+        const member = players.find(player => player.discordId === id)!;
+        assert.ok(member.roleIds.includes(state.expectedTeamRoleId!));
+        assert.ok(member.roleIds.includes(state.divisionRoleId));
+      },
+      validateMemberAbsent: async () => assert.fail('No absent players'),
+      validateDisplayName: async (id, name) => { assert.equal(players.find(player => player.discordId === id)?.displayName, name); },
+      applyRoleChange: async change => {
+        const member = players.find(player => player.discordId === change.discordId)!;
+        member.roleIds = member.roleIds.filter(id => !change.remove.includes(id)).concat(change.add);
+        roleWrites++;
+        if (outcome === 'uncertain role' && roleWrites === 2)
+          throw Object.assign(new Error('Role response lost'), { reconciliationRequired: true });
+      },
+      rollbackRoleChange: async () => assert.fail('Uncertain writes must not roll back'),
+      findAnnouncement: async () => notice,
+      announce: async announcement => {
+        assert.equal(announcement.title, 'Word Travels the Branches');
+        assert.deepEqual(announcement.allowedRoleIds, ['team-a', 'team-b']);
+        assert.equal((announcement.description.match(/ leaves /g) ?? []).length, 5);
+        assert.doesNotMatch(announcement.description, /trade-ref|undefined/);
+        noticeWrites++;
+        return notice = 'notice';
+      },
+    };
+    const append = gateway.append.bind(gateway);
+    gateway.append = async (spreadsheet, range, rows, option) => {
+      await append(spreadsheet, range, rows, option);
+      historyWrites++;
+      gateway.data.set(historyRange, structuredClone(rows));
+      if (outcome === 'lost history response') throw Error('History append response lost');
+    };
+    const batch = gateway.batchUpdate.bind(gateway);
+    gateway.batchUpdate = async (spreadsheet, updates, option) => {
+      await batch(spreadsheet, updates, option);
+      if (outcome === 'uncertain Sheet' && spreadsheet === 'public') throw Error('Public Sheet response lost');
+    };
+    try {
+      const loadPlan = (loaded: Awaited<ReturnType<typeof service.load>>) => buildVerifiedTransactionIntent({
+        db, guildId: 'guild', sheets: service, selections: selection, loaded,
+      });
+      const plan = await loadPlan(await service.load(players, 'free-agent'));
+      if (outcome === 'stale draft') draft[0]![3] = '4';
+      const input = {
+        db, operationScope: db, guildId: 'guild', actorUserId: 'staff', actorName: 'Staff',
+        freeAgentRoleId: 'free-agent', now: new Date('2026-11-03T17:00:00Z'), jobReference: 'trade-ref',
+        buildPlan: (_snapshot: unknown, loaded: Awaited<ReturnType<typeof service.load>>) => loadPlan(loaded),
+        expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan), sheets: service, discord,
+      };
+      if (outcome === 'complete') await executeLeagueTransaction(input);
+      else await assert.rejects(() => executeLeagueTransaction(input));
+      if (outcome === 'stale draft') {
+        assert.equal(roleWrites + noticeWrites + historyWrites + gateway.writes.length, 0);
+        assert.equal(getLeagueTransaction(db, 'trade-ref'), undefined);
+        return;
+      }
+      if (outcome === 'uncertain role' || outcome === 'uncertain Sheet') {
+        assert.equal(getLeagueTransaction(db, 'trade-ref')?.status, 'reconciliation_required');
+        assert.equal(noticeWrites + historyWrites, 0);
+        const writes = roleWrites + gateway.writes.length;
+        await reconcilePendingLeagueTransactions(input);
+        await assert.rejects(() => executeLeagueTransaction(input));
+        assert.equal(roleWrites + gateway.writes.length, writes);
+        return;
+      }
+      if (outcome === 'lost history response') {
+        assert.equal(getLeagueTransaction(db, 'trade-ref')?.status, 'announcement_pending');
+        await reconcilePendingLeagueTransactions(input);
+      }
+      await executeLeagueTransaction(input);
+      assert.equal(getLeagueTransaction(db, 'trade-ref')?.status, 'completed');
+      assert.equal(roleWrites, 5);
+      assert.equal(noticeWrites, 1);
+      assert.equal(historyWrites, 1);
+      assert.equal(gateway.data.get(historyRange)?.length, 5);
+      for (const change of plan.discordRoleChanges) {
+        const member = players.find(player => player.discordId === change.discordId)!;
+        assert.deepEqual([...member.roleIds].sort(), [change.add[0]!, 'division-v', 'unrelated'].sort());
+      }
+    } finally { db.close(); }
+  });
+}

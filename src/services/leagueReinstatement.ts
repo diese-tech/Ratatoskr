@@ -65,10 +65,22 @@ export async function reinstatementSources(db: Database.Database, guildId: strin
 }
 
 export async function buildVerifiedTransactionIntent(input: {
-  db: Database.Database; guildId: string; sheets: Partial<ReinstatementSheets>; selections: string; loaded: LoadedLeagueSnapshot;
+  db: Database.Database; guildId: string; sheets: Partial<ReinstatementSheets & Pick<LeagueSheetsService, 'verifyGroupTradeSheets'>>; selections: string; loaded: LoadedLeagueSnapshot;
 }): Promise<LeagueMutationPlan> {
   const selection = parseReinstatementSelection(input.selections);
-  if (!selection) return buildLeagueIntentPlan(input.selections, input.loaded.snapshot);
+  if (!selection) {
+    const plan = buildLeagueIntentPlan(input.selections, input.loaded.snapshot);
+    if (plan.groupTrade) {
+      if (!input.sheets.verifyGroupTradeSheets) throw new LeagueMutationValidationError('Trade Sheet verification is unavailable.');
+      if (hasPendingLeagueDeliveries(input.db, input.guildId) || listLeagueMutationProblems(input.db, input.guildId).length)
+        throw new LeagueMutationValidationError('An earlier league action still needs recovery. Review Saved actions before confirming this trade.');
+      const revision = input.db.prepare('SELECT COALESCE(MAX(rowid), 0) AS revision FROM league_transactions WHERE guild_id = ?')
+        .get(input.guildId) as { revision: number };
+      plan.groupTrade.rosterRevision = revision.revision;
+      await input.sheets.verifyGroupTradeSheets(input.loaded, plan);
+    }
+    return plan;
+  }
   if (!input.sheets.readTransactionHistory) throw new LeagueMutationValidationError('Historical Sheet verification is unavailable. Ask staff to check the bot before approving.');
   if (hasPendingLeagueDeliveries(input.db, input.guildId) || listLeagueMutationProblems(input.db, input.guildId).length)
     throw new LeagueMutationValidationError('An earlier league action still needs recovery. Resolve that saved action before reinstating a player.');

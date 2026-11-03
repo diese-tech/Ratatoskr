@@ -8,6 +8,8 @@ import {
   buildPickupPlan,
   buildSelfDropPlan,
   buildTradePlan,
+  buildGroupTradePlan,
+  type GroupTradeSelection,
   buildOneWayTradePlan,
   type LeagueMutationPlan,
   type LeagueSnapshot,
@@ -19,7 +21,25 @@ export type LeagueTransactionIntent = {
   approvedAt?: string;
   expectedPlanFingerprint: string;
 };
+const groupTradeTuple = z.tuple([
+  z.literal('trade-group'), z.string().min(1), z.string().min(1),
+  z.array(z.string().min(1)).min(1).max(3), z.array(z.string().min(1)).min(1).max(3),
+  z.string().trim().max(300).nullable(),
+]);
+export function groupTradeIntent(selection: GroupTradeSelection): string {
+  return JSON.stringify(['trade-group', selection.teamA, selection.teamB,
+    [...selection.outboundA].sort(), [...selection.outboundB].sort(), selection.reason || null]);
+}
+export function parseGroupTradeIntent(selections: string): GroupTradeSelection | undefined {
+  const tuple: unknown = JSON.parse(selections);
+  if (!Array.isArray(tuple) || tuple[0] !== 'trade-group') return;
+  const [, teamA, teamB, outboundA, outboundB, reason] = groupTradeTuple.parse(tuple);
+  return { teamA, teamB, outboundA, outboundB, ...(reason ? { reason } : {}) };
+}
+
 export function buildLeagueIntentPlan(selections: string, snapshot: LeagueSnapshot, source?: ReinstatementSource): LeagueMutationPlan {
+  const group = parseGroupTradeIntent(selections);
+  if (group) return buildGroupTradePlan(snapshot, group);
   const selection = parseReinstatementSelection(selections);
   if (selection) {
     if (!source) throw new Error('A freshly verified original exit is required.');

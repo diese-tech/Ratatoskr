@@ -68,6 +68,7 @@ export interface LeagueSheetsPort {
 }
 
 export interface LeagueDiscordPort {
+  validateGroupTradeRoles?(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void>;
   validateOneWayTradeRoles?(plan: LeagueMutationPlan): Promise<void>;
   validateReinstatementRoles?(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void>;
   getMembers?(options?: LeagueMemberReadOptions): Promise<LeagueSnapshot['discordMembers']>;
@@ -313,9 +314,12 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
         `Ratatoskr carries news of an agreement between ${mention(firstTeam!.teamRoleId)} and ${mention(secondTeam!.teamRoleId)}.`,
         '',
         `${player(0)} leaves ${mention(firstTeam!.teamRoleId)} to join ${mention(secondTeam!.teamRoleId)}.`,
+        ...(plan.groupTrade ? plan.discordRoleChanges.slice(1).map((change, index) =>
+          `${player(index + 1)} leaves ${mention(change.remove[0]!)} to join ${mention(change.add[0]!)}.`) : [
         isOneWayTrade(plan)
           ? 'This is a one-way transfer. No player moves in return.'
           : `${player(1)} leaves ${mention(secondTeam!.teamRoleId)} to join ${mention(firstTeam!.teamRoleId)}.`,
+        ]),
       ].join('\n'),
       footer: `Posted by ${actorName}`,
     };
@@ -399,6 +403,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
         || details.selection.overrides.some(id => id !== 'timing' && !reinstatementPolicyExceptions(details).some(item => item.id === id)))
         throw new LeagueMutationValidationError('Choose each listed staff advisory you approve, then confirm the reviewed exceptions.');
     }
+    if (plan.groupTrade && (!input.expectedPlanFingerprint || !plan.groupTrade.sheetFingerprint))
+      throw new LeagueMutationValidationError('A verified trade preview is required. Open a new trade review.');
     if (input.expectedPlanFingerprint && leagueTransactionPlanFingerprint(plan) !== input.expectedPlanFingerprint) {
       throw new LeagueTransactionPreviewChangedError(plan);
     }
@@ -458,15 +464,17 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
     ]));
-    if (isOneWayTrade(plan)) {
-      const change = plan.discordRoleChanges[0]!;
+    if (isOneWayTrade(plan) || plan.groupTrade) for (const change of plan.discordRoleChanges) {
       const before = beforeByPlayer.get(change.discordId)!;
       const after = afterByPlayer.get(change.discordId)!;
       before.observedManagedRoleIds = [change.remove[0]!, before.divisionRoleId];
       after.observedManagedRoleIds = [change.add[0]!, after.divisionRoleId];
     }
     try {
-      for (const discordId of roleValidationPlayerIds) {
+      if (plan.groupTrade) {
+        if (!input.discord.validateGroupTradeRoles) throw new Error('Trade role verification is unavailable.');
+        await input.discord.validateGroupTradeRoles(plan, loaded.snapshot);
+      } else for (const discordId of roleValidationPlayerIds) {
         await input.discord.validateRoleState(discordId, beforeByPlayer.get(discordId)!);
       }
     } catch (error) {
@@ -488,6 +496,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
       await input.authorizeBeforeWrite?.();
     }
+    if (plan.groupTrade) await input.authorizeBeforeWrite?.();
     const nickname = plan.discordNicknameChange;
     if (nickname) {
       if ((plan.kind !== 'rename' && plan.kind !== 'reinstatement') || !input.discord.validateNicknameChange || !input.discord.applyNicknameChange
@@ -507,6 +516,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     const reference = input.jobReference ?? `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const record: LeagueTransactionRecord = {
       reference, effectiveDate: plan.reinstatement?.selection.effectiveDate ?? auditDate, processedById: input.actorUserId, processedBy: input.actorName,
+      ...(plan.groupTrade ? { approvedAt: input.approvedAt, processedAt: input.now.toISOString(), approvalNote: `Trade approved by ${input.actorName}` } : {}),
       ...(plan.reinstatement ? { approvedAt: input.approvedAt, processedAt: input.now.toISOString(), approvalNote: `Reinstates ${plan.reinstatement.source.reference}; approved by ${input.actorUserId}; future sanction preserved` } : {}),
     };
     createLeagueTransaction(input.db, {
@@ -544,6 +554,19 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       throw errorWithReference(error, reference);
     }
 
+    const verifyGroupedTradeRoles = async () => {
+      if (!plan.groupTrade) return;
+      try {
+        for (const [index, playerId] of plan.playerIds.entries()) {
+          await input.discord.validateRoleState(playerId, afterByPlayer.get(playerId)!);
+          await input.discord.validateDisplayName(playerId, plan.players[index]!);
+        }
+      } catch (error) {
+        markLeagueTransactionReconciliationRequired(input.db, reference, `Trade verification failed: ${String(error)}`);
+        throw errorWithReference(error, reference);
+      }
+    };
+    await verifyGroupedTradeRoles();
     transitionLeagueTransaction(input.db, reference, 'applying_discord', 'applying_sheets');
     try {
       await input.sheets.apply(loaded, plan, record, prepared);
@@ -561,6 +584,7 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       }
       throw errorWithReference(error, reference);
     }
+    await verifyGroupedTradeRoles();
     if (nickname) {
       try { await input.discord.verifyNicknameChange!(nickname); }
       catch (error) {
