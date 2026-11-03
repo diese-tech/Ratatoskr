@@ -163,8 +163,13 @@ export function createLeagueOpsRuntime(input: {
             jobReference: job.reference,
             onPhase: phase,
           });
-          // Refresh using fresh sources; never promote an executable preview to cache authority.
-          await audit('scheduled');
+          // One-way execution already verified the move. Run its follow-up full
+          // audit separately so it does not immediately repeat the worker's read.
+          if (intent.selections.startsWith('["trade-one-way",')) {
+            worker.enqueue('audit', { trigger: 'scheduled' }, `trade-audit:${job.reference}`, 60_000);
+          } else {
+            await audit('scheduled');
+          }
           return result;
         } catch (error) {
           if (error instanceof LeagueTransactionPreviewChangedError) {

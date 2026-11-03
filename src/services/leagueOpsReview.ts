@@ -1,4 +1,3 @@
-import { isOneWayTrade } from '../domain/leagueOperations.js';
 import { parseReinstatementSelection } from './leagueTransactionIntent.js';
 import { listLeagueMutationProblems, listOpenLeagueReconciliationTickets } from '../db/repositories/leagueOperations.js';
 import { leagueEasternTime } from './leaguePresentation.js';
@@ -216,14 +215,6 @@ export class LeagueOpsReviewService {
     if (!original || original.guildId !== this.input.guildId || !this.prewrite(original)
       || (original.payload as { selections: string }).selections !== preview.selections)
       throw new LeagueMutationValidationError('The original operation changed. Refresh and request a new preview.');
-    if (isOneWayTrade(preview.plan)) {
-      const fresh = await this.input.previewTransaction(preview.selections);
-      await this.authorize(actor);
-      const alreadyQueued = getLeagueJobByDedupe(this.input.db, this.input.guildId, key);
-      if (alreadyQueued) return alreadyQueued;
-      if (leagueTransactionPlanFingerprint(fresh) !== preview.fingerprint || !this.prewrite(original))
-        throw new LeagueMutationValidationError('The trade changed after your review. Request a fresh preview.');
-    }
     return this.input.worker.enqueue('transaction', { actorUserId: actor, actorName, selections: preview.selections,
       expectedPlanFingerprint: preview.fingerprint, originalBlockedReference: preview.originalReference }, key);
   }

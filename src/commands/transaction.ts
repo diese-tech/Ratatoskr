@@ -1,7 +1,6 @@
 import { openReinstatementCommand } from '../services/leagueReinstatementUi.js';
 import { logMemberReadDeferral, memberReadDeferralMessage } from '../services/leagueMemberReadMessages.js';
 import { historicalPlayerChoices, historicalPlayerIndex } from '../services/leagueReinstatement.js';
-import { getLeagueJobByDedupe } from '../db/repositories/leagueJobs.js';
 import { leagueJobWorkerFor } from '../services/leagueJobWorker.js';
 import { buildLeagueIntentPlan, type LeagueTransactionIntent } from '../services/leagueTransactionIntent.js';
 import {
@@ -246,8 +245,8 @@ export async function handleTransactionCommand(
     if (oneWay) await validateOneWayTradePreview(loaded, plan, sheets, discord);
     return plan;
   };
-  const showPreview = async (message = '', plan?: LeagueMutationPlan) => {
-    const reviewed = plan ?? await loadPlan();
+  const showPreview = async (message = '') => {
+    const reviewed = await loadPlan();
     await persistPreviewAfterDelivery(
       () => interaction.editReply(`${message}${preview(reviewed)}`),
       () => saveLeagueTransactionPreview(db, {
@@ -278,25 +277,16 @@ export async function handleTransactionCommand(
     const actorName = (member as GuildMember).displayName || interaction.user.globalName || interaction.user.username;
     const worker = leagueJobWorkerFor(operationScope,interaction.guild.id);
     const dedupeKey = `transaction:${interaction.user.id}:${previewIntent}:${getLeaguePreviewApproval(db,guildId,interaction.user.id,previewIntent)}`;
-    const existing = oneWay ? getLeagueJobByDedupe(db, guildId, dedupeKey) : undefined;
-    if (oneWay && !existing) {
-      const fresh = await loadPlan();
-      const currentActor = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
-      if (!hasAccess(currentActor, 'OPERATIONS')) {
-        await interaction.editReply('You no longer have permission to confirm this trade. No changes were made.');
-        return;
-      }
-      const approval = getLeaguePreviewApproval(db, guildId, interaction.user.id, previewIntent);
-      if (leagueTransactionPlanFingerprint(fresh) !== expectedPlanFingerprint
-        || `transaction:${interaction.user.id}:${previewIntent}:${approval}` !== dedupeKey) {
-        await showPreview('The trade changed after your review. Check this new preview before confirming.\n\n', fresh);
-        return;
-      }
-    }
+    // Confirmation approves the saved fingerprint. The worker owns the fresh
+    // complete-member read and rejects stale approvals before any writes.
     enqueued = true;
-    const job = existing ?? worker.enqueue('transaction', {
+    const job = worker.enqueue('transaction', {
       selections: previewIntent, actorUserId: interaction.user.id, actorName, expectedPlanFingerprint,
     } satisfies LeagueTransactionIntent, dedupeKey);
+    if (job.status === 'BLOCKED_REVIEW' && oneWay) {
+      await interaction.editReply(`Rat stopped this trade before making any changes. ${leagueValidationMessage(job.lastError ?? '', 'read-only')} Review a fresh preview without confirm before approving again. Reference: ${job.reference}`);
+      return;
+    }
     if (job.status === 'BLOCKED_REVIEW') {
       await showPreview(`This player change needs another review. ${savedLeagueErrorMessage(job.lastError)}\n\n`);
       return;
@@ -312,9 +302,7 @@ export async function handleTransactionCommand(
       await interaction.editReply(deferred);
       return;
     }
-    if (oneWay && !enqueued && error instanceof LeagueMutationValidationError) {
-      await interaction.editReply(`${error.message}\n\nNo changes were made.`);
-    } else if (!(await replyToTransactionValidation(interaction, error))) throw error;
+    if (!(await replyToTransactionValidation(interaction, error))) throw error;
     deleteLeagueTransactionPreview(db, guildId, interaction.user.id, previewIntent);
   }
 }

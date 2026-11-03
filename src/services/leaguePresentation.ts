@@ -75,6 +75,8 @@ const readableLeagueValidationMessages = new Set([
   'That player does not have a usable Discord display name.',
   'Cross-division trades are not supported.',
   'Both players are already on the same team.',
+  'The player is already on the receiving team.',
+  'The player does not have their current team role.',
   'The outgoing player cannot replace themselves.',
   'That player is still in the YSL server. Use `/transaction drop` or `/transaction self-drop`.',
   'The selected replacement is not a free agent.',
@@ -93,6 +95,8 @@ export function leagueValidationMessage(message: string, outcome: 'read-only' | 
     return 'The league name must match the player’s current Discord name. Copy that name from Discord and preview the change.';
   if (readableLeagueValidationMessages.has(message)
     || /^<@[A-Za-z0-9_-]+> is (?:not rostered on an active YSL team|not registered in Player Name History)\.$/.test(message)) return message;
+  if (message.startsWith('No empty slot was found') || message.startsWith('The receiving roster cell contains a value or formula.'))
+    return 'Rat could not find an empty receiving roster slot. Ask staff to check the receiving team’s public roster, then preview again.';
   const guidance = savedLeagueErrorMessage(message);
   if (outcome === 'read-only' && /Some changes may already have happened/i.test(guidance))
     return 'Rat could not prepare this player change. Ask staff to check the selected players, roles and league records.';

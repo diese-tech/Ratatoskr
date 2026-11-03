@@ -1,3 +1,7 @@
+import { Collection } from 'discord.js';
+import { executeLeagueTransaction, LeagueTransactionPreviewChangedError } from '../services/leagueTransactions.js';
+import { buildLeagueIntentPlan, type LeagueTransactionIntent } from '../services/leagueTransactionIntent.js';
+import { LeagueMutationValidationError } from '../domain/leagueOperations.js';
 import { DiscordLeagueGateway } from '../services/leagueDiscord.js';
 import { LeagueSheetsService } from '../services/leagueSheets.js';
 import assert from 'node:assert/strict';
@@ -6,8 +10,8 @@ import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
 import { buildTradePlan, type LeagueRosterRow, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { openDatabase } from '../db/client.js';
 import { saveLeagueTransactionPreview } from '../db/repositories/leagueOperations.js';
-import { leagueJobPriority, listActionableLeagueJobs, type LeagueJobType } from '../db/repositories/leagueJobs.js';
-import { LeagueJobWorker, registerLeagueJobWorker, type LeagueJobHandler } from '../services/leagueJobWorker.js';
+import { getLeagueJob, leagueJobPriority, listActionableLeagueJobs, type LeagueJobType } from '../db/repositories/leagueJobs.js';
+import { LeagueJobBlockedError, LeagueJobWorker, registerLeagueJobWorker, type LeagueJobHandler } from '../services/leagueJobWorker.js';
 import { LEGACY_YSL_VALKYRIE_ROLE_ID } from '../config/staff-role-ids.js';
 
 process.env.ROLE_ALLFATHER_ID ??= 'allfather-test-role';
@@ -248,12 +252,10 @@ test('trade offers an optional counterpart and a receiving team role, and reject
   } finally { db.close(); }
 });
 
-test('one-way command previews privately, refreshes stale approval, and queues one matching intent', async (t) => {
+for (const scenario of ['stale', 'cooldown', 'role error'] as const) {
+test(`one-way trade uses the shared member reader through preview and rapid confirmation: ${scenario}`, async (t) => {
   const db = openDatabase(':memory:');
   t.after(() => db.close());
-  const worker = new LeagueJobWorker(db, 'g', {} as Record<LeagueJobType, LeagueJobHandler>, async () => {});
-  worker.stop();
-  registerLeagueJobWorker(db, worker);
   for (const [key, value] of Object.entries({ ROLE_FREE_AGENT_ID: 'fa', YSL_TRANSACTIONS_CHANNEL_ID: 'notices',
     YSL_ADMIN_SPREADSHEET_ID: 'test-admin', YSL_PUBLIC_SPREADSHEET_ID: 'test-public',
     GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: 'bot@example.com', private_key: 'synthetic-test-key' }) })) {
@@ -274,10 +276,50 @@ test('one-way command previews privately, refreshes stale approval, and queues o
     publicRosters: { Vanaheim: { teams: { A: ['One'], B: [] }, freeAgents: [] } },
     freeAgentRoleId: 'fa',
   };
-  const memberReads = t.mock.method(DiscordLeagueGateway.prototype, 'getMembers', async () => snapshot.discordMembers);
-  t.mock.method(DiscordLeagueGateway.prototype, 'validateOneWayTradeRoles', async () => {});
+  const staff = { displayName: 'Staff', roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } };
+  const member = { id: 'one', displayName: 'One', user: { bot: false }, roles: { cache: new Map([['A', {}], ['division', {}]]) } };
+  let fullReads = 0;
+  let actorReads = 0;
+  const guild = { id: 'g', memberCount: 1, members: { fetch: async (options?: { force: boolean; user: string }) => {
+    if (options) {
+      assert.deepEqual(options, { user: 'staff', force: true });
+      actorReads++;
+      return staff;
+    }
+    fullReads++;
+    if (scenario === 'cooldown' && fullReads > 1)
+      throw Object.assign(new Error('Request with opcode 8 was rate limited.'), { data: { opcode: 8, retry_after: 30 } });
+    return new Collection([['one', member]]);
+  } } };
+  const discord = new DiscordLeagueGateway(guild as never, 'notices');
+  const sheets = new LeagueSheetsService({} as never, { adminSpreadsheetId: 'test-admin', publicSpreadsheetId: 'test-public' });
+  const handler: LeagueJobHandler = async (job, phase) => {
+    const intent = job.payload as LeagueTransactionIntent;
+    try {
+      return await executeLeagueTransaction({
+        db, operationScope: db, guildId: 'g', actorUserId: intent.actorUserId, actorName: 'Staff',
+        now: new Date(), freeAgentRoleId: 'fa', sheets, discord, onPhase: phase,
+        expectedPlanFingerprint: intent.expectedPlanFingerprint, jobReference: job.reference,
+        buildPlan: current => buildLeagueIntentPlan(intent.selections, current),
+      });
+    } catch (error) {
+      if (error instanceof LeagueTransactionPreviewChangedError) throw new LeagueJobBlockedError('BLOCKED_REVIEW', error.message);
+      throw error;
+    }
+  };
+  const worker = new LeagueJobWorker(db, 'g', { transaction: handler } as Record<LeagueJobType, LeagueJobHandler>, async () => {});
+  worker.stop();
+  registerLeagueJobWorker(db, worker);
+  t.after(() => worker.stop());
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(DiscordLeagueGateway.prototype, 'validateOneWayTradeRoles', async () => {
+    if (scenario === 'role error')
+      throw new LeagueMutationValidationError('A configured league role is missing, privileged, integration-owned or not editable by Ratatoskr.');
+  });
   t.mock.method(DiscordLeagueGateway.prototype, 'validateDisplayName', async () => {});
-  t.mock.method(LeagueSheetsService.prototype, 'load', async () => ({ snapshot, sources: {} as never }));
+  t.mock.method(LeagueSheetsService.prototype, 'load', async (discordMembers: LeagueSnapshot['discordMembers']) => ({
+    snapshot: { ...snapshot, discordMembers }, sources: {} as never,
+  }));
   t.mock.method(LeagueSheetsService.prototype, 'prepare', () => ({ publicUpdates: [] }));
   t.mock.method(LeagueSheetsService.prototype, 'assertOneWayTradeDestination', async () => {});
   t.mock.method(LeagueSheetsService.prototype, 'apply', async () => assert.fail('Preview or confirm wrote Sheets'));
@@ -285,7 +327,7 @@ test('one-way command previews privately, refreshes stale approval, and queues o
   const invoke = async (confirm: boolean) => {
     const replies: string[] = [];
     await handleTransactionCommand({
-      guild: { id: 'g', members: { fetch: async () => ({ displayName: 'Staff', roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } }) } },
+      guild,
       user: { id: 'staff' },
       options: { getSubcommand: () => 'trade', getBoolean: () => confirm,
         getUser: (name: string) => name === 'player_one' ? { id: 'one' } : null, getRole: () => ({ id: 'B' }) },
@@ -294,15 +336,39 @@ test('one-way command previews privately, refreshes stale approval, and queues o
     } as never, db, db);
     return replies.join('\n');
   };
-  assert.match(await invoke(false), /1-for-0.*\nOne.*A → B\nA roster: 1 → 0\nB roster: 0 → 1/);
-  assert.equal(memberReads.mock.callCount(), 1);
-  snapshot.teams[1]!.teamRole = 'Renamed B VD';
-  assert.match(await invoke(true), /changed after your review/);
-  assert.deepEqual(db.prepare('SELECT count(*) n FROM league_jobs').get(), { n: 0 });
+  const preview = await invoke(false);
+  assert.equal(fullReads, 1);
+  if (scenario === 'role error') {
+    assert.match(preview, /check permissions.*\n\nNo changes were made\./);
+    assert.doesNotMatch(preview, /privileged|integration-owned/);
+    assert.deepEqual(db.prepare('SELECT count(*) n FROM league_jobs').get(), { n: 0 });
+    return;
+  }
+  assert.match(preview, /1-for-0.*\nOne.*A → B\nA roster: 1 → 0\nB roster: 0 → 1/);
+  if (scenario === 'stale') snapshot.teams[1]!.teamRole = 'Renamed B VD';
   const queued = await invoke(true);
   assert.match(queued, /YSL-JOB-/);
   assert.equal(await invoke(true), queued);
-  assert.equal(memberReads.mock.callCount(), 3);
-  assert.deepEqual(db.prepare("SELECT json_extract(payload_json, '$.selections') AS selections FROM league_jobs").all(),
-    [{ selections: '["trade-one-way","one","B"]' }]);
+  assert.equal(fullReads, 1, 'confirmation and duplicate confirmation do not request opcode 8');
+  assert.equal(actorReads, 3, 'every interaction refreshes the staff member');
+  const row = db.prepare("SELECT reference, json_extract(payload_json, '$.selections') AS selections FROM league_jobs").get() as { reference: string; selections: string };
+  assert.equal(row.selections, '["trade-one-way","one","B"]');
+  const status = scenario === 'stale' ? 'BLOCKED_REVIEW' : 'RETRYING';
+  const began = Date.now();
+  worker.start();
+  for (let i = 0; i < 100 && getLeagueJob(db, row.reference)?.status !== status; i++)
+    await new Promise(resolve => setImmediate(resolve));
+  worker.stop();
+  assert.equal(getLeagueJob(db, row.reference)?.status, status);
+  assert.equal(fullReads, 2, 'worker performs one fresh complete read');
+  assert.deepEqual(db.prepare('SELECT count(*) n FROM league_transactions').get(), { n: 0 });
+  if (scenario === 'cooldown') {
+    assert.ok(Date.parse(getLeagueJob(db, row.reference)!.availableAt) >= began + 30_000);
+    assert.match(await invoke(false), /Discord asked Rat to wait.*No changes were made/);
+    assert.equal(fullReads, 2, 'a preview during the shared cooldown sends no request');
+  } else {
+    assert.match(await invoke(true), /stopped this trade before making any changes/);
+    assert.equal(fullReads, 2, 'blocked confirmation does not automatically redraw');
+  }
 });
+}
