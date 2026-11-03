@@ -11,6 +11,8 @@ Ratatoskr stores the private preview by server, administrator, and exact command
 
 Only Allfather and Aesir role IDs may run these commands. Pickups accept only one of the 24 active division-suffixed team roles from **League Teams**. Plain franchise roles are leadership/advisor access and are never moved.
 
+For a swap, use `/transaction trade player_one:<player> player_two:<player>`. For a 1-for-0 transfer, use `/transaction trade player_one:<player> receiving_team:<team role>`. Choose exactly one of `player_two` or `receiving_team`. The receiving team must be active, in the same division, and have an empty owned cell in its public roster block. Review the before and after counts, then confirm with the same options. A one-way trade moves one player, records one new History row, and preserves the original draft attribution.
+
 `/transaction departure` is specifically for a rostered player who has already left the YSL server. Its player field searches **Current Rosters** rather than Discord's live User picker. The command confirms the player is absent, removes them from the private and public active rosters, marks them `Inactive`, preserves their Discord ID and name history, and does not add them to free agency or attempt a Discord role change. A current server member must use `/transaction drop` instead.
 
 `/transaction self-drop` is for a current member who left their team by choice. It removes the player from the active roster and team role, does not add Free Agent status, and records `Suspended - Self-Drop (Current + Next Season)`. Player Name History renders that current row red and explains the status in its legend. Ratatoskr does not assign a suspension role.

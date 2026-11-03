@@ -90,7 +90,7 @@ test('every slash command, subcommand, and option uses readable English', () => 
 
   const transaction = asCommand(transactionCommand);
   assert.equal(transaction.description, 'Process approved YSL roster changes.');
-  assert.equal(child(transaction, 'trade').description, 'Swap two players between teams in the same division.');
+  assert.equal(child(transaction, 'trade').description, 'Swap two players or transfer one player to another team in the same division.');
   assert.equal(child(child(transaction, 'pickup'), 'team').description, 'Team role for the player to join; choose the one for their division.');
   assert.equal(child(transaction, 'rename').description, "Preview or confirm a player's Discord nickname and league name change.");
 });

@@ -12,6 +12,7 @@ import {
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
+  isOneWayTrade,
   LeagueMutationValidationError,
   type LeagueMutationPlan,
   type LeagueSnapshot,
@@ -28,6 +29,7 @@ import {
 } from '../db/repositories/leagueOperations.js';
 import {
   leagueTransactionPlanFingerprint,
+  validateOneWayTradePreview,
 } from '../services/leagueTransactions.js';
 import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
 import { leagueStatusLabel, savedLeagueErrorMessage, leagueValidationMessage } from '../services/leaguePresentation.js';
@@ -42,9 +44,10 @@ export const transactionCommand = new SlashCommandBuilder()
     .addStringOption(option => option.setName('reason').setDescription('Optional short staff reason for the return.').setMaxLength(300)))
   .addSubcommand((subcommand) => subcommand
     .setName('trade')
-    .setDescription('Swap two players between teams in the same division.')
+    .setDescription('Swap two players or transfer one player to another team in the same division.')
     .addUserOption((option) => option.setName('player_one').setDescription('Player leaving the first team.').setRequired(true))
-    .addUserOption((option) => option.setName('player_two').setDescription('Player leaving the other team.').setRequired(true))
+    .addUserOption((option) => option.setName('player_two').setDescription('Player leaving the other team in a swap.'))
+    .addRoleOption((option) => option.setName('receiving_team').setDescription('Team receiving the player when no player comes back.'))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('drop')
@@ -88,7 +91,13 @@ export const transactionCommand = new SlashCommandBuilder()
 function intentKey(interaction: ChatInputCommandInteraction): string {
   const subcommand = interaction.options.getSubcommand();
   if (subcommand === 'trade') {
-    return JSON.stringify([subcommand, interaction.options.getUser('player_one', true).id, interaction.options.getUser('player_two', true).id]);
+    const player = interaction.options.getUser('player_one', true).id;
+    const counterpart = interaction.options.getUser('player_two')?.id;
+    const receiver = interaction.options.getRole('receiving_team')?.id;
+    if (Boolean(counterpart) === Boolean(receiver)) {
+      throw new LeagueMutationValidationError('Choose player_two for a swap or receiving_team for a one-way transfer. Choose exactly one.');
+    }
+    return counterpart ? JSON.stringify(['trade', player, counterpart]) : JSON.stringify(['trade-one-way', player, receiver]);
   }
   if (subcommand === 'departure') {
     return JSON.stringify([subcommand, interaction.options.getString('player', true), interaction.options.getUser('replacement')?.id ?? null]);
@@ -107,6 +116,21 @@ function intentKey(interaction: ChatInputCommandInteraction): string {
 
 function preview(plan: LeagueMutationPlan): string {
   if (plan.kind === 'trade') {
+    if (isOneWayTrade(plan)) {
+      const [sender, receiver] = plan.teams;
+      const sendingAfter = plan.rosters.filter(row => row.teamRoleId === sender!.teamRoleId).length;
+      const receivingAfter = plan.rosters.filter(row => row.teamRoleId === receiver!.teamRoleId).length;
+      return [
+        '**Trade preview · 1-for-0 (one-way transfer)**',
+        `${plan.players[0]} (<@${plan.playerIds[0]}>): ${sender!.franchise} → ${receiver!.franchise}`,
+        `${sender!.franchise} roster: ${sendingAfter + 1} → ${sendingAfter}`,
+        `${receiver!.franchise} roster: ${receivingAfter - 1} → ${receivingAfter}`,
+        ...(receivingAfter > 7 ? ['The receiving roster would exceed seven players. Confirm only if staff approve the exception.'] : []),
+        'Only this player’s team role, Current Rosters assignment, Player Name History franchise and public roster placement will change. One trade history row will be added.',
+        '',
+        'No changes were made. Re-run with the same options and `confirm:True` after reviewing.',
+      ].join('\n');
+    }
     return [
       '**Trade preview**',
       `${plan.players[0]}: ${plan.teams[0]!.franchise} → ${plan.teams[1]!.franchise}`,
@@ -199,24 +223,37 @@ export async function handleTransactionCommand(
     await openReinstatementCommand(interaction, db, operationScope);
     return;
   }
+  let previewIntent: string;
+  try {
+    previewIntent = intentKey(interaction);
+  } catch (error) {
+    if (!(error instanceof LeagueMutationValidationError)) throw error;
+    await interaction.editReply(`${error.message} No changes were made.`);
+    return;
+  }
   const transactionEnvironment = loadLeagueOperationsConfig();
   const { gateway, config } = createGoogleLeagueSheetsGateway();
   const sheets = new LeagueSheetsService(gateway, config);
   const discord = new DiscordLeagueGateway(interaction.guild, transactionEnvironment.transactionsChannelId);
-  const previewIntent = intentKey(interaction);
   const buildPlan = (snapshot: LeagueSnapshot) => buildLeagueIntentPlan(previewIntent,snapshot);
 
-  const showPreview = async (message = '') => {
+  const oneWay = previewIntent.startsWith('["trade-one-way",');
+  const loadPlan = async () => {
     const loaded = await sheets.load(await discord.getMembers(), transactionEnvironment.freeAgentRoleId);
     const plan = buildPlan(loaded.snapshot);
     if (plan.discordNicknameChange) await discord.validateNicknameChange(plan.discordNicknameChange);
+    if (oneWay) await validateOneWayTradePreview(loaded, plan, sheets, discord);
+    return plan;
+  };
+  const showPreview = async (message = '') => {
+    const reviewed = await loadPlan();
     await persistPreviewAfterDelivery(
-      () => interaction.editReply(`${message}${preview(plan)}`),
+      () => interaction.editReply(`${message}${preview(reviewed)}`),
       () => saveLeagueTransactionPreview(db, {
         guildId,
         actorUserId: interaction.user.id,
         intentKey: previewIntent,
-        planFingerprint: leagueTransactionPlanFingerprint(plan),
+        planFingerprint: leagueTransactionPlanFingerprint(reviewed),
       }),
     );
   };
@@ -239,10 +276,17 @@ export async function handleTransactionCommand(
 
     const actorName = (member as GuildMember).displayName || interaction.user.globalName || interaction.user.username;
     const worker = leagueJobWorkerFor(operationScope,interaction.guild.id);
+    const dedupeKey = `transaction:${interaction.user.id}:${previewIntent}:${getLeaguePreviewApproval(db,guildId,interaction.user.id,previewIntent)}`;
+    // Confirmation approves the saved fingerprint. The worker owns the fresh
+    // complete-member read and rejects stale approvals before any writes.
     enqueued = true;
     const job = worker.enqueue('transaction', {
       selections: previewIntent, actorUserId: interaction.user.id, actorName, expectedPlanFingerprint,
-    } satisfies LeagueTransactionIntent, `transaction:${interaction.user.id}:${previewIntent}:${getLeaguePreviewApproval(db,guildId,interaction.user.id,previewIntent)}`);
+    } satisfies LeagueTransactionIntent, dedupeKey);
+    if (job.status === 'BLOCKED_REVIEW' && oneWay) {
+      await interaction.editReply(`Rat stopped this trade before making any changes. ${leagueValidationMessage(job.lastError ?? '', 'read-only')} Review a fresh preview without confirm before approving again. Reference: ${job.reference}`);
+      return;
+    }
     if (job.status === 'BLOCKED_REVIEW') {
       await showPreview(`This player change needs another review. ${savedLeagueErrorMessage(job.lastError)}\n\n`);
       return;

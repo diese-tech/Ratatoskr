@@ -8,6 +8,7 @@ import {
   buildPickupPlan,
   buildSelfDropPlan,
   buildTradePlan,
+  buildOneWayTradePlan,
   type LeagueMutationPlan,
   type LeagueSnapshot,
 } from '../domain/leagueOperations.js';
@@ -24,8 +25,13 @@ export function buildLeagueIntentPlan(selections: string, snapshot: LeagueSnapsh
     if (!source) throw new Error('A freshly verified original exit is required.');
     return buildReinstatementPlan(snapshot, selection, source);
   }
-  const [kind, first, second] = JSON.parse(selections) as [string, string, string | null];
+  const tuple = JSON.parse(selections) as [string, string, string | null];
+  const [kind, first, second] = tuple;
   switch (kind) {
+    case 'trade-one-way':
+      if (typeof first !== 'string' || !first || typeof second !== 'string' || !second || tuple.length !== 3)
+        throw new Error('Invalid saved one-way trade.');
+      return buildOneWayTradePlan(snapshot, first, second);
     case 'trade':
       return buildTradePlan(snapshot, first, second!);
     case 'drop':

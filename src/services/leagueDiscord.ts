@@ -29,7 +29,7 @@ function assertMemberRoleState(member: GuildMember, expected: LeagueRoleState): 
     const managed = new Set([...expected.configuredTeamRoleIds, ...expected.configuredDivisionRoleIds, expected.freeAgentRoleId]);
     const actual = [...member.roles.cache.keys()].filter(id => managed.has(id)).sort();
     if (JSON.stringify(actual) !== JSON.stringify([...expected.observedManagedRoleIds].sort()))
-      throw new LeagueMutationValidationError('This player’s managed roles changed. Review a fresh reinstatement preview.');
+      throw new LeagueMutationValidationError('This player’s managed roles changed. Review a fresh preview.');
     return;
   }
   const assignedTeamRoles = expected.configuredTeamRoleIds.filter((roleId) => member.roles.cache.has(roleId));
@@ -125,6 +125,17 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     } catch (error) {
       throw new DiscordRoleReconciliationRequiredError(`Account replacement role write may be partial: ${String(error)}`);
     }
+  }
+
+  async validateOneWayTradeRoles(plan: LeagueMutationPlan): Promise<void> {
+    const change = plan.discordRoleChanges[0]!;
+    await this.guild.members.fetchMe({ force: true });
+    const member = await fetchFreshMember(this.guild, change.discordId);
+    if (member.user.bot || !member.manageable || !member.roles.cache.has(change.remove[0]!) || member.roles.cache.has(change.add[0]!))
+      throw new LeagueMutationValidationError('The player’s team roles or Rat’s permissions changed. Check Discord and preview again.');
+    await this.assertAccountReplacementRoleOwnership([{
+      ...change, before: change.remove, after: change.add, managedRoleIds: [...change.remove, ...change.add],
+    }]);
   }
 
   async validateReinstatementRoles(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void> {

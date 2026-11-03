@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DRAFT_PICK_HEADERS } from './draftPicks.js';
-import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan } from '../domain/leagueOperations.js';
 import {
   createLeagueSheetsReadSchedule,
   createGoogleLeagueSheetsGateway,
@@ -800,4 +800,47 @@ test('a workbook write prevents an already-running GET from repopulating present
   assert.deepEqual(await old, [['before write']]);
   assert.deepEqual(await gateway.getValues('admin', 'A1', presentation), [['after write']]);
   assert.equal(reads, 2);
+});
+
+test('one-way trade updates one assignment and appends one draft-attributed history row', async () => {
+  const { gateway, service } = serviceFixture();
+  const draftRange = gateway.key('admin', "'Draft Picks'!A6:J");
+  const originalPick = ['Vanaheim', 'Dream Walkers', '1', '3', 'Uno', 'one', 'One', 'Member Directory', 'On drafted team'];
+  gateway.data.set(draftRange, [originalPick]);
+  const loaded = await service.load(members, 'free-agent');
+  const plan = buildOneWayTradePlan(loaded.snapshot, 'one', 'team-b');
+  const prepared = service.prepare(loaded, plan);
+  const record = { reference: 'YSL-TRX-ONE-WAY', effectiveDate: '2026-11-03', processedById: 'admin', processedBy: 'Admin' };
+  await service.apply(loaded, plan, record, prepared);
+  assert.deepEqual(gateway.writes[0]?.updates.map(update => update.range), [
+    "'Current Rosters'!A6:J6", "'Player Name History'!E6:G6",
+  ]);
+  assert.deepEqual(gateway.writes[1]?.updates, [
+    { range: "'Vanaheim Roster'!C5", values: [['']] },
+    { range: "'Vanaheim Roster'!G17", values: [['One']] },
+  ]);
+  const moves = await service.appendTransactionHistory(plan, record);
+  assert.deepEqual(moves.map(move => move.discordId), ['one']);
+  assert.equal(gateway.appends.length, 1);
+  assert.equal(gateway.appends[0]?.values.length, 1);
+  assert.deepEqual(gateway.appends[0]?.values[0]?.slice(4, 8), ['Dream Walkers', 'The Sewer', 'one', 'One']);
+  assert.match(String(gateway.appends[0]?.values[0]?.[12]), /Dream Walkers R1/);
+  assert.deepEqual(gateway.data.get(draftRange)?.[0]?.slice(0, 8), originalPick.slice(0, 8));
+  assert.equal(gateway.draftHighlights.length, 1);
+  gateway.data.set(gateway.key('admin', "'Transaction History'!A6:A"), [[record.reference]]);
+  await service.appendTransactionHistory(plan, record);
+  assert.equal(gateway.appends.length, 1);
+});
+
+test('one-way transfer refuses a full receiving block or a formula that displays blank', async () => {
+  const { gateway, service } = serviceFixture();
+  const loaded = await service.load(members, 'free-agent');
+  const plan = buildOneWayTradePlan(loaded.snapshot, 'one', 'team-b');
+  const prepared = service.prepare(loaded, plan);
+  gateway.data.set(gateway.key('public', prepared.publicUpdates[1]!.range), [['=""']]);
+  await assert.rejects(() => service.assertOneWayTradeDestination(prepared), /contains a value or formula/);
+  const publicRows = loaded.sources.publicByDivision.Vanaheim;
+  for (let row = 15; row < 22; row++) publicRows[row]![6] = 'Occupied ' + row;
+  assert.throws(() => service.prepare(loaded, plan), /No empty slot/);
+  assert.equal(gateway.writes.length, 0);
 });

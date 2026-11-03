@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenamePlan, buildStaffRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenamePlan, buildStaffRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildLeagueIntentPlan } from './leagueTransactionIntent.js';
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
@@ -804,4 +805,74 @@ test('startup recovery turns an interrupted audit repair into one durable staff 
   await recover();
   assert.equal(reports.length, 1);
   f.db.close();
+});
+
+test('saved swap intents are unchanged and one-way intents reject invalid or stale participants', () => {
+  const current = snapshot();
+  assert.deepEqual(buildLeagueIntentPlan('["trade","one","two"]', current), buildTradePlan(current, 'one', 'two'));
+  const intent = '["trade-one-way","one","team-b"]';
+  assert.deepEqual(buildLeagueIntentPlan(intent, current).playerIds, ['one']);
+  assert.throws(() => buildLeagueIntentPlan('["trade-one-way","one",null]', current), /Invalid saved/);
+  assert.throws(() => buildOneWayTradePlan(current, 'free', 'team-b'), /not rostered/);
+  assert.throws(() => buildOneWayTradePlan(current, 'one', 'team-a'), /already on the receiving team/);
+  assert.throws(() => buildOneWayTradePlan(current, 'one', 'missing'), /not an active/);
+  current.teams[1]!.division = 'Alfheim';
+  assert.throws(() => buildLeagueIntentPlan(intent, current), /Cross-division/);
+  current.teams[1]!.division = 'Vanaheim';
+  current.names[1]!.currentLeagueName = 'One';
+  assert.throws(() => buildLeagueIntentPlan(intent, current), /already used/);
+  current.discordMembers.shift();
+  assert.throws(() => buildLeagueIntentPlan(intent, current), /not currently in the Discord server/);
+});
+
+test('one-way execution is idempotent and uncertain role or Sheet writes never replay', async () => {
+  for (const failure of ['none', 'role', 'sheet', 'stale', 'permission'] as const) {
+    const f = fixture(failure === 'sheet' ? new LeagueSheetReconciliationRequiredError('Response lost') : undefined);
+    try {
+      const intent = '["trade-one-way","one","team-b"]';
+      const plan = buildLeagueIntentPlan(intent, f.current);
+      const announcement = buildLeagueAnnouncement(plan, 'Staff')!;
+      assert.match(announcement.description, /\*\*One\*\*.*team-a.*team-b/);
+      assert.match(announcement.description, /No player moves in return/);
+      assert.doesNotMatch(announcement.description, /undefined|Two|reinstat/i);
+      const reference = 'one-way-' + failure;
+      const input = {
+        db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'staff', actorName: 'Staff',
+        freeAgentRoleId: 'free-agent', now: new Date('2026-11-03T17:00:00Z'), jobReference: reference,
+        buildPlan: (current: LeagueSnapshot) => buildLeagueIntentPlan(intent, current),
+        expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan),
+        sheets: { ...f.sheets, assertOneWayTradeDestination: async () => {} },
+        discord: { ...f.discord,
+          validateOneWayTradeRoles: async () => {
+            if (failure === 'permission') throw new LeagueMutationValidationError('Missing role permission');
+          },
+          applyRoleChange: async (change: { discordId: string }) => {
+            await f.discord.applyRoleChange(change);
+            if (failure === 'role') throw Object.assign(new Error('Role response lost'), { reconciliationRequired: true });
+          },
+        },
+      };
+      if (failure === 'stale') f.current.teams[1]!.teamRole = 'Changed after preview';
+      if (failure === 'none') {
+        await executeLeagueTransaction(input);
+        await executeLeagueTransaction(input);
+        assert.equal(getLeagueTransaction(f.db, reference)?.status, 'completed');
+        assert.equal(f.events.filter(event => event === 'announce').length, 1);
+        assert.equal(f.events.filter(event => event === 'history').length, 1);
+        assert.deepEqual(f.events.filter(event => event.startsWith('discord:')), ['discord:one']);
+      } else {
+        await assert.rejects(() => executeLeagueTransaction(input));
+        if (failure === 'stale' || failure === 'permission') {
+          assert.equal(getLeagueTransaction(f.db, reference), undefined);
+          assert.ok(!f.events.includes('discord:one'));
+        } else {
+          assert.equal(getLeagueTransaction(f.db, reference)?.status, 'reconciliation_required');
+          await reconcilePendingLeagueTransactions(input);
+          await assert.rejects(() => executeLeagueTransaction(input));
+          assert.deepEqual(f.events.filter(event => event.startsWith('discord:')), ['discord:one']);
+        }
+        assert.ok(!f.events.includes('announce') && !f.events.includes('history'));
+      }
+    } finally { f.db.close(); }
+  }
 });

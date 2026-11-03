@@ -15,6 +15,7 @@ import {
   type LeagueTeam,
   type PublicRosterChange,
   SELF_DROP_LEAGUE_STATUS,
+  isOneWayTrade,
 } from '../domain/leagueOperations.js';
 
 type Cell = string | number | boolean | null;
@@ -24,7 +25,7 @@ export type SheetValueUpdate = { range: string; values: CellRows };
 export type SelfDropPresentation = { sheetId: number; legend: CellRows; ruleExists: boolean };
 
 // Reuse is opt-in for presentation only. Proof reads always bypass it.
-export type LeagueSheetsReadOptions = { purpose: 'presentation' | 'fresh'; valueRenderOption?: 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' };
+export type LeagueSheetsReadOptions = { purpose: 'presentation' | 'fresh'; valueRenderOption?: 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' | 'FORMULA' };
 
 export interface LeagueSheetsGateway {
   ensureDraftPickHighlights?(adminId: string, publicId: string, slots: DraftHighlightSlot[]): Promise<void>;
@@ -829,6 +830,15 @@ export class LeagueSheetsService {
     return prepared;
   }
 
+  async assertOneWayTradeDestination(prepared: PreparedLeagueSheetMutation): Promise<void> {
+    const destination = prepared.publicUpdates[1]!;
+    const rows = await this.gateway.getValues(this.config.publicSpreadsheetId, destination.range,
+      { purpose: 'fresh', valueRenderOption: 'FORMULA' });
+    const cell = rows[0]?.[0];
+    if (cell !== undefined && cell !== null && cell !== '')
+      throw new LeagueSheetDriftError('The receiving roster cell contains a value or formula. Ask staff to clear an owned slot, then preview again.');
+  }
+
   async apply(
     loaded: LoadedLeagueSnapshot,
     plan: LeagueMutationPlan,
@@ -836,6 +846,7 @@ export class LeagueSheetsService {
     prepared: PreparedLeagueSheetMutation,
   ): Promise<void> {
     await this.assertUnchanged(loaded);
+    if (isOneWayTrade(plan)) await this.assertOneWayTradeDestination(prepared);
     const originalRosters = loaded.snapshot.rosters;
     const now = record.processedAt ?? `${record.effectiveDate}T00:00:00.000Z`;
     const approvalNote = record.approvalNote ?? 'Ratatoskr approved transaction';
