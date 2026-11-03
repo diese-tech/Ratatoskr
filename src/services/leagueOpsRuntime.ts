@@ -166,7 +166,7 @@ export function createLeagueOpsRuntime(input: {
           // One-way execution already verified the move. Run its follow-up full
           // audit separately so it does not immediately repeat the worker's read.
           if (intent.selections.startsWith('["trade-one-way",')) {
-            worker.enqueue('audit', { trigger: 'scheduled' }, `trade-audit:${job.reference}`, 60_000);
+            worker.enqueue('audit', { trigger: 'scheduled' }, 'audit:one-way-trades', 60_000);
           } else {
             await audit('scheduled');
           }
