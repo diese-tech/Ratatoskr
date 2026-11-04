@@ -324,7 +324,7 @@ const alwaysReadDivisions = LEAGUE_DIVISIONS.filter((division) => LEAGUE_DIVISIO
 const publicRange = (division: LeagueDivision) => `'${LEAGUE_DIVISION_METADATA[division].publicTab}'!${PUBLIC_RANGE}`;
 const publicTeamCells = PUBLIC_TEAM_CELLS;
 
-const freeAgentCells = [
+export const freeAgentCells = [
   { column: 6, startRow: 25, endRow: 99 },
   { column: 10, startRow: 25, endRow: 99 },
 ];
