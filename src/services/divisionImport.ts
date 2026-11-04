@@ -127,7 +127,11 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
   const names = src.admin.names;
   const currentRow = new Map<string, { row: Rows[number]; sheetRow: number }>();
   names.slice(1).forEach((row, index) => { if (text(row[3]) === 'Current Discord Name') currentRow.set(text(row[0]), { row, sheetRow: index + 6 }); });
-  const existingLayered = new Map(src.admin.rosters.slice(1).filter(row => text(row[0]) === division).map(row => [text(row[4]), row]));
+  const layeredRows = src.admin.rosters.slice(1).filter(row => text(row[0]) === division);
+  const existingLayered = new Map(layeredRows.map(row => [text(row[4]), row]));
+  for (const id of existingLayered.keys())
+    if (layeredRows.filter(row => text(row[4]) === id).length > 1)
+      block(`duplicate-row:${id}`, `Current Rosters has more than one ${division} row for ${text(existingLayered.get(id)![5])} (${id}). Keep one, then run the dry run again.`);
   const holderIds = new Set(importTeams.flatMap(entry => entry.holders.map(holder => holder.id)));
   for (const [id, row] of existingLayered)
     if (!holderIds.has(id)) block(`stale-row:${id}`, `Current Rosters has a ${division} row for ${text(row[5])} (${id}), who no longer holds a ${division} team role.`);

@@ -128,9 +128,13 @@ async function main() {
 
   const after = await load();
   const leftover = after.plan.adminUpdates.length + after.plan.publicUpdates.length + (after.plan.createRosterTab ? 1 : 0);
-  console.log(leftover
-    ? `\nThe import wrote its changes, but a fresh check still finds ${leftover} differences. Do not run --write again; ask a maintainer to compare the sheets with this output.`
-    : `\nImport complete: ${plan.adminUpdates.length} Admin and ${plan.publicUpdates.length} public cells written, and a fresh check finds nothing left to import. Next: run "Check again" on the League Status card, then fix the listed Discord roles.`);
+  if (leftover || after.plan.blocked) {
+    process.exitCode = 1;
+    console.log(`\nThe import wrote its changes, but a fresh check does not match the reviewed plan (${leftover} differences, ${after.plan.findings.filter(finding => finding.blocking).length} new problems). Do not run --write again. Ask a maintainer to compare the sheets with the fresh check below.\n`);
+    process.stdout.write(renderImportPlan(after.plan, false));
+    return;
+  }
+  console.log(`\nImport complete: ${plan.adminUpdates.length} Admin and ${plan.publicUpdates.length} public cells written, and a fresh check finds nothing left to import. Next: run "Check again" on the League Status card, then fix the listed Discord roles.`);
 }
 
 main().catch((error: unknown) => {

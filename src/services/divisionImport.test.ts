@@ -185,4 +185,13 @@ test('the import script reads Discord with GET only and only asks for Sheets wri
   assert.doesNotMatch(source, /rest\.(post|put|patch|delete)\(/);
   assert.match(source, /write \? 'https:\/\/www\.googleapis\.com\/auth\/spreadsheets' : 'https:\/\/www\.googleapis\.com\/auth\/spreadsheets\.readonly'/);
   assert.match(source, /arg\('expect-plan'\) !== plan\.hash/);
+  // The post-write check fails on new blocking problems, not only on leftover writes.
+  assert.match(source, /if \(leftover \|\| after\.plan\.blocked\) \{\s*process\.exitCode = 1;/);
+});
+
+test('duplicate existing Niflheim rows for one player block the import', () => {
+  const src = sources();
+  const row = ['Niflheim', 'Something Spicy', 'spicy-nd', 'Something Spicy ND', '111111111111111111', 'TimmyTurntHer', 'Player', 'OK', '', ''];
+  src.admin.rosters.push(row, [...row]);
+  assert.ok(planDivisionImport(src).findings.some(finding => finding.id === 'duplicate-row:111111111111111111' && finding.blocking));
 });
