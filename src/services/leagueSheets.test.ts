@@ -839,8 +839,56 @@ test('one-way transfer refuses a full receiving block or a formula that displays
   const prepared = service.prepare(loaded, plan);
   gateway.data.set(gateway.key('public', prepared.publicUpdates[1]!.range), [['=""']]);
   await assert.rejects(() => service.assertOneWayTradeDestination(prepared), /contains a value or formula/);
-  const publicRows = loaded.sources.publicByDivision.Vanaheim;
+  const publicRows = loaded.sources.publicByDivision.Vanaheim!;
   for (let row = 15; row < 22; row++) publicRows[row]![6] = 'Occupied ' + row;
   assert.throws(() => service.prepare(loaded, plan), /No empty slot/);
   assert.equal(gateway.writes.length, 0);
+});
+
+function withNiflheim(f: ReturnType<typeof serviceFixture>) {
+  f.gateway.data.get(f.gateway.key('admin', "'League Teams'!A5:L100"))!.push(
+    ['Niflheim|Dream Walkers', 'Dream Walkers', 'Niflheim', 'team-n', 'Dream Walkers ND', '', '', 'division-n', 'Niflheim', '', '', 'Yes']);
+  const rows = emptyPublic();
+  rows[4]![2] = 'Nif';
+  rows[24]![6] = 'Stray free-agent cell';
+  f.gateway.data.set(f.gateway.key('public', "'Niflheim Roster'!A1:O99"), rows);
+  return f;
+}
+
+test('without active Niflheim teams the Niflheim Roster tab is never read and loads are unchanged (#197)', async () => {
+  const f = serviceFixture();
+  const loaded = await f.service.load(members, 'free-agent');
+  assert.ok(f.gateway.reads.every((read) => !read.range.includes('Niflheim')));
+  assert.deepEqual(Object.keys(loaded.sources.publicByDivision), ['Vanaheim', 'Alfheim', 'Svartalfheim']);
+  assert.deepEqual(Object.keys(loaded.snapshot.publicRosters), ['Vanaheim', 'Alfheim', 'Svartalfheim']);
+  assert.deepEqual(loaded.snapshot.publicRosters.Vanaheim!.freeAgents, ['Free']);
+  // An inactive Niflheim row still does not read the (possibly missing) tab.
+  f.gateway.data.get(f.gateway.key('admin', "'League Teams'!A5:L100"))!.push(
+    ['Niflheim|Dream Walkers', 'Dream Walkers', 'Niflheim', 'team-n', 'Dream Walkers ND', '', '', 'division-n', 'Niflheim', '', '', 'No']);
+  await f.service.load(members, 'free-agent');
+  assert.ok(f.gateway.reads.every((read) => !read.range.includes('Niflheim')));
+});
+
+test('an active Niflheim team reads its public tab with team blocks and no free-agent list (#197)', async () => {
+  const f = withNiflheim(serviceFixture());
+  const loaded = await f.service.load(members, 'free-agent');
+  assert.ok(f.gateway.reads.some((read) => read.range === "'Niflheim Roster'!A1:O99"));
+  assert.equal(loaded.snapshot.teams.find((team) => team.division === 'Niflheim')?.teamRoleId, 'team-n');
+  assert.deepEqual(loaded.snapshot.publicRosters.Niflheim!.teams['Dream Walkers'], ['Nif']);
+  assert.deepEqual(loaded.snapshot.publicRosters.Niflheim!.freeAgents, []);
+  assert.deepEqual(Object.keys(loaded.sources.publicByDivision), ['Vanaheim', 'Alfheim', 'Svartalfheim', 'Niflheim']);
+  await f.service.assertUnchanged(loaded);
+});
+
+test('audit wording and public-roster repair recognize Niflheim findings (#197)', async () => {
+  const { humanizeLeagueAuditIssues } = await import('./leagueAuditPresentation.js');
+  const { buildLeagueAuditSheetRepair } = await import('./leagueAuditResolution.js');
+  const f = withNiflheim(serviceFixture());
+  const { snapshot } = await f.service.load(members, 'free-agent');
+  const finding = 'Niflheim Dream Walkers public roster does not match Current Rosters.';
+  assert.deepEqual(humanizeLeagueAuditIssues(snapshot, [finding]), [
+    'Niflheim / Dream Walkers — Current Rosters: none; public roster: Nif. Make the player lists match.']);
+  const plan = buildLeagueAuditSheetRepair(snapshot, finding, 'sync-public-roster');
+  assert.deepEqual(plan.publicChanges.map(({ division, area, from, to }) => ({ division, area, from, to })),
+    [{ division: 'Niflheim', area: 'team', from: 'Nif', to: '' }]);
 });

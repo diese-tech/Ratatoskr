@@ -17,6 +17,7 @@ import {
   SELF_DROP_LEAGUE_STATUS,
   isOneWayTrade,
 } from '../domain/leagueOperations.js';
+import { LEAGUE_DIVISIONS, LEAGUE_DIVISION_METADATA, parseLeagueDivision } from '../domain/leagueDivisions.js';
 
 type Cell = string | number | boolean | null;
 type CellRows = Cell[][];
@@ -310,7 +311,11 @@ const ADMIN_ROSTERS_RANGE = "'Current Rosters'!A5:J";
 const ADMIN_NAMES_RANGE = "'Player Name History'!A5:K";
 const PUBLIC_RANGE = 'A1:O99';
 
-const divisions = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
+// Tabs with a public free-agent list are always read, as before #197. A division
+// without one (Niflheim) is read only while League Teams has an active team in it,
+// so its tab may be absent until the division is imported.
+const alwaysReadDivisions = LEAGUE_DIVISIONS.filter((division) => LEAGUE_DIVISION_METADATA[division].hasPublicFreeAgentList);
+const publicRange = (division: LeagueDivision) => `'${LEAGUE_DIVISION_METADATA[division].publicTab}'!${PUBLIC_RANGE}`;
 const publicTeamCells = PUBLIC_TEAM_CELLS;
 
 const freeAgentCells = [
@@ -318,21 +323,19 @@ const freeAgentCells = [
   { column: 10, startRow: 25, endRow: 99 },
 ];
 
-function value(rows: CellRows, row: number, column: number): string {
-  const cell = rows[row]?.[column];
+function value(rows: CellRows | undefined, row: number, column: number): string {
+  const cell = rows?.[row]?.[column];
   return cell === null || cell === undefined ? '' : String(cell).trim();
 }
 
-function parseDivision(input: string): LeagueDivision {
-  if (input === 'Vanaheim' || input === 'Alfheim' || input === 'Svartalfheim') return input;
-  throw new Error(`Unsupported league division: ${input || '(blank)'}.`);
-}
+const parseDivision = parseLeagueDivision;
 
 export type LeagueSheetSources = {
   teams: CellRows;
   rosters: CellRows;
   names: CellRows;
-  publicByDivision: Record<LeagueDivision, CellRows>;
+  // Only the public tabs that were read; see alwaysReadDivisions.
+  publicByDivision: Partial<Record<LeagueDivision, CellRows>>;
   selfDropPresentation: SelfDropPresentation;
 };
 
@@ -487,10 +490,10 @@ function namesInCells(rows: CellRows, cells: { column: number; startRow: number;
   });
 }
 
-function parsePublic(rows: CellRows) {
+function parsePublic(division: LeagueDivision, rows: CellRows) {
   return {
     teams: Object.fromEntries(Object.entries(publicTeamCells).map(([franchise, cell]) => [franchise, namesInCells(rows, [cell])])),
-    freeAgents: namesInCells(rows, freeAgentCells),
+    freeAgents: LEAGUE_DIVISION_METADATA[division].hasPublicFreeAgentList ? namesInCells(rows, freeAgentCells) : [],
   };
 }
 
@@ -499,7 +502,7 @@ function samePublicRosters(
   right: LeagueSnapshot['publicRosters'],
 ): boolean {
   const normalized = (values: string[]) => [...values].sort((a, b) => a.localeCompare(b));
-  for (const division of divisions) {
+  for (const division of LEAGUE_DIVISIONS.filter((name) => left[name] || right[name])) {
     const leftDivision = left[division];
     const rightDivision = right[division];
     if (!leftDivision || !rightDivision) return false;
@@ -570,7 +573,7 @@ export class LeagueSheetsService {
     const publicUpdates = this.resolvePublicChanges(loaded, plan.publicChanges);
     for (const update of publicUpdates) {
       const match = /^'(.+) Roster'!([A-O])(\d+)$/.exec(update.range)!;
-      after.publicByDivision[match[1] as LeagueDivision][Number(match[3]) - 1]![match[2]!.charCodeAt(0) - 65] = update.values[0]![0]!;
+      after.publicByDivision[match[1] as LeagueDivision]![Number(match[3]) - 1]![match[2]!.charCodeAt(0) - 65] = update.values[0]![0]!;
     }
     const draftBefore = await this.accountReplacementDraftRows();
     const draftStatus = this.draftHealthObservation!.health.status;
@@ -608,10 +611,10 @@ export class LeagueSheetsService {
       await this.gateway.batchUpdate(this.config.adminSpreadsheetId, prepared.adminUpdates, 'RAW');
       if (prepared.publicUpdates.length) {
         // Compare this workbook again after the Admin write. Drift now requires reconciliation.
-        const ranges = divisions.map((division) => `'${division} Roster'!${PUBLIC_RANGE}`);
+        const readDivisions = LEAGUE_DIVISIONS.filter((division) => prepared.before.publicByDivision[division]);
         await onWriting('applying_public');
-        const current = await this.readRanges(this.config.publicSpreadsheetId, ranges);
-        if (divisions.some((division, index) => JSON.stringify(current[index]) !== JSON.stringify(prepared.before.publicByDivision[division])))
+        const current = await this.readRanges(this.config.publicSpreadsheetId, readDivisions.map(publicRange));
+        if (readDivisions.some((division, index) => JSON.stringify(current[index]) !== JSON.stringify(prepared.before.publicByDivision[division])))
           throw new Error('The public roster changed after the Admin write.');
         await this.gateway.batchUpdate(this.config.publicSpreadsheetId, prepared.publicUpdates, 'RAW');
       }
@@ -707,24 +710,30 @@ export class LeagueSheetsService {
   async load(discordMembers: DiscordLeagueMember[], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot> {
     const [adminRows, publicRows, selfDropPresentation] = await Promise.all([
       this.readRanges(this.config.adminSpreadsheetId, [ADMIN_TEAMS_RANGE, ADMIN_ROSTERS_RANGE, ADMIN_NAMES_RANGE]),
-      this.readRanges(
-        this.config.publicSpreadsheetId,
-        divisions.map((division) => `'${division} Roster'!${PUBLIC_RANGE}`),
-      ),
+      this.readRanges(this.config.publicSpreadsheetId, alwaysReadDivisions.map(publicRange)),
       this.gateway.getSelfDropPresentation(this.config.adminSpreadsheetId),
     ]);
     const [teams = [], rosters = [], names = []] = adminRows;
-    const publicByDivision = Object.fromEntries(
-      divisions.map((division, index) => [division, publicRows[index] ?? []]),
-    ) as Record<LeagueDivision, CellRows>;
+    const parsedTeams = parseTeams(teams);
+    const read = new Map<LeagueDivision, CellRows>(alwaysReadDivisions.map((division, index) => [division, publicRows[index] ?? []]));
+    // ponytail: one extra public read per load while a division without a free-agent
+    // list is active; fold into the first batch if that latency ever matters.
+    const conditional = LEAGUE_DIVISIONS.filter((division) => !read.has(division)
+      && parsedTeams.some((team) => team.active && team.division === division));
+    if (conditional.length) {
+      const extra = await this.readRanges(this.config.publicSpreadsheetId, conditional.map(publicRange));
+      conditional.forEach((division, index) => read.set(division, extra[index] ?? []));
+    }
+    const readDivisions = LEAGUE_DIVISIONS.filter((division) => read.has(division));
+    const publicByDivision = Object.fromEntries(readDivisions.map((division) => [division, read.get(division)!]));
     return {
       snapshot: {
-        teams: parseTeams(teams),
+        teams: parsedTeams,
         rosters: parseRosters(rosters),
         names: parseNames(names),
         discordMembers,
         publicRosters: Object.fromEntries(
-          divisions.map((division) => [division, parsePublic(publicByDivision[division])]),
+          readDivisions.map((division) => [division, parsePublic(division, read.get(division)!)]),
         ),
         freeAgentRoleId,
         ...(this.config.niflheimFreeAgentRoleId ? { niflheimFreeAgentRoleId: this.config.niflheimFreeAgentRoleId } : {}),
@@ -758,11 +767,11 @@ export class LeagueSheetsService {
     ];
     const publicRows = await this.readRanges(
       this.config.publicSpreadsheetId,
-      affectedDivisions.map((division) => `'${division} Roster'!${PUBLIC_RANGE}`),
+      affectedDivisions.map(publicRange),
     );
     const publicRosters = Object.fromEntries(
       affectedDivisions.map((division, index) => [division,
-      parsePublic(publicRows[index] ?? [])]),
+      parsePublic(division, publicRows[index] ?? [])]),
     );
     return { teams, rosters, names, discordMembers: member ? [member] : [], publicRosters, freeAgentRoleId,
       ...(this.config.niflheimFreeAgentRoleId ? { niflheimFreeAgentRoleId: this.config.niflheimFreeAgentRoleId } : {}) };
@@ -784,6 +793,9 @@ export class LeagueSheetsService {
     const claimed = new Set<string>();
     return changes.map((change) => {
       const rows = loaded.sources.publicByDivision[change.division];
+      if (!rows) throw new Error(`The ${change.division} public roster was not loaded.`);
+      if (change.area !== 'team' && !LEAGUE_DIVISION_METADATA[change.division].hasPublicFreeAgentList)
+        throw new Error(`${change.division} has no public free-agent list.`);
       const cells = change.area === 'team' ? [publicTeamCells[change.group]] : freeAgentCells;
       if (!cells[0]) throw new Error(`No managed public roster block exists for ${change.group}.`);
       let match: { row: number; column: number } | undefined;

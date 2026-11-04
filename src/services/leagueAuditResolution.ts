@@ -20,6 +20,7 @@ import {
   type PreparedLeagueSheetMutation,
 } from './leagueSheets.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
+import { divisionAlternation } from '../domain/leagueDivisions.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
 import {
   completeLeagueAuditRepair,
@@ -32,6 +33,8 @@ import { leagueActionLabel } from './leaguePresentation.js';
 
 export type LeagueAuditRepairAction = 'use-discord-name' | 'use-league-name' | 'use-roster-name' | 'sync-public-roster' | 'mark-inactive';
 export type LeagueAuditResolutionAction = LeagueAuditRepairAction | 'repair-roles';
+
+const D = divisionAlternation();
 
 export class LeagueAuditRepairNoWriteError extends Error {}
 
@@ -173,7 +176,7 @@ export function buildLeagueAuditSheetRepair(
     return plan;
   }
 
-  const teamMatch = diagnostic.match(/^(Vanaheim|Alfheim|Svartalfheim) (.+) public roster does not match Current Rosters\.$/);
+  const teamMatch = diagnostic.match(new RegExp(`^(${D}) (.+) public roster does not match Current Rosters\\.$`));
   if (teamMatch && action === 'sync-public-roster') {
     const division = teamMatch[1] as LeagueDivision;
     const franchise = teamMatch[2]!;
@@ -195,7 +198,7 @@ export function buildLeagueAuditSheetRepair(
     return plan;
   }
 
-  const freeAgentMatch = diagnostic.match(/^(Vanaheim|Alfheim|Svartalfheim) public free-agent list does not match Player Name History\.$/);
+  const freeAgentMatch = diagnostic.match(new RegExp(`^(${D}) public free-agent list does not match Player Name History\\.$`));
   if (freeAgentMatch && action === 'sync-public-roster') {
     const division = freeAgentMatch[1] as LeagueDivision;
     const expected = snapshot.names.filter((row) => row.nameStatus === 'Current Discord Name'

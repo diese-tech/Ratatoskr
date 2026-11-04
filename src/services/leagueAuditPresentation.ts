@@ -1,6 +1,7 @@
 import type { LeagueSnapshot } from '../domain/leagueOperations.js';
+import { divisionAlternation, type LeagueDivision } from '../domain/leagueDivisions.js';
 
-const divisions = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
+const D = divisionAlternation();
 
 function quoted(value: string): string {
   return `“${value || 'blank'}”`;
@@ -115,7 +116,7 @@ function humanize(snapshot: LeagueSnapshot, issue: string): string {
   if (match) return `${playerName(snapshot, match[1]!)} — Discord team: ${list(discordTeamRoles(snapshot, match[1]!))}; Current Rosters team: ${rosterFor(snapshot, match[1]!)?.team ?? 'none'}. Make them match.`;
   match = issue.match(/^Discord member (\S+) is rostered without its team role\.$/);
   if (match) return `${playerName(snapshot, match[1]!)} is listed on ${rosterFor(snapshot, match[1]!)?.team ?? 'a team'} but is missing that team role in Discord. Restore the role or correct Current Rosters.`;
-  match = issue.match(/^Discord member (\S+) division roles do not match (Vanaheim|Alfheim|Svartalfheim)\.$/);
+  match = issue.match(new RegExp(`^Discord member (\\S+) division roles do not match (${D})\\.$`));
   if (match) return `${playerName(snapshot, match[1]!)} — Discord division: ${list(discordDivisionRoles(snapshot, match[1]!))}; expected: ${match[2]}. Make the division role match.`;
   match = issue.match(/^Discord member (\S+) is rostered but still has the Free Agent role\.$/);
   if (match) return `${playerName(snapshot, match[1]!)} is rostered on ${rosterFor(snapshot, match[1]!)?.team ?? 'a team'} but still has the Free Agent role. Remove the Free Agent role.`;
@@ -136,29 +137,29 @@ function humanize(snapshot: LeagueSnapshot, issue: string): string {
   if (match) return `The Free Agent role is also configured as a ${match[1]} role in League Teams. Give each purpose its own Discord role.`;
   match = issue.match(/^Team role (\S+) is configured more than once\.$/);
   if (match) return `${roleName(snapshot, match[1]!)} is listed more than once as an active team role in League Teams. Keep one active mapping.`;
-  match = issue.match(/^(Vanaheim|Alfheim|Svartalfheim) (.+) is configured as more than one active team\.$/);
+  match = issue.match(new RegExp(`^(${D}) (.+) is configured as more than one active team\\.$`));
   if (match) return `${match[1]} / ${match[2]} appears more than once as an active team in League Teams. Keep one active row.`;
-  match = issue.match(/^(Vanaheim|Alfheim|Svartalfheim) is configured with more than one division role\.$/);
+  match = issue.match(new RegExp(`^(${D}) is configured with more than one division role\\.$`));
   if (match) return `${match[1]} has more than one division role in League Teams. Use one division role for every ${match[1]} team.`;
-  match = issue.match(/^Division role (\S+) is shared by (Vanaheim|Alfheim|Svartalfheim) and (Vanaheim|Alfheim|Svartalfheim)\.$/);
+  match = issue.match(new RegExp(`^Division role (\\S+) is shared by (${D}) and (${D})\\.$`));
   if (match) return `${roleName(snapshot, match[1]!)} is shared by ${match[2]} and ${match[3]}. Give each division its own role.`;
 
-  match = issue.match(/^(Vanaheim|Alfheim|Svartalfheim) (.+) has no managed public roster block\.$/);
+  match = issue.match(new RegExp(`^(${D}) (.+) has no managed public roster block\\.$`));
   if (match) return `${match[1]} / ${match[2]} has no team section on the public roster sheet. Add the section before processing transactions.`;
-  match = issue.match(/^(Vanaheim|Alfheim|Svartalfheim) (.+) has duplicate current player names\.$/);
+  match = issue.match(new RegExp(`^(${D}) (.+) has duplicate current player names\\.$`));
   if (match) return `${match[1]} / ${match[2]} has duplicate player names in the managed roster data. Correct the duplicate before processing transactions.`;
-  match = issue.match(/^(Vanaheim|Alfheim|Svartalfheim) (.+) public roster does not match Current Rosters\.$/);
+  match = issue.match(new RegExp(`^(${D}) (.+) public roster does not match Current Rosters\\.$`));
   if (match) {
     const team = snapshot.teams.find((entry) => entry.division === match![1] && entry.franchise === match![2]);
     const expected = snapshot.rosters.filter((row) => row.teamRoleId === team?.teamRoleId).map((row) => row.player);
-    const actual = snapshot.publicRosters[match[1] as typeof divisions[number]]?.teams[match[2]!] ?? [];
+    const actual = snapshot.publicRosters[match[1] as LeagueDivision]?.teams[match[2]!] ?? [];
     return `${match[1]} / ${match[2]} — Current Rosters: ${list(expected)}; public roster: ${list(actual)}. Make the player lists match.`;
   }
-  match = issue.match(/^(Vanaheim|Alfheim|Svartalfheim) free agents have duplicate current player names\.$/);
+  match = issue.match(new RegExp(`^(${D}) free agents have duplicate current player names\\.$`));
   if (match) return `${match[1]} free agents contain duplicate current player names. Keep one current entry per player.`;
-  match = issue.match(/^(Vanaheim|Alfheim|Svartalfheim) public free-agent list does not match Player Name History\.$/);
+  match = issue.match(new RegExp(`^(${D}) public free-agent list does not match Player Name History\\.$`));
   if (match) {
-    const division = match[1] as typeof divisions[number];
+    const division = match[1] as LeagueDivision;
     const expected = snapshot.names.filter((row) => row.nameStatus === 'Current Discord Name' && row.division === division && row.leagueStatus === 'Free Agent').map((row) => row.currentLeagueName);
     const actual = snapshot.publicRosters[division]?.freeAgents ?? [];
     return `${division} free agents — Player Name History: ${list(expected)}; public roster: ${list(actual)}. Make the player lists match.`;

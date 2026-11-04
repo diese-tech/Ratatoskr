@@ -1,10 +1,14 @@
 // Builds the Admin 'Draft Picks' tab: each captain's first four draft picks (rounds 1-4,
 // not the Cap: line), resolved to Discord IDs. Pure logic; scripts/seed-draft-picks.ts does I/O.
 
+import { LEAGUE_DIVISIONS, LEAGUE_DIVISION_METADATA } from '../domain/leagueDivisions.js';
+
 type Cell = string | number | boolean | null;
 type Rows = Cell[][];
 
-export const DRAFT_DIVISIONS = ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const;
+// TODO(#199): the Niflheim import appends Niflheim picks without resetting the
+// season; until then layered divisions stay out of seeding and its 8-team checks.
+export const DRAFT_DIVISIONS = LEAGUE_DIVISIONS.filter((division) => !LEAGUE_DIVISION_METADATA[division].layeredOn);
 export const PROTECTED_ROUNDS = 4;
 export const DRAFT_PICK_HEADERS = [
   'Division', 'Team', 'Round', 'Pick #', 'Draft Name', 'Discord ID', 'Current League Name', 'Match Source', 'Status', 'Status For ID',
