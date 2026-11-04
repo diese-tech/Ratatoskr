@@ -6,7 +6,7 @@
 // imported by bot runtime modules (ADR 0001 maintenance-script exception, #196).
 import { createHash } from 'node:crypto';
 import { LEAGUE_DIVISION_METADATA, isLeagueDivision } from '../domain/leagueDivisions.js';
-import { PUBLIC_TEAM_CELLS } from './draftPickPresentation.js';
+import { publicTeamCellsFor } from './draftPickPresentation.js';
 import { normalizeName } from './draftPicks.js';
 import { inspectDivision, type DiscordDivisionState, type InspectedMember, type Rows } from './divisionInspection.js';
 import { freeAgentCells } from './leagueSheets.js';
@@ -27,7 +27,7 @@ export type ImportSources = {
     titles: string[];
     draft?: Rows;         // '<Division> Draft'!A1:O60
     parentRoster: Rows;   // '<Parent> Roster'!A1:O99
-    divisionRoster: Rows; // '<Division> Roster'!A1:O99, or the template when the tab does not exist yet
+    divisionRoster: Rows; // '<Division> Roster'!A1:O99 (empty when the tab does not exist)
   };
   links?: Record<string, string>; // new Discord ID -> earlier Discord ID, approved by staff (--link)
   accepted?: string[];            // blocking finding IDs staff acknowledged (--accept)
@@ -40,20 +40,19 @@ export type ImportPlan = {
   division: string;
   parent: string;
   rosterTab: string;
-  createRosterTab: boolean;
   adminUpdates: SheetUpdate[];
   publicUpdates: SheetUpdate[];
   teamsAdded: string[];
   playersAdded: Array<{ id: string; name: string; team: string; status: 'Captain' | 'Player' }>;
   newToRat: Array<{ id: string; name: string }>;
   reactivated: Array<{ id: string; name: string; linkedFrom?: string }>;
+  nameLinks: Array<{ id: string; name: string; sheetName: string }>;
   roleFixes: string[];
   findings: ImportFinding[];
   blocked: boolean;
   hash: string;
 };
 
-const TEMPLATE_TAB = 'Roster Default (DNE)';
 const text = (value: unknown) => (value === null || value === undefined ? '' : String(value)).trim();
 const column = (index: number) => String.fromCharCode(65 + index);
 const displayName = (member: InspectedMember) => member.nick || member.user.global_name || member.user.username;
@@ -79,9 +78,9 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
       names: src.admin.names.slice(1), rosters: src.admin.rosters.slice(1), memberDirectory: src.admin.memberDirectory,
       ...(src.public.draft ? { draft: src.public.draft } : {}) },
   });
-  const createRosterTab = !src.public.titles.includes(rosterTab);
-  if (createRosterTab && !src.public.titles.includes(TEMPLATE_TAB))
-    block('no-template', `The public workbook has no "${rosterTab}" tab and no "${TEMPLATE_TAB}" template to copy.`);
+  const teamCells = publicTeamCellsFor(division);
+  if (!src.public.titles.includes(rosterTab))
+    block('no-roster-tab', `The public workbook has no "${rosterTab}" tab. Add it in the usual roster layout, then run the dry run again.`);
   if (!report.divisionRole) block('no-division-role', `No "${division}" division role exists in Discord.`);
   if (!report.draftTabFound) block('no-draft-tab', `No "${division} Draft" tab exists, so the team rosters cannot be checked against the draft.`);
   for (const entry of report.multipleTeamRoles) block(`two-team-roles:${entry.id}`, `${entry.name} holds more than one ${division} team role: ${entry.roles.join(', ')}.`);
@@ -113,7 +112,7 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
     }
     const source = franchiseRow.get(entry.franchise);
     if (!source) { block(`no-franchise:${entry.franchise}`, `League Teams has no ${parent} ${entry.franchise} row to copy the franchise role from.`); continue; }
-    if (!PUBLIC_TEAM_CELLS[entry.franchise]) { block(`no-block:${entry.franchise}`, `${entry.franchise} has no public roster block layout.`); continue; }
+    if (!teamCells[entry.franchise]) { block(`no-block:${entry.franchise}`, `${entry.franchise} has no public roster block layout.`); continue; }
     adminUpdates.push({ range: `'League Teams'!A${nextTeamRow}:L${nextTeamRow}`, values: [[
       `${division}|${entry.franchise}`, entry.franchise, division, role.id, role.name, text(source[5]), text(source[6]),
       report.divisionRole?.id ?? '', report.divisionRole?.name ?? division,
@@ -146,7 +145,8 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
   const playersAdded: ImportPlan['playersAdded'] = [];
   const newToRat: ImportPlan['newToRat'] = [];
   const reactivated: ImportPlan['reactivated'] = [];
-  const blockNames = new Map<string, string[]>();
+  const blockNames = new Map<string, Array<{ id: string; name: string }>>();
+  const primary = new Map<string, [franchise: string, status: string]>();
   const existingHistory = new Set(src.admin.history.map(row => text(row[0])));
   const historyReference = (id: string) => `YSL-IMPORT-${division.toUpperCase()}-${date}-${id}`;
   const reactivationRow = (id: string, name: string, linkedFrom?: string) => existingHistory.has(historyReference(id)) ? [] : [[
@@ -161,7 +161,7 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
     if (draftCaptain && roleCaptains.length && (roleCaptains.length !== 1 || roleCaptains[0] !== draftCaptain))
       block(`captain:${entry.franchise}`, `${entry.franchise}'s draft captain does not match who holds the ${division} Captain role.`);
     const captainId = draftCaptain ?? (roleCaptains.length === 1 ? roleCaptains[0] : undefined);
-    const blockPlayers: string[] = [];
+    const blockPlayers: Array<{ id: string; name: string }> = [];
     for (const holder of holders) {
       const member = memberById.get(holder.id)!;
       const discordName = displayName(member);
@@ -176,6 +176,9 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
           historyRows.push(...reactivationRow(holder.id, leagueName));
           parentFreeAgents.push(leagueName);
           reactivated.push({ id: holder.id, name: leagueName });
+          primary.set(holder.id, ['', 'Free Agent']);
+        } else if (ACTIVE.includes(status)) {
+          primary.set(holder.id, [text(record.row[5]), status]);
         } else if (!ACTIVE.includes(status)) block(`status:${holder.id}`, `${holder.name} is ${status.startsWith('Suspended') ? 'suspended' : `marked "${status}"`} in Rat and is not reactivated automatically. Staff decide first.`);
       } else {
         const earlier = links[holder.id];
@@ -192,6 +195,7 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
               `Same player as earlier account ${earlier}; linked by the ${division} import.`]);
             historyRows.push(...reactivationRow(holder.id, discordName, earlier));
             reactivated.push({ id: holder.id, name: discordName, linkedFrom: earlier });
+            primary.set(holder.id, ['', 'Free Agent']);
             parentFreeAgents.push(discordName);
           }
         } else {
@@ -201,9 +205,10 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
             `Added by the ${division} import.`]);
           parentFreeAgents.push(discordName);
           newToRat.push({ id: holder.id, name: discordName });
+          primary.set(holder.id, ['', 'Free Agent']);
         }
       }
-      blockPlayers.push(leagueName);
+      blockPlayers.push({ id: holder.id, name: leagueName });
       const status = holder.id === captainId ? 'Captain' : 'Player';
       const existing = existingLayered.get(holder.id);
       if (existing) {
@@ -216,6 +221,49 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
     if (holders.length > 7) warn(`roster-size:${entry.franchise}`, `${entry.franchise} has ${holders.length} players, above the roster cap of 7.`);
     blockNames.set(entry.franchise, captainId ? [blockPlayers[holders.findIndex(holder => holder.id === captainId)]!, ...blockPlayers.filter((_, index) => holders[index]!.id !== captainId)] : blockPlayers);
   }
+  // Public: the division's own roster tab, kept in draft-pick order (captain, then rounds 1-6).
+  // A cell is linked to a player by league name, Discord name, draft name or a known name, then
+  // rewritten as the league name so later transactions and renames find it.
+  const publicUpdates: SheetUpdate[] = [];
+  const nameLinks: ImportPlan['nameLinks'] = [];
+  const grid = src.public.divisionRoster;
+  const knownNames = new Map<string, Set<string>>();
+  const know = (id: string, name: unknown) => { if (text(name)) knownNames.set(id, (knownNames.get(id) ?? new Set()).add(normalizeName(text(name)))); };
+  for (const row of names.slice(1)) know(text(row[0]), row[2]);
+  for (const entry of report.draftResolutions) if (entry.outcome === 'matched' && entry.discordId) know(entry.discordId, entry.draftName);
+  const ownNames = (id: string) => { const member = memberById.get(id); return [member?.nick, member?.user.global_name, member?.user.username].filter(Boolean) as string[]; };
+  if (src.public.titles.includes(rosterTab)) for (const [franchise, players] of blockNames) {
+    const cells = teamCells[franchise]!;
+    if (text(grid[cells.startRow - 3]?.[cells.column - 1]) !== franchise || text(grid[cells.startRow - 1]?.[cells.column - 1]) !== 'Cap:') {
+      block(`layout:${franchise}`, `The ${rosterTab} tab does not have the expected ${franchise} block (team name above a "Cap:" row).`);
+      continue;
+    }
+    const slots = Array.from({ length: cells.endRow - cells.startRow + 1 }, (_, index) => cells.startRow + index);
+    const current = slots.map(row => text(grid[row - 1]?.[cells.column]));
+    const keys = (player: { id: string; name: string }) =>
+      new Set([player.name, ...ownNames(player.id)].map(normalizeName).concat([...(knownNames.get(player.id) ?? [])]));
+    const owners = current.map(name => name ? players.filter(player => keys(player).has(normalizeName(name))) : []);
+    if (players.length > slots.length || owners.some((found, index) => current[index] && found.length !== 1)
+      || new Set(owners.flat().map(player => player.id)).size !== owners.flat().length) {
+      block(`block:${franchise}`, `The ${rosterTab} ${franchise} block has names that do not match one player on the team, or not enough rows.`);
+      continue;
+    }
+    slots.forEach((row, index) => {
+      const wanted = players[index]?.name ?? '';
+      if (current[index] !== wanted) publicUpdates.push({ range: `'${rosterTab}'!${column(cells.column)}${row}`, values: [[wanted]] });
+    });
+    // A sheet name that is not a form of the player's own names is recorded, so Rat knows it is theirs.
+    current.forEach((name, index) => {
+      const player = owners[index]![0];
+      if (!player || [player.name, ...ownNames(player.id)].some(own => normalizeName(own) === normalizeName(name))) return;
+      nameLinks.push({ id: player.id, name: player.name, sheetName: name });
+      if (names.slice(1).some(row => text(row[0]) === player.id && text(row[2]) === name)) return;
+      const [primaryFranchise, primaryStatus] = primary.get(player.id) ?? ['', 'Free Agent'];
+      newNameRows.push([player.id, player.name, name, 'Previous / Alternate', parent, primaryFranchise, primaryStatus, date, date, note,
+        `Name on the ${rosterTab} tab; linked by the ${division} import.`]);
+    });
+  }
+
   let nextRosterRow = src.admin.rosters.length + 5;
   for (const values of rosterRows) adminUpdates.push({ range: `'Current Rosters'!A${nextRosterRow}:J${nextRosterRow++}`, values: [values] });
   adminUpdates.push(...nameUpdates);
@@ -224,26 +272,6 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
   let nextHistoryRow = src.admin.history.length + 5;
   for (const values of historyRows) adminUpdates.push({ range: `'Transaction History'!A${nextHistoryRow}:M${nextHistoryRow++}`, values: [values] });
 
-  // Public: fill the division's team blocks and add new parent free agents to empty owned cells.
-  const publicUpdates: SheetUpdate[] = [];
-  const grid = src.public.divisionRoster;
-  for (const [franchise, players] of blockNames) {
-    const cells = PUBLIC_TEAM_CELLS[franchise]!;
-    if (text(grid[cells.startRow - 3]?.[cells.column - 1]) !== franchise || text(grid[cells.startRow - 1]?.[cells.column - 1]) !== 'Cap:') {
-      block(`layout:${franchise}`, `The ${createRosterTab ? TEMPLATE_TAB : rosterTab} tab does not have the expected ${franchise} block (team name above a "Cap:" row).`);
-      continue;
-    }
-    const slots = Array.from({ length: cells.endRow - cells.startRow + 1 }, (_, index) => cells.startRow + index);
-    const present = new Set(slots.map(row => text(grid[row - 1]?.[cells.column])).filter(Boolean));
-    const missing = players.filter(name => !present.has(name));
-    const empty = slots.filter(row => !text(grid[row - 1]?.[cells.column]));
-    if (missing.length > empty.length || [...present].some(name => !players.includes(name))) {
-      block(`block:${franchise}`, `The ${rosterTab} ${franchise} block has names that are not on the team, or not enough empty rows.`);
-      continue;
-    }
-    // A fresh block is filled in roster order with the captain first; otherwise only empty rows are used.
-    missing.forEach((name, index) => publicUpdates.push({ range: `'${rosterTab}'!${column(cells.column)}${empty[index]}`, values: [[name]] }));
-  }
   const parentGrid = src.public.parentRoster;
   const faCells = freeAgentCells.flatMap(cell => Array.from({ length: cell.endRow - cell.startRow + 1 }, (_, index) => ({ row: cell.startRow + index, column: cell.column })));
   const listed = new Set(faCells.map(cell => text(parentGrid[cell.row - 1]?.[cell.column])).filter(Boolean));
@@ -255,7 +283,7 @@ export function planDivisionImport(src: ImportSources): ImportPlan {
   const roleFixes = report.layered.filter(entry => holderIds.has(entry.discordId) && entry.problems.length)
     .map(entry => `${entry.name}: ${entry.problems.join(' ')}`);
   const blocked = findings.some(finding => finding.blocking);
-  const body = { division, parent, rosterTab, createRosterTab, adminUpdates, publicUpdates, teamsAdded, playersAdded, newToRat, reactivated, roleFixes, findings, blocked };
+  const body = { division, parent, rosterTab, adminUpdates, publicUpdates, teamsAdded, playersAdded, newToRat, reactivated, nameLinks, roleFixes, findings, blocked };
   // The hash binds the reviewed plan to every input it was built from, so any change aborts --write.
   const hash = createHash('sha256').update(JSON.stringify({ body, admin: src.admin, public: src.public })).digest('hex');
   return { ...body, hash };
@@ -271,13 +299,13 @@ export function renderImportPlan(plan: ImportPlan, write: boolean): string {
   list(`Players to add to ${plan.division} rosters`, plan.playersAdded.map(player => `${player.name} (${player.id}) → ${player.team}${player.status === 'Captain' ? ' (captain)' : ''}`));
   list(`New to Rat (added as ${plan.parent} free agents)`, plan.newToRat.map(player => `${player.name} (${player.id})`));
   list(`Returning to ${plan.parent} free agency`, plan.reactivated.map(player => `${player.name} (${player.id})${player.linkedFrom ? `, linked to earlier account ${player.linkedFrom}` : ''}`));
-  lines.push(`## Public sheet`, plan.createRosterTab ? `- Create "${plan.rosterTab}" from "${TEMPLATE_TAB}".` : `- "${plan.rosterTab}" already exists.`,
-    `- ${plan.publicUpdates.length} cells to fill.`, '');
+  list(`Names on the ${plan.rosterTab} tab linked to players`, plan.nameLinks.map(link => `"${link.sheetName}" is ${link.name} (${link.id}); the tab will show ${link.name}`));
+  lines.push(`## Public sheet`, `- ${plan.publicUpdates.length} cells to fill or correct on "${plan.rosterTab}" and the ${plan.parent} free-agent list.`, '');
   list('Discord roles to fix afterwards with "Set Discord roles from roster sheets"', plan.roleFixes);
   lines.push(`Sheet cells to write: ${plan.adminUpdates.length} Admin, ${plan.publicUpdates.length} public. Discord roles are never changed by this import.`);
   lines.push(blocking.length
     ? 'Nothing can be imported until every item in "Must be resolved" is fixed or accepted with --accept=<id>.'
-    : plan.adminUpdates.length || plan.publicUpdates.length || plan.createRosterTab
+    : plan.adminUpdates.length || plan.publicUpdates.length
       ? `Plan hash: ${plan.hash}`
       : 'Everything is already imported. There is nothing to do.');
   return `${lines.join('\n')}\n`;

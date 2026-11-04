@@ -16,7 +16,6 @@ import { LEAGUE_DIVISION_METADATA, isLeagueDivision } from '../src/domain/league
 import { describeInspectionFailure, InspectionSetupError, readDivisionDiscordState, type ReadOnlyRest, type Rows } from '../src/services/divisionInspection.js';
 import { planDivisionImport, renderImportPlan, type ImportPlan, type ImportSources } from '../src/services/divisionImport.js';
 
-const TEMPLATE_TAB = 'Roster Default (DNE)';
 const arg = (name: string) => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 const required = (name: string) => {
   const value = process.env[name]?.trim();
@@ -76,7 +75,7 @@ async function main() {
   const rest = new REST({ version: '10' }).setToken(required('DISCORD_TOKEN'));
   const readOnly: ReadOnlyRest = { get: (route, options) => rest.get(route, options) };
 
-  async function load(): Promise<{ sources: ImportSources; plan: ImportPlan; publicMeta: Meta }> {
+  async function load(): Promise<{ plan: ImportPlan }> {
     const [adminMeta, publicMeta] = await Promise.all([sheets.meta(adminId), sheets.meta(publicId)]);
     const adminTitles = adminMeta.sheets.map(sheet => sheet.properties.title);
     const publicTitles = publicMeta.sheets.map(sheet => sheet.properties.title);
@@ -88,9 +87,8 @@ async function main() {
     const [teams, rosters, names, history, memberDirectory] = await sheets.read(adminId, ["'League Teams'!A5:L", "'Current Rosters'!A5:J",
       "'Player Name History'!A5:K", "'Transaction History'!A5:M", ...(hasDirectory ? ["'Member Directory'!A6:D"] : [])]);
     const draftTab = `${division} Draft`;
-    const divisionSource = publicTitles.includes(rosterTab) ? rosterTab : TEMPLATE_TAB;
     const publicRanges: Array<[string, string]> = [['parent', `'${LEAGUE_DIVISION_METADATA[parent].publicTab}'!A1:O99`],
-      ...(publicTitles.includes(divisionSource) ? [['division', `'${divisionSource}'!A1:O99`] as [string, string]] : []),
+      ...(publicTitles.includes(rosterTab) ? [['division', `'${rosterTab}'!A1:O99`] as [string, string]] : []),
       ...(publicTitles.includes(draftTab) ? [['draft', `'${draftTab}'!A1:O60`] as [string, string]] : [])];
     const publicRows = await sheets.read(publicId, publicRanges.map(([, range]) => range));
     const publicRead = new Map(publicRanges.map(([key], index) => [key, publicRows[index]!]));
@@ -101,12 +99,12 @@ async function main() {
       public: { titles: publicTitles, parentRoster: publicRead.get('parent')!, divisionRoster: publicRead.get('division') ?? [],
         ...(publicRead.has('draft') ? { draft: publicRead.get('draft')! } : {}) },
     };
-    return { sources, plan: planDivisionImport(sources), publicMeta };
+    return { plan: planDivisionImport(sources) };
   }
 
-  const { sources, plan, publicMeta } = await load();
+  const { plan } = await load();
   process.stdout.write(renderImportPlan(plan, write));
-  const nothingToDo = !plan.adminUpdates.length && !plan.publicUpdates.length && !plan.createRosterTab;
+  const nothingToDo = !plan.adminUpdates.length && !plan.publicUpdates.length;
   if (!write || nothingToDo || plan.blocked) {
     if (write && plan.blocked) process.exitCode = 1;
     if (!write && !plan.blocked && !nothingToDo)
@@ -117,18 +115,11 @@ async function main() {
     throw new InspectionSetupError('The sheets or Discord changed since the reviewed dry run (or --expect-plan is missing). Nothing was changed. Run a new dry run and review it.');
 
   writing = true;
-  if (plan.createRosterTab) {
-    const template = publicMeta.sheets.find(sheet => sheet.properties.title === TEMPLATE_TAB)!;
-    await sheets.call(`${base}/${publicId}:batchUpdate`, { requests: [{ duplicateSheet: { sourceSheetId: template.properties.sheetId, newSheetName: rosterTab } }] });
-    const [copy] = await sheets.read(publicId, [`'${rosterTab}'!A1:O99`]);
-    if (JSON.stringify(copy) !== JSON.stringify(sources.public.divisionRoster))
-      throw new InspectionSetupError(`The new "${rosterTab}" tab does not match the template that was reviewed. Only that empty tab was created; no roster data was written. Delete it, then run a new dry run.`);
-  }
   if (plan.adminUpdates.length) await sheets.call(`${base}/${adminId}/values:batchUpdate`, { valueInputOption: 'RAW', data: plan.adminUpdates });
   if (plan.publicUpdates.length) await sheets.call(`${base}/${publicId}/values:batchUpdate`, { valueInputOption: 'RAW', data: plan.publicUpdates });
 
   const after = await load();
-  const leftover = after.plan.adminUpdates.length + after.plan.publicUpdates.length + (after.plan.createRosterTab ? 1 : 0);
+  const leftover = after.plan.adminUpdates.length + after.plan.publicUpdates.length;
   if (leftover || after.plan.blocked) {
     process.exitCode = 1;
     console.log(`\nThe import wrote its changes, but a fresh check does not match the reviewed plan (${leftover} differences, ${after.plan.findings.filter(finding => finding.blocking).length} new problems). Do not run --write again. Ask a maintainer to compare the sheets with the fresh check below.\n`);

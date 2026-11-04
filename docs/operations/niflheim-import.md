@@ -8,7 +8,7 @@ What it does:
 - adds a **Niflheim row in Current Rosters** for each player holding a `<Team> ND` role. The draft captain is marked `Captain`;
 - gives players **new to Rat** a Svartalfheim free-agent record and adds them to the public Svartalfheim free-agent list;
 - returns **Inactive** drafted players to Svartalfheim free agency, with one `reactivation` row in Transaction History;
-- creates the public **Niflheim Roster** tab from `Roster Default (DNE)` and fills in the team blocks.
+- fills in the public **Niflheim Roster** tab, which staff make by hand. Its team blocks sit in their own places (Rat knows them). Each block is kept in draft-pick order: captain, then rounds 1–6. A name already on the tab is matched to its player by league name, Discord name, draft name or a known name, then shown as the player's league name so transactions and renames can find it. A name Rat did not know yet is saved in Player Name History as that player's other name.
 
 It does not track draft picks, refresh the Member Directory or Role Guide, or change anyone's Discord roles.
 
