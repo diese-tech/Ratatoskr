@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { PUBLIC_TEAM_CELLS } from './draftPickPresentation.js';
+import { PUBLIC_TEAM_CELLS, publicTeamCellsFor } from './draftPickPresentation.js';
 import { planDivisionImport, renderImportPlan, type ImportSources, type SheetUpdate } from './divisionImport.js';
 import type { InspectedMember, Rows } from './divisionInspection.js';
 import { auditLeagueRoster } from '../domain/leagueOperations.js';
@@ -12,9 +12,9 @@ const member = (id: string, name: string, roles: string[], username = name.toLow
   ({ user: { id, username, global_name: name }, nick: null, roles });
 const grid = (): Rows => Array.from({ length: 99 }, () => Array<string>(15).fill(''));
 
-function template(): Rows {
+function template(layout = PUBLIC_TEAM_CELLS): Rows {
   const rows = grid();
-  for (const [franchise, cells] of Object.entries(PUBLIC_TEAM_CELLS)) {
+  for (const [franchise, cells] of Object.entries(layout)) {
     rows[cells.startRow - 3]![cells.column - 1] = franchise;
     rows[cells.startRow - 1]![cells.column - 1] = 'Cap:';
     for (let row = cells.startRow + 1; row <= cells.endRow; row += 1) rows[row - 1]![cells.column - 1] = String(row - cells.startRow);
@@ -59,7 +59,7 @@ function sources(): ImportSources {
       history: [['Reference']],
       memberDirectory: [],
     },
-    public: { titles: ['Svartalfheim Roster', 'Roster Default (DNE)', 'Niflheim Draft'], draft, parentRoster, divisionRoster: template() },
+    public: { titles: ['Svartalfheim Roster', 'Niflheim Roster', 'Niflheim Draft'], draft, parentRoster, divisionRoster: template(publicTeamCellsFor('Niflheim')) },
   };
 }
 
@@ -68,7 +68,6 @@ const cell = (updates: SheetUpdate[], range: string) => updates.find(update => u
 test('the import plans team rows, layered roster rows, new and returning free agents and the public tab', () => {
   const plan = planDivisionImport(sources());
   assert.deepEqual(plan.findings.filter(finding => finding.blocking), []);
-  assert.equal(plan.createRosterTab, true);
   assert.deepEqual(plan.teamsAdded, ['Something Spicy', 'The Rat Pack']);
   assert.deepEqual(cell(plan.adminUpdates, "'League Teams'!A9:L9"), [['Niflheim|Something Spicy', 'Something Spicy', 'Niflheim', 'spicy-nd',
     'Something Spicy ND', 'Something Spicy-franchise', 'Something Spicy', 'nifl', 'Niflheim', 'niflcap', 'Niflheim Captain', 'Yes']]);
@@ -85,9 +84,9 @@ test('the import plans team rows, layered roster rows, new and returning free ag
   assert.deepEqual(cell(plan.adminUpdates, "'Transaction History'!A6:M6")![0]!.slice(0, 8),
     ['YSL-IMPORT-NIFLHEIM-2026-11-05-444444444444444444', 'reactivation', '2026-11-05', 'Svartalfheim', 'Inactive', 'Free Agents', '444444444444444444', 'Thinks']);
   assert.equal(plan.adminUpdates.filter(update => update.range.startsWith("'Transaction History'")).length, 1, 'only reactivations write history');
-  // Public: captain first in each block; new Svartalfheim free agents fill empty owned cells.
+  // Public: Niflheim's own block positions, captain first; new Svartalfheim free agents fill empty owned cells.
   assert.deepEqual(plan.publicUpdates.map(update => `${update.range}=${update.values[0]![0]}`), [
-    "'Niflheim Roster'!O5=Qronch", "'Niflheim Roster'!O6=TimmyTurntHer",
+    "'Niflheim Roster'!K5=Qronch", "'Niflheim Roster'!K6=TimmyTurntHer",
     "'Niflheim Roster'!C16=Deadeye", "'Niflheim Roster'!C17=Thinks",
     "'Svartalfheim Roster'!G26=Deadeye", "'Svartalfheim Roster'!G27=Thinks"]);
   assert.match(plan.roleFixes.join('\n'), /Deadeye: No Free Agent role\. No Svartalfheim division role\./);
@@ -103,7 +102,9 @@ test('ambiguous or unsafe data blocks the import until fixed or explicitly accep
   assert.deepEqual(blocked(src => { src.discord.members[0]!.roles.push('rat-nd'); }), ['two-team-roles:111111111111111111']);
   assert.deepEqual(blocked(src => { src.public.draft![5]![2] = ''; }), ['not-drafted:111111111111111111']);
   assert.deepEqual(blocked(src => { src.public.draft![5]![2] = 'Ghost'; }).filter(id => id.startsWith('draft-name')), ['draft-name:Something Spicy:Ghost']);
-  assert.ok(blocked(src => { src.public.divisionRoster[2]![13] = 'Renamed'; }).includes('layout:Something Spicy'));
+  assert.ok(blocked(src => { src.public.divisionRoster[2]![9] = 'Renamed'; }).includes('layout:Something Spicy'));
+  assert.ok(blocked(src => { src.public.divisionRoster[4]![10] = 'Stranger'; }).includes('block:Something Spicy'));
+  assert.ok(blocked(src => { src.public.titles = src.public.titles.filter(title => title !== 'Niflheim Roster'); }).includes('no-roster-tab'));
   assert.ok(blocked(src => { for (let row = 24; row < 99; row += 1) { src.public.parentRoster[row]![6] = `x${row}`; src.public.parentRoster[row]![10] = `y${row}`; } }).includes('fa-list-full'));
   assert.ok(blocked(src => { src.admin.names[3]![6] = 'Suspended - Self-Drop (Current + Next Season)'; }).includes('status:444444444444444444'));
   assert.ok(blocked(src => { src.admin.names[1]![4] = 'Vanaheim'; }).includes('wrong-division:111111111111111111'));
@@ -145,7 +146,6 @@ function applyUpdates(src: ImportSources, plan: ReturnType<typeof planDivisionIm
     while (rows.length <= index) rows.push([]);
     update.values[0]!.forEach((value, offset) => { rows[index]![letter!.charCodeAt(0) - 65 + offset] = value; });
   }
-  next.public.titles.push('Niflheim Roster');
   return next;
 }
 
@@ -154,7 +154,7 @@ test('applying the plan leaves nothing to import, and the result passes the rost
   const plan = planDivisionImport(src);
   const after = applyUpdates(src, plan);
   const again = planDivisionImport(after);
-  assert.deepEqual([again.adminUpdates, again.publicUpdates, again.createRosterTab, again.blocked], [[], [], false, false]);
+  assert.deepEqual([again.adminUpdates, again.publicUpdates, again.blocked], [[], [], false]);
   assert.match(renderImportPlan(again, false), /Everything is already imported/);
 
   // Load the imported sheets through the bot's own reader and audit them with the Discord roles staff will set.
@@ -194,4 +194,27 @@ test('duplicate existing Niflheim rows for one player block the import', () => {
   const row = ['Niflheim', 'Something Spicy', 'spicy-nd', 'Something Spicy ND', '111111111111111111', 'TimmyTurntHer', 'Player', 'OK', '', ''];
   src.admin.rosters.push(row, [...row]);
   assert.ok(planDivisionImport(src).findings.some(finding => finding.id === 'duplicate-row:111111111111111111' && finding.blocking));
+});
+
+test('a filled-in roster tab is linked by draft and known names, rewritten as league names and put in draft order', () => {
+  const src = sources();
+  // The draft and the tab call TimmyTurntHer "TimTurns", a name Rat only knows from the Member Directory.
+  src.admin.memberDirectory = [['111111111111111111', 'timmy', 'TimTurns', '']];
+  src.public.draft![5]![2] = 'TimTurns';
+  // Hand-filled out of order: the pick sits in the captain row and the captain below it.
+  src.public.divisionRoster[4]![10] = 'TimTurns';
+  src.public.divisionRoster[5]![10] = 'qronch';
+  // The Rat Pack captain is on the tab under his draft name.
+  src.public.divisionRoster[15]![2] = 'Deadeyeee';
+  const plan = planDivisionImport(src);
+  assert.deepEqual(plan.findings.filter(finding => finding.blocking), []);
+  assert.deepEqual(plan.publicUpdates.filter(update => update.range.startsWith("'Niflheim Roster'")).map(update => `${update.range}=${update.values[0]![0]}`), [
+    "'Niflheim Roster'!K5=Qronch", "'Niflheim Roster'!K6=TimmyTurntHer", "'Niflheim Roster'!C16=Deadeye", "'Niflheim Roster'!C17=Thinks"]);
+  // Only the name that is not a form of the player's own Discord names is recorded as theirs.
+  assert.deepEqual(plan.nameLinks, [{ id: '111111111111111111', name: 'TimmyTurntHer', sheetName: 'TimTurns' }]);
+  const alias = plan.adminUpdates.find(update => update.range.startsWith("'Player Name History'!A") && update.values[0]![2] === 'TimTurns');
+  assert.deepEqual(alias?.values[0]!.slice(0, 7), ['111111111111111111', 'TimmyTurntHer', 'TimTurns', 'Previous / Alternate', 'Svartalfheim', '', 'Free Agent']);
+  assert.match(renderImportPlan(plan, false), /"TimTurns" is TimmyTurntHer \(111111111111111111\); the tab will show TimmyTurntHer/);
+  const again = planDivisionImport(applyUpdates(src, plan));
+  assert.deepEqual([again.adminUpdates, again.publicUpdates, again.blocked], [[], [], false]);
 });

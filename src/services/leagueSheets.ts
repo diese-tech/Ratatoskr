@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { LeagueAccountReplacementPlan } from '../domain/leagueAccountReplacement.js';
 import { draftPickIdentityIndex, planDraftPickAccountReplacement } from './draftPicks.js';
 import { readDraftPickTracking, DraftPickTrackingError, type DraftPickHealth } from './draftPickTracking.js';
-import { PUBLIC_TEAM_CELLS, publicDraftHighlightCells, draftNameColorRequest, DRAFT_HISTORY_RULE, DRAFT_ROW_YELLOW, hasDraftHistoryRule, type DraftHistoryRule, type DraftHighlightSlot } from './draftPickPresentation.js';
+import { publicTeamCellsFor, publicDraftHighlightCells, draftNameColorRequest, DRAFT_HISTORY_RULE, DRAFT_ROW_YELLOW, hasDraftHistoryRule, type DraftHistoryRule, type DraftHighlightSlot } from './draftPickPresentation.js';
 import {
   type DiscordLeagueMember,
   type LeagueDivision,
@@ -322,7 +322,6 @@ const PUBLIC_RANGE = 'A1:O99';
 // so its tab may be absent until the division is imported.
 const alwaysReadDivisions = LEAGUE_DIVISIONS.filter((division) => LEAGUE_DIVISION_METADATA[division].hasPublicFreeAgentList);
 const publicRange = (division: LeagueDivision) => `'${LEAGUE_DIVISION_METADATA[division].publicTab}'!${PUBLIC_RANGE}`;
-const publicTeamCells = PUBLIC_TEAM_CELLS;
 
 export const freeAgentCells = [
   { column: 6, startRow: 25, endRow: 99 },
@@ -498,7 +497,7 @@ function namesInCells(rows: CellRows, cells: { column: number; startRow: number;
 
 function parsePublic(division: LeagueDivision, rows: CellRows) {
   return {
-    teams: Object.fromEntries(Object.entries(publicTeamCells).map(([franchise, cell]) => [franchise, namesInCells(rows, [cell])])),
+    teams: Object.fromEntries(Object.entries(publicTeamCellsFor(division)).map(([franchise, cell]) => [franchise, namesInCells(rows, [cell])])),
     freeAgents: LEAGUE_DIVISION_METADATA[division].hasPublicFreeAgentList ? namesInCells(rows, freeAgentCells) : [],
   };
 }
@@ -690,7 +689,7 @@ export class LeagueSheetsService {
     for (const expected of [plan.oldNameAfter, ...plan.preservedHistory.nameRows])
       if (!equal(expected, fresh.snapshot.names.find(row => row.sheetRow === expected.sheetRow)))
         throw new LeagueSheetReconciliationRequiredError('The original account name/alias history changed. Review preserved attribution before reconciliation.');
-    const block = publicTeamCells[plan.rosterAfter.franchise];
+    const block = publicTeamCellsFor(plan.rosterAfter.division)[plan.rosterAfter.franchise];
     const expectedBlock = prepared.after.publicByDivision[plan.rosterAfter.division];
     const currentBlock = fresh.sources.publicByDivision[plan.rosterAfter.division];
     const ownedRows = block && Array.from({ length: block.endRow - block.startRow + 1 }, (_, index) => index + block.startRow - 1);
@@ -800,7 +799,7 @@ export class LeagueSheetsService {
       if (!rows) throw new Error(`The ${change.division} public roster was not loaded.`);
       if (change.area !== 'team' && !LEAGUE_DIVISION_METADATA[change.division].hasPublicFreeAgentList)
         throw new Error(`${change.division} has no public free-agent list.`);
-      const cells = change.area === 'team' ? [publicTeamCells[change.group]] : freeAgentCells;
+      const cells = change.area === 'team' ? [publicTeamCellsFor(change.division)[change.group]] : freeAgentCells;
       if (!cells[0]) throw new Error(`No managed public roster block exists for ${change.group}.`);
       let match: { row: number; column: number } | undefined;
       for (const cell of cells as { column: number; startRow: number; endRow: number }[]) {
