@@ -64,8 +64,11 @@ export function describeInspectionFailure(error: unknown): { message: string; de
   const detail = `${typeof failure.name === 'string' ? failure.name : 'Error'}: ${typeof failure.message === 'string' ? failure.message : String(error)}`;
   const status = typeof failure.status === 'number' ? failure.status : typeof failure.response?.status === 'number' ? failure.response.status : undefined;
   const url = String(typeof failure.url === 'string' ? failure.url : failure.config?.url ?? '');
-  const google = url.includes('googleapis.com') || /^Gaxios/.test(String(failure.name ?? ''));
-  const discord = url.includes('discord.com') || /^(DiscordAPIError|HTTPError)/.test(String(failure.name ?? ''));
+  let host = '';
+  try { host = new URL(url).hostname.toLowerCase(); } catch { /* No usable URL; fall back to the error name. */ }
+  const onHost = (domain: string) => host === domain || host.endsWith(`.${domain}`);
+  const google = onHost('googleapis.com') || /^Gaxios/.test(String(failure.name ?? ''));
+  const discord = onHost('discord.com') || /^(DiscordAPIError|HTTPError)/.test(String(failure.name ?? ''));
   if (discord && status === 401) return { message: 'Discord rejected the bot login. Check that DISCORD_TOKEN in this environment is the current bot token.', detail };
   if (discord && status === 403) return { message: 'Discord denied access. Check that Rat is in the server and that the Server Members Intent is turned on for the bot in the Discord Developer Portal.', detail };
   if (discord && status === 404) return { message: 'Discord could not find the server. Check DISCORD_GUILD_ID in this environment.', detail };

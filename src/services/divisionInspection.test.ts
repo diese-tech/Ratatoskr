@@ -208,6 +208,11 @@ test('failures are worded for staff, with technical detail kept on a separate ma
     assert.match(described.message, expected);
     assert.doesNotMatch(described.message, /raw (discord|google) text|getaddrinfo|boom|DiscordAPIError|Gaxios/);
   }
+  // Classification compares the real host, not a substring of the URL.
+  const spoofed = Object.assign(new Error('x'), { status: 401, url: 'https://discord.com.example.net/api' });
+  assert.match(describeInspectionFailure(spoofed).message, /unexpected problem/);
+  const plainError = Object.assign(new Error('x'), { status: 404, url: 'https://sheets.googleapis.com/v4/x' });
+  assert.match(describeInspectionFailure(plainError).message, /YSL_ADMIN_SPREADSHEET_ID/);
   assert.equal(describeInspectionFailure(new InspectionSetupError('x')).detail, undefined);
   assert.equal(describeInspectionFailure(discord(403)).detail, 'DiscordAPIError[50001]: raw discord text');
 });
