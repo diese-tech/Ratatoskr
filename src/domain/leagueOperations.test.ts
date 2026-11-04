@@ -493,6 +493,13 @@ test('a primary-record problem under a Niflheim row is explained in plain Englis
   const { humanizeLeagueAuditIssues } = await import('../services/leagueAuditPresentation.js');
   const current = layeredSnapshot();
   current.names.at(-1)!.leagueStatus = 'Inactive';
-  assert.ok(humanizeLeagueAuditIssues(current, ['Niflheim roster member faye is not a current Svartalfheim player or free agent.'])[0]!
-    .startsWith('Faye is on a Niflheim team, but Player Name History lists them as Svartalfheim Inactive.'));
+  const finding = 'Niflheim roster member faye is not a current Svartalfheim player or free agent.';
+  assert.ok(humanizeLeagueAuditIssues(current, [finding])[0]!
+    .startsWith('Faye is on a Niflheim team, but Player Name History lists them in Svartalfheim inactive.'));
+  current.names.at(-1)!.leagueStatus = SELF_DROP_LEAGUE_STATUS;
+  const selfDrop = humanizeLeagueAuditIssues(current, [finding])[0]!;
+  assert.match(selfDrop, /suspended after a self-drop \(this season and next season\)/);
+  assert.ok(!selfDrop.includes(SELF_DROP_LEAGUE_STATUS));
+  current.names.at(-1)!.leagueStatus = 'Mystery';
+  assert.ok(!humanizeLeagueAuditIssues(current, [finding])[0]!.includes('Mystery'));
 });

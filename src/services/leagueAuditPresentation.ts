@@ -1,8 +1,16 @@
-import { LEAGUE_DIVISION_METADATA } from '../domain/leagueDivisions.js';
-import { layeredRoster, primaryRoster, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { layeredRoster, primaryRoster, SELF_DROP_LEAGUE_STATUS, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { divisionAlternation, type LeagueDivision } from '../domain/leagueDivisions.js';
 
 const D = divisionAlternation();
+
+// Stored Player Name History statuses are never shown raw to staff (AGENTS.md).
+function statusPhrase(status: string): string {
+  const phrases: Record<string, string> = {
+    'Free Agent': 'a free agent', Player: 'a rostered player', Captain: 'a captain', Inactive: 'inactive',
+    [SELF_DROP_LEAGUE_STATUS]: 'suspended after a self-drop (this season and next season)',
+  };
+  return Object.hasOwn(phrases, status) ? phrases[status]! : 'with a status Rat does not recognize';
+}
 
 function quoted(value: string): string {
   return `“${value || 'blank'}”`;
@@ -120,7 +128,7 @@ function humanize(snapshot: LeagueSnapshot, issue: string): string {
   match = issue.match(new RegExp(`^(${D}) roster member (\\S+) is not a current (${D}) player or free agent\\.$`));
   if (match) {
     const name = snapshot.names.find((row) => row.discordId === match![2] && row.nameStatus === 'Current Discord Name');
-    return `${playerName(snapshot, match[2]!)} is on a ${match[1]} team, but Player Name History lists them as ${name ? `${name.division} ${name.leagueStatus}` : 'no current record'}. ${match[1]} players must be current ${match[3]} players or free agents. Fix their ${match[3]} record or remove the ${match[1]} roster row.`;
+    return `${playerName(snapshot, match[2]!)} is on a ${match[1]} team, but ${name ? `Player Name History lists them in ${name.division} ${statusPhrase(name.leagueStatus)}` : 'Player Name History has no current record for them'}. ${match[1]} players must be current ${match[3]} players or free agents. Fix their ${match[3]} record or remove the ${match[1]} roster row.`;
   }
   match = issue.match(new RegExp(`^Discord member (\\S+) (?:has multiple (${D}) team roles|(${D}) team role does not match Current Rosters|is on a (${D}) roster without its team role|(${D}) division role does not match Current Rosters)\\.$`));
   if (match) {
