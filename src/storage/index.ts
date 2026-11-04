@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { closeDatabase, openDatabase } from '../db/client.js';
+import { closeDatabase, openDatabase, openExistingDatabase, resolveDatabasePath } from '../db/client.js';
 import type { DivisionWorkspaceStore } from './divisionWorkspaceStore.js';
 import type { ManagedResourceStore } from './managedResourceStore.js';
 import type { SeasonWorkspaceStore } from './seasonWorkspaceStore.js';
@@ -53,14 +53,21 @@ export type OpenApplicationStorageOptions = {
 };
 
 export function openApplicationStorage(options: OpenApplicationStorageOptions = {}): ApplicationStorage {
-  const backend = resolveDatabaseBackend(options.environment);
+  const environment = options.environment ?? process.env;
+  const backend = resolveDatabaseBackend(environment);
   if (backend === 'postgres') {
     throw new Error(
       'Postgres storage is not implemented yet. Set DATABASE_BACKEND=sqlite; DATABASE_URL alone never selects a backend.',
     );
   }
 
-  const db = openDatabase(options.sqlitePath);
+  const production = environment.NODE_ENV === 'production' || environment.RAILWAY_ENVIRONMENT_NAME === 'production';
+  if (production && options.sqlitePath !== undefined && options.sqlitePath !== environment.DATABASE_PATH) {
+    throw new Error('Production SQLite must use the configured DATABASE_PATH.');
+  }
+  const db = production
+    ? openExistingDatabase(environment.DATABASE_PATH)
+    : openDatabase(options.sqlitePath ?? resolveDatabasePath(environment));
   const managedResources = createSqliteManagedResourceStore(db);
   return {
     backend,
