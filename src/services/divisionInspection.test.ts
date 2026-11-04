@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import {
-  divisionTeamSuffix, inspectDivision, parseDraftTeams, readDivisionDiscordState, renderInspectionReport,
+  describeInspectionFailure, divisionTeamSuffix, InspectionSetupError, inspectDivision, parseDraftTeams, readDivisionDiscordState, renderInspectionReport,
   type DiscordDivisionState, type InspectedMember, type Rows, type SheetDivisionState,
 } from './divisionInspection.js';
 
@@ -177,4 +177,37 @@ test('no bot runtime code imports the inspection module (its member listing is o
   };
   walk(root);
   assert.deepEqual(offenders, []);
+});
+
+test('draft headers that use the team role name ("The Rat Pack ND") resolve to their franchise', () => {
+  const { discord, sheets } = fixture();
+  const draft = sheets.draft!.map(row => row.map(cell => cell === 'The Rat Pack' ? 'The Rat Pack ND' : cell));
+  const report = inspectDivision({ division: 'Niflheim', discord, sheets: { ...sheets, draft } });
+  assert.deepEqual(report.draftTeams.map(team => team.team), ['Something Spicy', 'The Rat Pack']);
+  const ratPack = report.draftResolutions.filter(entry => entry.team === 'The Rat Pack');
+  assert.deepEqual(ratPack.map(entry => [entry.draftName, entry.outcome]), [['Deadeyeee', 'matched'], ['Thinks', 'matched']]);
+  assert.equal(report.captains.find(entry => entry.team === 'The Rat Pack')!.draftCaptain, 'Deadeyeee');
+});
+
+test('failures are worded for staff, with technical detail kept on a separate maintainer line', () => {
+  const discord = (status: number) => Object.assign(new Error('raw discord text'), { name: 'DiscordAPIError[50001]', status, url: 'https://discord.com/api/v10/guilds/1/members' });
+  const google = (status: number) => Object.assign(new Error('raw google text'), { name: 'GaxiosError', response: { status }, config: { url: 'https://sheets.googleapis.com/v4/spreadsheets/x' } });
+  const cases: Array<[unknown, RegExp]> = [
+    [new InspectionSetupError('Pass the division name, for example --division=Niflheim.'), /^Pass the division name/],
+    [discord(401), /rejected the bot login.*DISCORD_TOKEN/],
+    [discord(403), /Server Members Intent/],
+    [discord(404), /DISCORD_GUILD_ID/],
+    [google(403), /service account can view both/],
+    [google(404), /YSL_ADMIN_SPREADSHEET_ID and YSL_PUBLIC_SPREADSHEET_ID/],
+    [discord(429), /Discord asked Rat to slow down/],
+    [Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }), /could not reach Discord or Google/],
+    [new TypeError('boom'), /unexpected problem\. Share the details below/],
+  ];
+  for (const [error, expected] of cases) {
+    const described = describeInspectionFailure(error);
+    assert.match(described.message, expected);
+    assert.doesNotMatch(described.message, /raw (discord|google) text|getaddrinfo|boom|DiscordAPIError|Gaxios/);
+  }
+  assert.equal(describeInspectionFailure(new InspectionSetupError('x')).detail, undefined);
+  assert.equal(describeInspectionFailure(discord(403)).detail, 'DiscordAPIError[50001]: raw discord text');
 });

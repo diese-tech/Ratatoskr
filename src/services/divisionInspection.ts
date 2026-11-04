@@ -4,8 +4,8 @@
 // injected REST client and only ever calls `get`. This module is used by the
 // offline maintenance script scripts/inspect-league-division.ts. It must never
 // be imported by bot runtime code: its whole-guild member listing is a one-off
-// REST read outside the bot's Gateway session, deliberately not routed through
-// readLeagueMembers (ADR 0001 governs the running bot).
+// REST read outside the bot's Gateway session. It uses the owner-approved
+// maintenance-script exception in ADR 0001 / AGENTS.md (#196) instead of readLeagueMembers.
 import { PermissionsBitField, Routes } from 'discord.js';
 import { normalizeName } from './draftPicks.js';
 
@@ -46,6 +46,35 @@ export async function readDivisionDiscordState(rest: ReadOnlyRest, guildId: stri
   const bot = await rest.get(Routes.user()) as { id: string };
   const botMember = await rest.get(Routes.guildMember(guildId, bot.id)) as InspectedMember;
   return { roles, channels, members, botRoleIds: botMember.roles };
+}
+
+/** A setup problem the script found itself, worded for staff already. */
+export class InspectionSetupError extends Error {}
+
+/**
+ * Plain-English wording for a failed inspection (AGENTS.md). Staff get a cause and a next step; the
+ * original technical message goes in `detail`, printed separately for maintainers.
+ */
+export function describeInspectionFailure(error: unknown): { message: string; detail?: string } {
+  if (error instanceof InspectionSetupError) return { message: error.message };
+  const failure = (error && typeof error === 'object' ? error : {}) as {
+    name?: unknown; message?: unknown; status?: unknown; url?: unknown; code?: unknown;
+    response?: { status?: unknown }; config?: { url?: unknown };
+  };
+  const detail = `${typeof failure.name === 'string' ? failure.name : 'Error'}: ${typeof failure.message === 'string' ? failure.message : String(error)}`;
+  const status = typeof failure.status === 'number' ? failure.status : typeof failure.response?.status === 'number' ? failure.response.status : undefined;
+  const url = String(typeof failure.url === 'string' ? failure.url : failure.config?.url ?? '');
+  const google = url.includes('googleapis.com') || /^Gaxios/.test(String(failure.name ?? ''));
+  const discord = url.includes('discord.com') || /^(DiscordAPIError|HTTPError)/.test(String(failure.name ?? ''));
+  if (discord && status === 401) return { message: 'Discord rejected the bot login. Check that DISCORD_TOKEN in this environment is the current bot token.', detail };
+  if (discord && status === 403) return { message: 'Discord denied access. Check that Rat is in the server and that the Server Members Intent is turned on for the bot in the Discord Developer Portal.', detail };
+  if (discord && status === 404) return { message: 'Discord could not find the server. Check DISCORD_GUILD_ID in this environment.', detail };
+  if (google && (status === 401 || status === 403)) return { message: 'Google denied access to a league workbook. Check that the service account can view both the Admin and public spreadsheets.', detail };
+  if (google && status === 404) return { message: 'Google could not find a league workbook. Check YSL_ADMIN_SPREADSHEET_ID and YSL_PUBLIC_SPREADSHEET_ID.', detail };
+  if (status === 429) return { message: `${google ? 'Google' : 'Discord'} asked Rat to slow down. Wait a minute, then run the inspection again.`, detail };
+  if (typeof failure.code === 'string' && /^(ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED)$/.test(failure.code))
+    return { message: 'Rat could not reach Discord or Google. Check the network connection, then run the inspection again.', detail };
+  return { message: 'The inspection hit an unexpected problem. Share the details below with a maintainer.', detail };
 }
 
 const text = (value: Cell) => (value === null || value === undefined ? '' : String(value)).trim();
@@ -219,7 +248,10 @@ export function inspectDivision(input: {
   });
 
   // Draft tab: resolve names to Discord IDs, preferring holders of that team's role.
-  const draftTeams = sheets.draft ? parseDraftTeams(sheets.draft) : [];
+  // Draft headers may name the franchise ("The Sewer") or its team role ("The Sewer ND"), as draftPicks.ts
+  // accepts; normalize to the franchise once so role lookup, matching and captains all agree.
+  const draftTeams = (sheets.draft ? parseDraftTeams(sheets.draft) : [])
+    .map(team => ({ ...team, team: team.team.trim().replace(teamRolePattern, '') }));
   const directoryNames = new Map<string, string[]>();
   for (const row of sheets.memberDirectory) for (const value of row.slice(1, 4)) if (text(row[0]) && text(value)) directoryNames.set(text(row[0]), [...(directoryNames.get(text(row[0])) ?? []), text(value)]);
   const namesFor = (member: InspectedMember) => {

@@ -4,18 +4,20 @@
 //
 // Discord is read with REST GET requests only. The script never logs in to the Gateway, so the running
 // bot is unaffected. Its whole-guild member listing is a one-off offline read, deliberately outside the
-// bot's shared member-read coordinator (ADR 0001 governs the running bot). Never import this from bot code.
+// bot's shared member-read coordinator, under the approved maintenance-script exception (ADR 0001, #196).
+// Never import this from bot code.
 import 'dotenv/config';
 import { REST } from 'discord.js';
 import { GoogleAuth } from 'google-auth-library';
 import {
-  inspectDivision, readDivisionDiscordState, renderInspectionReport, type ReadOnlyRest, type Rows,
+  describeInspectionFailure, InspectionSetupError, inspectDivision, readDivisionDiscordState, renderInspectionReport,
+  type ReadOnlyRest, type Rows,
 } from '../src/services/divisionInspection.js';
 
 const arg = (name: string) => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 const required = (name: string) => {
   const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is not set. Run this with the bot's environment, for example through "railway run".`);
+  if (!value) throw new InspectionSetupError(`${name} is not set. Run this with the bot's environment, for example through "railway run".`);
   return value;
 };
 const base = 'https://sheets.googleapis.com/v4/spreadsheets';
@@ -25,8 +27,8 @@ function sheetsReader(): Sheets {
   let credentials: object;
   try { credentials = JSON.parse(required('GOOGLE_SERVICE_ACCOUNT_JSON')); }
   catch (error) {
-    if (error instanceof Error && error.message.includes('is not set')) throw error;
-    throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON must contain valid JSON.');
+    if (error instanceof InspectionSetupError) throw error;
+    throw new InspectionSetupError('GOOGLE_SERVICE_ACCOUNT_JSON must contain valid JSON.');
   }
   // Read-only scope: this script cannot change a spreadsheet even by mistake.
   const auth = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] });
@@ -49,7 +51,7 @@ function sheetsReader(): Sheets {
 async function main() {
   const division = (arg('division') ?? '').trim();
   const parentDivision = (arg('parent') ?? 'Svartalfheim').trim();
-  if (!/^[A-Z][A-Za-z]+$/.test(division)) throw new Error('Pass the division name, for example --division=Niflheim.');
+  if (!/^[A-Z][A-Za-z]+$/.test(division)) throw new InspectionSetupError('Pass the division name, for example --division=Niflheim.');
   const guildId = required('DISCORD_GUILD_ID');
   const adminId = required('YSL_ADMIN_SPREADSHEET_ID');
   const publicId = required('YSL_PUBLIC_SPREADSHEET_ID');
@@ -58,7 +60,7 @@ async function main() {
 
   const [adminTitles, publicTitles] = await Promise.all([titles(adminId), titles(publicId)]);
   for (const title of ['League Teams', 'Player Name History', 'Current Rosters', 'Member Directory'])
-    if (!adminTitles.includes(title)) throw new Error(`The Admin workbook has no "${title}" tab. Check YSL_ADMIN_SPREADSHEET_ID.`);
+    if (!adminTitles.includes(title)) throw new InspectionSetupError(`The Admin workbook has no "${title}" tab. Check YSL_ADMIN_SPREADSHEET_ID.`);
   const [teams, names, rosters, memberDirectory] = await read(adminId,
     ["'League Teams'!A6:L", "'Player Name History'!A6:K", "'Current Rosters'!A6:J", "'Member Directory'!A6:D"]);
   const draftTitle = `${division} Draft`;
@@ -78,6 +80,8 @@ async function main() {
 }
 
 main().catch((error: unknown) => {
-  console.error(`Inspection stopped. Nothing was changed. ${error instanceof Error ? error.message : String(error)}`);
+  const { message, detail } = describeInspectionFailure(error);
+  console.error(`Inspection stopped. Nothing was changed. ${message}`);
+  if (detail) console.error(`Details for maintainers: ${detail}`);
   process.exitCode = 1;
 });
