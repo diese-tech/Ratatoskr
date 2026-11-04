@@ -6,7 +6,7 @@ The staff-ops card has two controls: **Open league tools** opens private tools w
 
 The old read-only issue/recovery routes remain compatible with existing messages. New cards use the private tools rather than duplicate read-only buttons.
 
-Optional `ROLE_NIFLHEIM_FREE_AGENT_ID` recognizes the separate manually managed Niflheim free-agent pool. Untracked members with that exact role and the general Free Agent role need no synthetic roster/name record. Existing tracked identities and team conflicts still require review.
+Niflheim is a layered division: a Niflheim team membership sits on top of the player's Svartalfheim record (see [ADR 0002](../adr/0002-layered-niflheim-membership.md)). The old `ROLE_NIFLHEIM_FREE_AGENT_ID` setting is no longer used. If it is still set, the bot ignores it and logs one warning; remove it from Railway after this change is deployed.
 
 Normal roster moves start with an approved `/transaction` action. The bot updates Discord, the roster sheets and history for that action, then verifies the results. Routine checks report disagreements without automatically changing either side. **Set Discord roles from roster sheets** is a repair for an already-correct sheet assignment, not a new roster move.
 

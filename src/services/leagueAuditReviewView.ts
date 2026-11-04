@@ -27,7 +27,7 @@ function categoryFor(finding: string): string {
   if (finding.includes('no longer in the Discord server')) return 'Departures and inactive players';
   // Only route findings the managed-role repair actually supports. Mentions of
   // Discord roles in League Teams configuration errors are not player repairs.
-  if (/ has multiple team roles in Discord \(| — Discord team:| is listed on .+ but is missing that team role in Discord\.| — Discord division:| is rostered on .+ but still has the Free Agent role\.| is listed as a free agent but is missing the Free Agent role in Discord\.| has the Free Agent role in Discord but is not listed as a current free agent\./.test(finding)) return 'Discord roles';
+  if (/ has multiple team roles in Discord \(| — Discord team:| is listed on .+ but is missing that team role in Discord\.| — Discord \S+ roles: .+ Make the \S+ (?:team|division) role match\.| — Discord division:| is rostered on .+ but still has the Free Agent role\.| is listed as a free agent but is missing the Free Agent role in Discord\.| has the Free Agent role in Discord but is not listed as a current free agent\./.test(finding)) return 'Discord roles';
   if (finding.includes('; public roster:') && finding.endsWith('Make the player lists match.')) return 'Public roster';
   return 'Managed sheets';
 }

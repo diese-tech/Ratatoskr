@@ -55,40 +55,81 @@ test('daily audit accepts matching Discord, admin roster, canonical names, and p
   assert.deepEqual(auditLeagueRoster(snapshot()), []);
 });
 
-test('Niflheim free agents outside tracked sheets may retain the general Free Agent role', () => {
+// #198 / ADR 0002: Niflheim memberships are layered on the player's Svartalfheim record.
+function layeredSnapshot(): LeagueSnapshot {
   const current = snapshot();
-  Object.assign(current, { niflheimFreeAgentRoleId: 'niflheim-fa' });
-  current.discordMembers.push({ discordId: 'niflheim-player', displayName: 'Niflheim player',
-    roleIds: ['free-agent', 'niflheim-fa', 'division-v', 'unrelated'] });
-  assert.deepEqual(auditLeagueRoster(current), []);
-  assert.throws(() => buildPickupPlan(current, 'niflheim-player', 'team-a'));
+  current.teams.push(
+    { teamKey: 'Svartalfheim|Little Monsters', franchise: 'Little Monsters', division: 'Svartalfheim', teamRoleId: 'team-s-lm', teamRole: 'Little Monsters SD', divisionRoleId: 'division-s', active: true },
+    { teamKey: 'Niflheim|Something Spicy', franchise: 'Something Spicy', division: 'Niflheim', teamRoleId: 'team-n-ss', teamRole: 'Something Spicy ND', divisionRoleId: 'division-n', active: true },
+    { teamKey: 'Niflheim|Little Monsters', franchise: 'Little Monsters', division: 'Niflheim', teamRoleId: 'team-n-lm', teamRole: 'Little Monsters ND', divisionRoleId: 'division-n', active: true },
+  );
+  current.rosters.push(
+    { sheetRow: 8, division: 'Svartalfheim', franchise: 'Little Monsters', teamRoleId: 'team-s-lm', team: 'Little Monsters SD', discordId: 'qronch', player: 'Qronch', rosterStatus: 'Player' },
+    { sheetRow: 9, division: 'Niflheim', franchise: 'Something Spicy', teamRoleId: 'team-n-ss', team: 'Something Spicy ND', discordId: 'qronch', player: 'Qronch', rosterStatus: 'Captain' },
+    { sheetRow: 10, division: 'Niflheim', franchise: 'Something Spicy', teamRoleId: 'team-n-ss', team: 'Something Spicy ND', discordId: 'faye', player: 'Faye', rosterStatus: 'Player' },
+  );
+  current.names.push(
+    { sheetRow: 9, discordId: 'qronch', currentLeagueName: 'Qronch', knownName: 'Qronch', nameStatus: 'Current Discord Name', division: 'Svartalfheim', franchise: 'Little Monsters', leagueStatus: 'Player' },
+    { sheetRow: 10, discordId: 'faye', currentLeagueName: 'Faye', knownName: 'Faye', nameStatus: 'Current Discord Name', division: 'Svartalfheim', franchise: '', leagueStatus: 'Free Agent' },
+  );
+  current.discordMembers.push(
+    { discordId: 'qronch', displayName: 'Qronch', roleIds: ['team-s-lm', 'division-s', 'team-n-ss', 'division-n'] },
+    { discordId: 'faye', displayName: 'Faye', roleIds: ['free-agent', 'division-s', 'team-n-ss', 'division-n'] },
+  );
+  current.publicRosters.Svartalfheim = { teams: { 'Little Monsters': ['Qronch'] }, freeAgents: ['Faye'] };
+  current.publicRosters.Niflheim = { teams: { 'Something Spicy': ['Qronch', 'Faye'], 'Little Monsters': [] }, freeAgents: [] };
+  return current;
+}
+
+const member = (current: LeagueSnapshot, id: string) => current.discordMembers.find((entry) => entry.discordId === id)!;
+
+test('layered Niflheim memberships pass a clean audit on the free-agent and rostered paths', () => {
+  assert.deepEqual(auditLeagueRoster(layeredSnapshot()), []);
 });
 
-test('Niflheim membership does not hide tracked or previously recorded players and team-role drift', () => {
-  for (const scenario of ['rostered', 'inactive', 'historical', 'unmapped-team', 'role-removed', 'not-configured', 'wrong-role', 'overlap']) {
-    const current = snapshot();
-    Object.assign(current, { niflheimFreeAgentRoleId: scenario === 'overlap' ? 'free-agent' : 'niflheim-fa' });
-    if (scenario === 'rostered') current.discordMembers[0]!.roleIds.push('niflheim-fa', 'free-agent');
-    else {
-      const id = 'outside';
-      current.discordMembers.push({ discordId: id, displayName: 'Outside', roleIds: ['free-agent',
-        ...(scenario === 'role-removed' ? [] : [scenario === 'wrong-role' ? 'other-fa' : 'niflheim-fa']),
-        ...(scenario === 'unmapped-team' ? ['team-a'] : [])] });
-      if (scenario === 'inactive' || scenario === 'historical') current.names.push({ ...current.names[0]!,
-        discordId: id, currentLeagueName: 'Outside', knownName: 'Outside', franchise: '',
-        nameStatus: scenario === 'historical' ? 'Previous / Alternate' : 'Current Discord Name', leagueStatus: 'Inactive' });
-      if (scenario === 'not-configured') Object.assign(current, { niflheimFreeAgentRoleId: undefined });
-    }
-    assert.ok(auditLeagueRoster(current).some(issue => /Free Agent role|Niflheim/.test(issue)), scenario);
+test('layered Niflheim rule violations are reported', () => {
+  const cases: Array<[string, (current: LeagueSnapshot) => void, string]> = [
+    ['two Niflheim rows', (c) => c.rosters.push({ ...c.rosters.at(-1)!, sheetRow: 11, franchise: 'Little Monsters', teamRoleId: 'team-n-lm', team: 'Little Monsters ND' }),
+      'Discord member faye has more than one Niflheim roster assignment.'],
+    ['Vanaheim primary', (c) => { c.rosters.push({ ...c.rosters.at(-1)!, sheetRow: 12, discordId: 'one', player: 'One' }); member(c, 'one').roleIds.push('team-n-ss', 'division-n'); c.publicRosters.Niflheim!.teams['Something Spicy']!.push('One'); },
+      'Niflheim roster member one is not a current Svartalfheim player or free agent.'],
+    ['Inactive primary', (c) => { c.names.at(-1)!.leagueStatus = 'Inactive'; },
+      'Niflheim roster member faye is not a current Svartalfheim player or free agent.'],
+    ['team role without row', (c) => { member(c, 'free').roleIds.push('team-n-lm'); },
+      'Discord member free Niflheim team role does not match Current Rosters.'],
+    ['row without team role', (c) => { member(c, 'faye').roleIds = ['free-agent', 'division-s', 'division-n']; },
+      'Discord member faye is on a Niflheim roster without its team role.'],
+    ['division role without row', (c) => { member(c, 'free').roleIds.push('division-n'); },
+      'Discord member free Niflheim division role does not match Current Rosters.'],
+    ['two Niflheim team roles', (c) => { member(c, 'faye').roleIds.push('team-n-lm'); },
+      'Discord member faye has multiple Niflheim team roles.'],
+    ['Free Agent on a rostered player', (c) => { member(c, 'qronch').roleIds.push('free-agent'); },
+      'Discord member qronch is rostered but still has the Free Agent role.'],
+    ['Niflheim public block', (c) => { c.publicRosters.Niflheim!.teams['Something Spicy'] = ['Qronch']; },
+      'Niflheim Something Spicy public roster does not match Current Rosters.'],
+    ['Svartalfheim free-agent list', (c) => { c.publicRosters.Svartalfheim!.freeAgents = []; },
+      'Svartalfheim public free-agent list does not match Player Name History.'],
+  ];
+  for (const [name, mutate, expected] of cases) {
+    const current = layeredSnapshot();
+    mutate(current);
+    assert.ok(auditLeagueRoster(current).includes(expected), `${name}: ${auditLeagueRoster(current).join(' | ')}`);
   }
 });
 
-test('a Niflheim binding cannot alias a tracked team, division or general Free Agent role', () => {
-  for (const role of ['team-a', 'division-v', 'free-agent']) {
-    const current = snapshot();
-    current.niflheimFreeAgentRoleId = role;
-    assert.ok(auditLeagueRoster(current).some(issue => issue.startsWith('The Niflheim Free Agent role overlaps')));
-  }
+test('Svartalfheim moves for a layered player leave the Niflheim row untouched', () => {
+  const current = layeredSnapshot();
+  const niflheim = (plan: { rosters: LeagueSnapshot['rosters'] }) => plan.rosters.filter((row) => row.division === 'Niflheim');
+  const drop = buildDropPlan(current, 'qronch');
+  assert.deepEqual(niflheim(drop), niflheim(current));
+  assert.deepEqual(drop.discordRoleChanges, [{ discordId: 'qronch', remove: ['team-s-lm'], add: ['free-agent'] }]);
+  const pickup = buildPickupPlan(current, 'faye', 'team-s-lm');
+  assert.deepEqual(niflheim(pickup), niflheim(current));
+  assert.throws(() => buildPickupPlan(current, 'faye', 'team-n-lm'), /Cross-division pickups are not supported/);
+  const rename = buildRenamePlan(current, 'faye', 'Faye Prime');
+  assert.deepEqual(rename.rosters.filter((row) => row.discordId === 'faye').map((row) => row.player), ['Faye Prime']);
+  assert.deepEqual(rename.publicChanges.map((change) => [change.division, change.area, change.group]),
+    [['Svartalfheim', 'free-agent', 'Free Agents'], ['Niflheim', 'team', 'Something Spicy']]);
 });
 
 test('daily audit reports one name issue when managed sheets do not use the current Discord name', () => {
@@ -423,4 +464,42 @@ test('rename rejects a canonical name already used in the same managed roster ar
   secondRoster.team = 'Dream Walkers VD';
   secondRoster.franchise = 'Dream Walkers';
   assert.throws(() => buildRenamePlan(current, 'one', 'Two'), /already used by another player/i);
+});
+
+test('layered findings get plain-English wording, route to role repair, and repairs keep valid Niflheim roles', async () => {
+  const { humanizeLeagueAuditIssues } = await import('../services/leagueAuditPresentation.js');
+  const { buildLeagueAuditReviewView } = await import('../services/leagueAuditReviewView.js');
+  const { buildManagedRoleRepair } = await import('../services/leagueAuditResolution.js');
+  const current = layeredSnapshot();
+  member(current, 'faye').roleIds.push('team-n-lm');
+  member(current, 'free').roleIds.push('division-n');
+  member(current, 'qronch').roleIds = ['team-s-lm', 'division-s', 'division-n'];
+  const issues = auditLeagueRoster(current);
+  const human = humanizeLeagueAuditIssues(current, issues);
+  assert.ok(human.every((line) => !line.startsWith('Ratatoskr found a roster rule mismatch')), human.join('\n'));
+  assert.ok(human.includes('Faye — Discord Niflheim roles: Something Spicy ND, Little Monsters ND; Current Rosters Niflheim team: Something Spicy ND. Make the Niflheim team role match.'));
+  for (const line of human) assert.equal(buildLeagueAuditReviewView([line], 0, 'r').title, 'Roster problems — Discord roles', line);
+  assert.deepEqual(buildManagedRoleRepair(current, 'faye'), { discordId: 'faye', remove: ['team-n-lm'], add: [] });
+  assert.deepEqual(buildManagedRoleRepair(current, 'free'), { discordId: 'free', remove: ['division-n'], add: [] });
+  assert.deepEqual(buildManagedRoleRepair(current, 'qronch'), { discordId: 'qronch', remove: [], add: ['team-n-ss'] });
+  // A correct layered player needs no change: valid Niflheim roles are never removed.
+  assert.deepEqual(buildManagedRoleRepair(layeredSnapshot(), 'faye'), { discordId: 'faye', remove: [], add: [] });
+  const vanaheimOnly = snapshot();
+  member(vanaheimOnly, 'free').roleIds = ['division-v'];
+  assert.deepEqual(buildManagedRoleRepair(vanaheimOnly, 'free'), { discordId: 'free', remove: [], add: ['free-agent'] });
+});
+
+test('a primary-record problem under a Niflheim row is explained in plain English', async () => {
+  const { humanizeLeagueAuditIssues } = await import('../services/leagueAuditPresentation.js');
+  const current = layeredSnapshot();
+  current.names.at(-1)!.leagueStatus = 'Inactive';
+  const finding = 'Niflheim roster member faye is not a current Svartalfheim player or free agent.';
+  assert.ok(humanizeLeagueAuditIssues(current, [finding])[0]!
+    .startsWith('Faye is on a Niflheim team, but Player Name History lists them in Svartalfheim inactive.'));
+  current.names.at(-1)!.leagueStatus = SELF_DROP_LEAGUE_STATUS;
+  const selfDrop = humanizeLeagueAuditIssues(current, [finding])[0]!;
+  assert.match(selfDrop, /suspended after a self-drop \(this season and next season\)/);
+  assert.ok(!selfDrop.includes(SELF_DROP_LEAGUE_STATUS));
+  current.names.at(-1)!.leagueStatus = 'Mystery';
+  assert.ok(!humanizeLeagueAuditIssues(current, [finding])[0]!.includes('Mystery'));
 });

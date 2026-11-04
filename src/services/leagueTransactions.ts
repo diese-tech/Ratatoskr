@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { assertNoUnresolvedAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
-import { isOneWayTrade, reinstatementPolicyExceptions, auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { isLayeredDivision, layeredRoster, primaryRoster, isOneWayTrade, reinstatementPolicyExceptions, auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot, type LeagueTeam } from '../domain/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
   createLeagueTransaction,
@@ -51,7 +51,29 @@ export type LeagueRoleState = {
   expectsFreeAgent: boolean;
   divisionRoleId: string;
   observedManagedRoleIds?: string[];
+  // A layered membership's roles (Niflheim, #198). Absent while no layered division
+  // is active, so the state above is unchanged for everyone else.
+  layered?: { configuredTeamRoleIds: string[]; expectedTeamRoleId: string | null; divisionRoleId: string };
 };
+
+// ponytail: one layered division (Niflheim); make this a list if a second one appears.
+export function layeredRoleState(
+  activeTeams: LeagueTeam[], rosters: LeagueSnapshot['rosters'], discordId: string,
+): LeagueRoleState['layered'] {
+  const teams = activeTeams.filter((team) => isLayeredDivision(team.division));
+  if (!teams.length) return undefined;
+  const row = layeredRoster(rosters, discordId);
+  return {
+    configuredTeamRoleIds: teams.map((team) => team.teamRoleId),
+    expectedTeamRoleId: row ? teams.find((team) => team.teamRoleId === row.teamRoleId)?.teamRoleId ?? null : null,
+    divisionRoleId: teams[0]!.divisionRoleId,
+  };
+}
+
+export function managedRoleIds(state: LeagueRoleState): Set<string> {
+  return new Set([...state.configuredTeamRoleIds, ...state.configuredDivisionRoleIds, state.freeAgentRoleId,
+    ...(state.layered ? [...state.layered.configuredTeamRoleIds, state.layered.divisionRoleId] : [])]);
+}
 
 export interface LeagueSheetsPort {
   load(discordMembers: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot>;
@@ -190,11 +212,12 @@ function openReconciliationTicket(
 }
 
 function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutationPlan): void {
-  const activeTeams = snapshot.teams.filter((team) => team.active);
+  // Primary memberships only; layered (Niflheim) roles are verified by the role state.
+  const activeTeams = snapshot.teams.filter((team) => team.active && !isLayeredDivision(team.division));
   const teamsByRole = new Map(activeTeams.map((team) => [team.teamRoleId, team]));
   for (const discordId of plan.playerIds) {
     const member = snapshot.discordMembers.find((candidate) => candidate.discordId === discordId);
-    const rosterRows = snapshot.rosters.filter((row) => row.discordId === discordId);
+    const rosterRows = snapshot.rosters.filter((row) => row.discordId === discordId && !isLayeredDivision(row.division));
     if (rosterRows.length > 1) throw new Error(`Discord member ${discordId} has multiple roster assignments.`);
     const currentNames = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
     if (currentNames.length !== 1) throw new Error(`Discord member ${discordId} must have exactly one current name record.`);
@@ -271,8 +294,10 @@ function expectedRoleState(
   names: LeagueSnapshot['names'],
   discordId: string,
 ): LeagueRoleState {
-  const activeTeams = snapshot.teams.filter((team) => team.active);
-  const roster = rosters.find((row) => row.discordId === discordId);
+  const allActive = snapshot.teams.filter((team) => team.active);
+  const activeTeams = allActive.filter((team) => !isLayeredDivision(team.division));
+  const roster = primaryRoster(rosters, discordId);
+  const layered = layeredRoleState(allActive, rosters, discordId);
   const currentName = names.find((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
   if (!currentName) throw new Error(`Discord member ${discordId} has no current name record.`);
   const team = roster ? activeTeams.find((candidate) => candidate.teamRoleId === roster.teamRoleId) : undefined;
@@ -286,6 +311,7 @@ function expectedRoleState(
     freeAgentRoleId: snapshot.freeAgentRoleId,
     expectsFreeAgent: !roster && currentName.leagueStatus === 'Free Agent',
     divisionRoleId,
+    ...(layered ? { layered } : {}),
   };
 }
 
