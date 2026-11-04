@@ -165,14 +165,14 @@ test('a missing draft tab and an absent division role are reported, not thrown',
   assert.match(renderInspectionReport(report), /No "Niflheim Draft" tab was found\./);
 });
 
-test('no bot runtime code imports the inspection module (its member listing is outside the shared coordinator)', () => {
+test('no bot runtime code imports the inspection or import modules (their member listing is outside the shared coordinator)', () => {
   const root = new URL('../', import.meta.url);
   const offenders: string[] = [];
   const walk = (dir: URL) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) walk(new URL(`${entry.name}/`, dir));
-      else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') && entry.name !== 'divisionInspection.ts'
-        && /divisionInspection(\.js)?['"]/.test(readFileSync(new URL(entry.name, dir), 'utf8'))) offenders.push(`${dir.pathname}${entry.name}`);
+      else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') && !['divisionInspection.ts', 'divisionImport.ts'].includes(entry.name)
+        && /division(Inspection|Import)(\.js)?['"]/.test(readFileSync(new URL(entry.name, dir), 'utf8'))) offenders.push(`${dir.pathname}${entry.name}`);
     }
   };
   walk(root);
