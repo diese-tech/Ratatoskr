@@ -44,10 +44,13 @@ export const transactionCommand = new SlashCommandBuilder()
     .addStringOption(option => option.setName('reason').setDescription('Optional short staff reason for the return.').setMaxLength(300)))
   .addSubcommand((subcommand) => subcommand
     .setName('trade')
-    .setDescription('Swap two players or transfer one player to another team in the same division.')
-    .addUserOption((option) => option.setName('player_one').setDescription('Player leaving the first team.').setRequired(true))
+    .setDescription('Review a swap, one-way transfer, or two-team exchange.')
+    .addUserOption((option) => option.setName('player_one').setDescription('First player for a swap or one-way transfer.'))
     .addUserOption((option) => option.setName('player_two').setDescription('Player leaving the other team in a swap.'))
     .addRoleOption((option) => option.setName('receiving_team').setDescription('Team receiving the player when no player comes back.'))
+    .addRoleOption((option) => option.setName('team_a').setDescription('First team role for a private two-team player review.'))
+    .addRoleOption((option) => option.setName('team_b').setDescription('Second team role for a private two-team player review.'))
+    .addStringOption((option) => option.setName('trade_reason').setDescription('Optional staff reason for the two-team trade review.').setMaxLength(300))
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('drop')
@@ -91,7 +94,8 @@ export const transactionCommand = new SlashCommandBuilder()
 function intentKey(interaction: ChatInputCommandInteraction): string {
   const subcommand = interaction.options.getSubcommand();
   if (subcommand === 'trade') {
-    const player = interaction.options.getUser('player_one', true).id;
+    const player = interaction.options.getUser('player_one')?.id;
+    if (!player) throw new LeagueMutationValidationError('Choose player_one for a swap or one-way transfer, or choose team_a and team_b for a private player review.');
     const counterpart = interaction.options.getUser('player_two')?.id;
     const receiver = interaction.options.getRole('receiving_team')?.id;
     if (Boolean(counterpart) === Boolean(receiver)) {
@@ -222,6 +226,21 @@ export async function handleTransactionCommand(
   if (interaction.options.getSubcommand() === 'reinstate') {
     await openReinstatementCommand(interaction, db, operationScope);
     return;
+  }
+  if (interaction.options.getSubcommand() === 'trade') {
+    const teamA = interaction.options.getRole('team_a')?.id;
+    const teamB = interaction.options.getRole('team_b')?.id;
+    const reason = interaction.options.getString('trade_reason')?.trim();
+    if (teamA || teamB || reason) {
+      if (!teamA || !teamB || interaction.options.getUser('player_one') || interaction.options.getUser('player_two')
+        || interaction.options.getRole('receiving_team') || interaction.options.getBoolean('confirm') === true) {
+        await interaction.editReply('For a two-team review, choose team_a and team_b without player or receiving team options. Confirm using the private review button. No changes were made.');
+        return;
+      }
+      const { openGroupTrade } = await import('../services/leagueGroupTradeUi.js');
+      await openGroupTrade(interaction, db, operationScope, teamA, teamB, reason);
+      return;
+    }
   }
   let previewIntent: string;
   try {

@@ -830,6 +830,35 @@ export class LeagueSheetsService {
     return prepared;
   }
 
+  async assertGroupTradeCells(plan: LeagueMutationPlan, prepared: PreparedLeagueSheetMutation): Promise<void> {
+    const ranges = prepared.publicUpdates.map(update => update.range);
+    const options = { purpose: 'fresh', valueRenderOption: 'FORMULA' } as const;
+    const rows = this.gateway.getValuesBatch
+      ? await this.gateway.getValuesBatch(this.config.publicSpreadsheetId, ranges, options)
+      : await Promise.all(ranges.map(range => this.gateway.getValues(this.config.publicSpreadsheetId, range, options)));
+    if (rows.length !== ranges.length || rows.some((cells, index) => (cells[0]?.[0] ?? '') !== plan.publicChanges[index]!.from))
+      throw new LeagueSheetDriftError('A public roster slot contains a changed value or formula. Ask staff to check the two public roster blocks.');
+  }
+
+  async verifyGroupTradeSheets(loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan): Promise<void> {
+    const details = plan.groupTrade!;
+    const teamIds = new Set(plan.teams.map(team => team.teamRoleId));
+    if (loaded.sources.teams.some(row => [row[5], row[9]].some(role => teamIds.has(String(role ?? '').trim()))))
+      throw new LeagueSheetDriftError('A selected team role also grants franchise or captain access. Ask staff to correct League Teams before approving the trade.');
+    const prepared = this.prepare(loaded, plan);
+    await this.assertGroupTradeCells(plan, prepared);
+    const draft = await this.loadDraftPicks();
+    details.protectedPicks = plan.playerIds.flatMap(playerId => {
+      const pick = draft.picks.get(playerId);
+      return pick ? [{ playerId, ownerId: pick.discordId, label: draftPickLabel(pick) }] : [];
+    });
+    for (const pick of details.protectedPicks) {
+      details.advisories.push(`${plan.players[plan.playerIds.indexOf(pick.playerId)]} is a protected top-four pick (${pick.label}). Review the original team’s draft protection.`);
+    }
+    if (draft.health.status !== 'ready') details.advisories.push('Top-four draft tracking is incomplete. Check the original picks with staff.');
+    details.sheetFingerprint = createHash('sha256').update(JSON.stringify([loaded.sources, prepared.publicUpdates, draft.sourceFingerprint])).digest('hex');
+  }
+
   async assertOneWayTradeDestination(prepared: PreparedLeagueSheetMutation): Promise<void> {
     const destination = prepared.publicUpdates[1]!;
     const rows = await this.gateway.getValues(this.config.publicSpreadsheetId, destination.range,
@@ -847,6 +876,7 @@ export class LeagueSheetsService {
   ): Promise<void> {
     await this.assertUnchanged(loaded);
     if (isOneWayTrade(plan)) await this.assertOneWayTradeDestination(prepared);
+    if (plan.groupTrade) await this.assertGroupTradeCells(plan, prepared);
     const originalRosters = loaded.snapshot.rosters;
     const now = record.processedAt ?? `${record.effectiveDate}T00:00:00.000Z`;
     const approvalNote = record.approvalNote ?? 'Ratatoskr approved transaction';
@@ -904,6 +934,7 @@ export class LeagueSheetsService {
 
     try {
       await this.gateway.batchUpdate(this.config.adminSpreadsheetId, adminUpdates, 'RAW');
+      if (plan.groupTrade) await this.assertGroupTradeCells(plan, prepared);
       await this.gateway.batchUpdate(this.config.publicSpreadsheetId, prepared.publicUpdates, 'RAW');
       if (prepared.selfDropPresentation) {
         await this.gateway.ensureSelfDropPresentation(this.config.adminSpreadsheetId, prepared.selfDropPresentation);
@@ -911,7 +942,12 @@ export class LeagueSheetsService {
 
       const verification = await this.load(loaded.snapshot.discordMembers, loaded.snapshot.freeAgentRoleId);
       const expectedPublic = structuredClone(loaded.snapshot.publicRosters);
-      for (const change of plan.publicChanges) {
+      if (plan.groupTrade) {
+        plan.teams.forEach((team, index) => {
+          expectedPublic[team.division]!.teams[team.franchise] = plan.groupTrade!.after[index]!;
+        });
+      }
+      for (const change of plan.groupTrade ? [] : plan.publicChanges) {
         const target = change.area === 'team'
           ? expectedPublic[change.division]!.teams[change.group]!
           : expectedPublic[change.division]!.freeAgents;
@@ -964,8 +1000,8 @@ export class LeagueSheetsService {
     record: LeagueTransactionRecord,
   ): Promise<DraftPickMove[]> {
     const existing = await this.gateway.getValues(this.config.adminSpreadsheetId,
-      plan.reinstatement ? "'Transaction History'!A6:M" : "'Transaction History'!A6:A");
-    if (!plan.reinstatement && existing.some(row => String(row[0] ?? '') === record.reference)) return [];
+      plan.reinstatement || plan.groupTrade ? "'Transaction History'!A6:M" : "'Transaction History'!A6:A");
+    if (!plan.reinstatement && !plan.groupTrade && existing.some(row => String(row[0] ?? '') === record.reference)) return [];
     const exitDestination = plan.kind === 'drop'
       ? 'Free Agents'
       : plan.kind === 'departure' ? 'Inactive'
@@ -1002,6 +1038,24 @@ export class LeagueSheetsService {
       plan.playerIds[0] ?? '',
       plan.players[0] ?? '', record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
     ]];
+    if (plan.groupTrade) {
+      const details = plan.groupTrade;
+      const note = `${record.processedBy}; approved trade advisories: ${details.advisories.join(' | ')}${details.selection.reason ? `; reason: ${details.selection.reason}` : ''}`;
+      for (const row of transactionRows) row[11] = note;
+      const matches = existing.filter(row => String(row[0] ?? '') === record.reference);
+      if (matches.length) {
+        const expected = transactionRows.map(row => JSON.stringify(row)).sort();
+        const actual = matches.map(row => JSON.stringify(row.slice(0, 12))).sort();
+        const protectedLabels = new Map(details.protectedPicks?.map(pick => [pick.playerId, pick.label]));
+        const draftMatches = matches.every(row => {
+          const label = protectedLabels.get(String(row[6] ?? ''));
+          return label === undefined || row[12] === label;
+        });
+        if (!draftMatches || JSON.stringify(expected) !== JSON.stringify(actual))
+          throw new LeagueSheetReconciliationRequiredError('The saved trade has incomplete or conflicting History rows. Ask staff to inspect the saved reference before retrying delivery.');
+        return [];
+      }
+    }
     if (plan.reinstatement) {
       const matches = existing.filter(row => String(row[0] ?? '') === record.reference);
       if (matches.length) {
@@ -1012,6 +1066,14 @@ export class LeagueSheetsService {
     }
     const tracking = plan.kind === 'rename' ? undefined : await this.loadDraftPicks();
     const picks = tracking?.picks ?? new Map<string, DraftPickMove>();
+    if (plan.groupTrade?.protectedPicks) {
+      const nowProtected = plan.playerIds.flatMap(playerId => {
+        const pick = picks.get(playerId);
+        return pick ? [{ playerId, ownerId: pick.discordId, label: draftPickLabel(pick) }] : [];
+      });
+      if (JSON.stringify(nowProtected) !== JSON.stringify(plan.groupTrade.protectedPicks))
+        throw new LeagueSheetReconciliationRequiredError('Draft Picks changed since approval. Ask staff to verify original draft ownership before completing trade history.');
+    }
     const moved = new Map<string, DraftPickMove>();
     for (const row of transactionRows) {
       const pick = picks.get(String(row[6] ?? ''));
@@ -1038,10 +1100,11 @@ export class LeagueSheetsService {
     return [...moved.values()];
   }
 
-  private async loadDraftPicks(): Promise<{ picks: Map<string, DraftPickMove>; health: DraftPickHealth }> {
+  private async loadDraftPicks(): Promise<{ picks: Map<string, DraftPickMove>; health: DraftPickHealth; sourceFingerprint: string }> {
     const { rows, health } = await this.readDraftTracking();
     const picks = new Map<string, DraftPickMove>();
-    if (health.status === 'missing-tab') return { picks, health };
+    const sourceFingerprint = createHash('sha256').update(JSON.stringify([rows, health.status])).digest('hex');
+    if (health.status === 'missing-tab') return { picks, health, sourceFingerprint };
     if (!rows) throw new DraftPickTrackingError(health);
     const identities = draftPickIdentityIndex(rows);
     rows.forEach((row, index) => {
@@ -1061,6 +1124,6 @@ export class LeagueSheetsService {
       const pick = picks.get(currentId);
       if (pick) picks.set(historicalId, pick);
     }
-    return { picks, health };
+    return { picks, health, sourceFingerprint };
   }
 }

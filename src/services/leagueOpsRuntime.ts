@@ -34,7 +34,7 @@ import { refreshLeagueOpsPanel, runLeagueAudit, type LeagueAuditCardPort } from 
 import { createLeagueAuditCardPort } from './leagueAuditDiscord.js';
 import { DiscordLeagueGateway } from './leagueDiscord.js';
 import { getValidatedStaffChannel } from './operationalErrors.js';
-import type { LeagueSheetsService } from './leagueSheets.js';
+import { LeagueSheetDriftError, type LeagueSheetsService } from './leagueSheets.js';
 import { registerLeagueRepairRecovery, reconcileLeagueRepairRecord } from './leagueRepairRecovery.js';
 import { LeagueAccountReplacementService } from './leagueAccountReplacement.js';
 import { DRAFT_PICK_FEATURE, draftPickHealthFinding } from './draftPickTracking.js';
@@ -165,8 +165,8 @@ export function createLeagueOpsRuntime(input: {
           });
           // One-way execution already verified the move. Run its follow-up full
           // audit separately so it does not immediately repeat the worker's read.
-          if (intent.selections.startsWith('["trade-one-way",')) {
-            worker.enqueue('audit', { trigger: 'scheduled' }, 'audit:one-way-trades', 60_000);
+          if (intent.selections.startsWith('["trade-one-way",') || intent.selections.startsWith('["trade-group",')) {
+            worker.enqueue('audit', { trigger: 'scheduled' }, 'audit:reviewed-trades', 60_000);
           } else {
             await audit('scheduled');
           }
@@ -198,7 +198,8 @@ export function createLeagueOpsRuntime(input: {
               'FAILED',
               'The operation failed safely. Review its reference before trying again.',
             );
-          if (error instanceof LeagueMutationValidationError)
+          if (error instanceof LeagueMutationValidationError
+            || (intent.selections.startsWith('["trade-group",') && error instanceof LeagueSheetDriftError))
             throw new LeagueJobBlockedError('BLOCKED_REVIEW', error.message);
           if (error && typeof error === 'object' && 'leagueReconciliationTicket' in error)
             throw new LeagueJobBlockedError('BLOCKED_REVIEW', error instanceof Error ? error.message : String(error));

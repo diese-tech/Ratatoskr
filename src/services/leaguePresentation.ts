@@ -64,6 +64,18 @@ export function savedLeagueErrorMessage(message: string | null | undefined): str
  * Unrecognized text must never be presumed suitable for a private reply. */
 const readableLeagueValidationMessages = new Set([
   'A trade requires two different players.',
+  'Choose a supported exchange: 1-for-1, 2-for-1, 1-for-2, 2-for-2, 3-for-2 or 2-for-3.',
+  'Choose each player only once.',
+  'Choose two different teams.',
+  'A selected player is no longer on the team shown. Check their roster and Discord roles.',
+  'A selected player’s Discord name or league roles changed. Review a fresh trade preview.',
+  'Choose up to three different players from the team shown.',
+  'This trade is not ready to confirm. Check both selections and the review.',
+  'The trade changed after the preview. Select the players again and review the latest records.',
+  'Your permission or trade review expired. Open a fresh review.',
+  'A selected team role also grants franchise or captain access. Ask staff to correct League Teams before approving the trade.',
+  'A public roster slot contains a changed value or formula. Ask staff to check the two public roster blocks.',
+  'An earlier league action still needs recovery. Review Saved actions before confirming this trade.',
   'The selected role is not an active YSL team role.',
   'A traded player name is already used in the destination roster area.',
   'That player name is already used in the destination free-agent area.',

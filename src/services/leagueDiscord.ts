@@ -127,6 +127,24 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     }
   }
 
+  async validateGroupTradeRoles(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void> {
+    await this.guild.members.fetchMe({ force: true });
+    await this.assertAccountReplacementRoleOwnership(plan.discordRoleChanges.map(change => ({
+      ...change, before: change.remove, after: change.add, managedRoleIds: [...change.remove, ...change.add],
+    })));
+    const teams = snapshot.teams.filter(team => team.active);
+    const managed = new Set([snapshot.freeAgentRoleId, ...teams.flatMap(team => [team.teamRoleId, team.divisionRoleId])]);
+    for (const [index, change] of plan.discordRoleChanges.entries()) {
+      const member = await fetchFreshMember(this.guild, change.discordId).catch(() => null);
+      const team = plan.teams.find(item => item.teamRoleId === change.remove[0])!;
+      const expected = [team.teamRoleId, team.divisionRoleId].sort();
+      const observed = member && [...member.roles.cache.keys()].filter(id => managed.has(id)).sort();
+      if (!member || member.user.bot || !member.manageable || member.displayName.trim() !== plan.players[index]
+        || JSON.stringify(observed) !== JSON.stringify(expected))
+        throw new LeagueMutationValidationError('A selected player’s Discord name or league roles changed. Review a fresh trade preview.');
+    }
+  }
+
   async validateOneWayTradeRoles(plan: LeagueMutationPlan): Promise<void> {
     const change = plan.discordRoleChanges[0]!;
     await this.guild.members.fetchMe({ force: true });
