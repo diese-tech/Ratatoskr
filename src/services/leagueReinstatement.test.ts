@@ -187,7 +187,7 @@ test('7/7 is a nonblocking policy advisory; the fixed public layout is a separat
     assert.ok(plan.reinstatement!.advisories.some(item => item.id === 'roster-count'));
     assert.deepEqual(plan.reinstatement!.blockers, []);
     f.sheets.prepare(loaded, plan); // Policy does not itself reject a representable plan.
-    for (let row = 5; row <= 11; row++) loaded.sources.publicByDivision.Vanaheim[row - 1]![2] = `Occupied ${row}`;
+    for (let row = 5; row <= 11; row++) loaded.sources.publicByDivision.Vanaheim![row - 1]![2] = `Occupied ${row}`;
     assert.throws(() => f.sheets.prepare(loaded, plan), /empty owned cell|fixed Sheet layout/);
     assert.equal(f.gateway.writes.length, 0);
   } finally { f.close(); }

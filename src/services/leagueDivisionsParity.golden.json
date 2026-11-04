@@ -1,0 +1,249 @@
+{
+  "publicRosters": {
+    "Vanaheim": {
+      "teams": {
+        "Dream Walkers": [
+          "Vee One"
+        ],
+        "Eternal Vanguard": [],
+        "Little Monsters": [],
+        "Something Spicy": [],
+        "The Rat Pack": [],
+        "The Sewer": [
+          "Vee Two"
+        ],
+        "Valhalla Vikings": [],
+        "Wailing Banshees": []
+      },
+      "freeAgents": [
+        "Vee Free"
+      ]
+    },
+    "Alfheim": {
+      "teams": {
+        "Dream Walkers": [
+          "Alf One"
+        ],
+        "Eternal Vanguard": [],
+        "Little Monsters": [],
+        "Something Spicy": [],
+        "The Rat Pack": [],
+        "The Sewer": [],
+        "Valhalla Vikings": [],
+        "Wailing Banshees": []
+      },
+      "freeAgents": []
+    },
+    "Svartalfheim": {
+      "teams": {
+        "Dream Walkers": [
+          "Stray"
+        ],
+        "Eternal Vanguard": [],
+        "Little Monsters": [],
+        "Something Spicy": [],
+        "The Rat Pack": [],
+        "The Sewer": [
+          "Svart One"
+        ],
+        "Valhalla Vikings": [],
+        "Wailing Banshees": []
+      },
+      "freeAgents": [
+        "Svart Free"
+      ]
+    }
+  },
+  "sourceDivisions": [
+    "Vanaheim",
+    "Alfheim",
+    "Svartalfheim"
+  ],
+  "issues": [
+    "Discord member v2 is rostered but still has the Free Agent role.",
+    "Discord member a1 division roles do not match Alfheim.",
+    "Svartalfheim Dream Walkers public roster does not match Current Rosters.",
+    "Alfheim public free-agent list does not match Player Name History."
+  ],
+  "humanized": [
+    "Vee Two is rostered on The Sewer VD but still has the Free Agent role. Remove the Free Agent role.",
+    "Alf One — Discord division: none; expected: Alfheim. Make the division role match.",
+    "Svartalfheim / Dream Walkers — Current Rosters: none; public roster: Stray. Make the player lists match.",
+    "Alfheim free agents — Player Name History: Alf Free; public roster: none. Make the player lists match."
+  ],
+  "fingerprints": {
+    "trade": "c5bf9fb698f9b4c9b91994f440e33a1a1373e0bb9b65088f331cc65d6f5d919c",
+    "drop": "506e306737b8b4b4669dd5552cde36e94c4fa374af6e60af1041b9f222ed6e79",
+    "pickup": "d1e2c219c8c35b56feadb38fa92ff7e07f1de1f60631d99dbe2f5db0dd741c0a",
+    "rename": "41a95ce621045ccc8774a506d24eb99eedcd1630665e5d439a9dfb55ebecf3af"
+  },
+  "publicUpdates": {
+    "trade": [
+      {
+        "range": "'Vanaheim Roster'!C5",
+        "values": [
+          [
+            "Vee Two"
+          ]
+        ]
+      },
+      {
+        "range": "'Vanaheim Roster'!G16",
+        "values": [
+          [
+            "Vee One"
+          ]
+        ]
+      }
+    ],
+    "drop": [
+      {
+        "range": "'Svartalfheim Roster'!G16",
+        "values": [
+          [
+            ""
+          ]
+        ]
+      },
+      {
+        "range": "'Svartalfheim Roster'!G25",
+        "values": [
+          [
+            "Svart One"
+          ]
+        ]
+      }
+    ],
+    "pickup": [
+      {
+        "range": "'Svartalfheim Roster'!K25",
+        "values": [
+          [
+            ""
+          ]
+        ]
+      },
+      {
+        "range": "'Svartalfheim Roster'!C6",
+        "values": [
+          [
+            "Svart Free"
+          ]
+        ]
+      }
+    ],
+    "rename": [
+      {
+        "range": "'Vanaheim Roster'!G25",
+        "values": [
+          [
+            "Vee Free Renamed"
+          ]
+        ]
+      }
+    ]
+  },
+  "history": [
+    [
+      [
+        "YSL-TRX-PARITY",
+        "trade",
+        "2026-11-04",
+        "Vanaheim",
+        "Dream Walkers",
+        "The Sewer",
+        "v1",
+        "Vee One",
+        "admin",
+        "",
+        "Completed",
+        "Admin",
+        "Not verified: Draft Picks empty"
+      ],
+      [
+        "YSL-TRX-PARITY",
+        "trade",
+        "2026-11-04",
+        "Vanaheim",
+        "The Sewer",
+        "Dream Walkers",
+        "v2",
+        "Vee Two",
+        "admin",
+        "",
+        "Completed",
+        "Admin",
+        "Not verified: Draft Picks empty"
+      ]
+    ],
+    [
+      [
+        "YSL-TRX-PARITY",
+        "drop",
+        "2026-11-04",
+        "Svartalfheim",
+        "The Sewer",
+        "Free Agents",
+        "s1",
+        "Svart One",
+        "admin",
+        "",
+        "Completed",
+        "Admin",
+        "Not verified: Draft Picks empty"
+      ]
+    ],
+    [
+      [
+        "YSL-TRX-PARITY",
+        "pickup",
+        "2026-11-04",
+        "Svartalfheim",
+        "Free Agents",
+        "Dream Walkers",
+        "sf",
+        "Svart Free",
+        "admin",
+        "",
+        "Completed",
+        "Admin",
+        "Not verified: Draft Picks empty"
+      ]
+    ],
+    [
+      [
+        "YSL-TRX-PARITY",
+        "rename",
+        "2026-11-04",
+        "Vanaheim",
+        "",
+        "",
+        "vf",
+        "Vee Free Renamed",
+        "admin",
+        "",
+        "Completed",
+        "Admin",
+        ""
+      ]
+    ]
+  ],
+  "autocomplete": [
+    {
+      "name": "Vee One — Dream Walkers (Vanaheim)",
+      "value": "v1"
+    },
+    {
+      "name": "Vee Two — The Sewer (Vanaheim)",
+      "value": "v2"
+    },
+    {
+      "name": "Alf One — Dream Walkers (Alfheim)",
+      "value": "a1"
+    },
+    {
+      "name": "Svart One — The Sewer (Svartalfheim)",
+      "value": "s1"
+    }
+  ]
+}

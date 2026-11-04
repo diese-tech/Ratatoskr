@@ -372,3 +372,11 @@ test(`one-way trade uses the shared member reader through preview and rapid conf
   }
 });
 }
+
+test('roster autocomplete orders Niflheim rows after Svartalfheim (#197)', () => {
+  const row = (division: 'Svartalfheim' | 'Niflheim', discordId: string) => ({
+    sheetRow: 6, division, franchise: 'The Rat Pack', teamRoleId: discordId, team: 'The Rat Pack', discordId, player: 'Same', rosterStatus: 'Player' as const,
+  });
+  assert.deepEqual(buildRosterPlayerAutocompleteChoices([row('Niflheim', 'n'), row('Svartalfheim', 's')], '')
+    .map((choice) => choice.name), ['Same — The Rat Pack (Svartalfheim)', 'Same — The Rat Pack (Niflheim)']);
+});

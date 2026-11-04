@@ -1,4 +1,6 @@
-export type LeagueDivision = 'Vanaheim' | 'Alfheim' | 'Svartalfheim';
+import { LEAGUE_DIVISIONS, LEAGUE_DIVISION_METADATA, type LeagueDivision } from './leagueDivisions.js';
+
+export type { LeagueDivision } from './leagueDivisions.js';
 
 export type LeagueTeam = {
   teamKey: string;
@@ -297,7 +299,7 @@ export function auditLeagueRoster(
     }
     if (!sameNames(expected, actual)) issues.push(`${team.division} ${team.franchise} public roster does not match Current Rosters.`);
   }
-  for (const division of ['Vanaheim', 'Alfheim', 'Svartalfheim'] as const) {
+  for (const division of LEAGUE_DIVISIONS.filter((name) => LEAGUE_DIVISION_METADATA[name].hasPublicFreeAgentList)) {
     const expected = snapshot.names
       .filter((row) => row.nameStatus === 'Current Discord Name' && row.division === division && row.leagueStatus === 'Free Agent')
       .map((row) => row.currentLeagueName);

@@ -18,6 +18,7 @@ import {
   type LeagueSnapshot,
 } from '../domain/leagueOperations.js';
 import { hasAccess } from '../services/authorization.js';
+import { compareDivisions } from '../domain/leagueDivisions.js';
 import { loadLeagueOperationsConfig } from '../config/league-operations.js';
 import { DiscordLeagueGateway } from '../services/leagueDiscord.js';
 import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from '../services/leagueSheets.js';
@@ -149,15 +150,13 @@ function preview(plan: LeagueMutationPlan): string {
   return `**Name-change preview**\nDiscord server nickname: ${plan.discordNicknameChange?.beforeDisplayName ?? plan.players[0]} → ${plan.players[0]}\nOfficial league name: ${plan.players[0]}\nCurrent Rosters, Player Name History and public roster will be synced; historical aliases remain preserved.\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
 }
 
-const divisionOrder = new Map([['Vanaheim', 0], ['Alfheim', 1], ['Svartalfheim', 2]]);
-
 export function buildRosterPlayerAutocompleteChoices(
   rosters: Awaited<ReturnType<LeagueSheetsService['listRosterPlayers']>>,
   focused: string,
 ): { name: string; value: string }[] {
   const query = focused.trim().toLocaleLowerCase();
   return [...rosters]
-    .sort((left, right) => (divisionOrder.get(left.division)! - divisionOrder.get(right.division)!)
+    .sort((left, right) => compareDivisions(left.division, right.division)
       || left.franchise.localeCompare(right.franchise)
       || left.player.localeCompare(right.player))
     .filter((row) => `${row.player} ${row.franchise} ${row.division}`.toLocaleLowerCase().includes(query))
