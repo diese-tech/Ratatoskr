@@ -5,7 +5,8 @@
 //            --link=<new Discord ID>:<earlier Discord ID>  same player on a new account (earlier one must be Inactive)
 //
 // The import writes Sheets only, never Discord. Discord is read with REST GET requests only (no Gateway
-// login), under the approved maintenance-script exception to the shared member-read rule (ADR 0001, #196).
+// login), under the approved maintenance-script exception to the shared member-read rule (ADR 0001, #196, #199):
+// an owner-approved run may use that member list to plan its Sheets writes.
 // Never import this from bot code. Run --write only in a staff-approved quiet window: the bot is not
 // paused, so the script re-reads every source immediately before writing and stops if anything changed.
 import 'dotenv/config';
