@@ -42,7 +42,6 @@ export interface LeagueSheetsGateway {
 export type LeagueSheetsConfig = {
   adminSpreadsheetId: string;
   publicSpreadsheetId: string;
-  niflheimFreeAgentRoleId?: string;
 };
 
 const ServiceAccountSchema = z.object({
@@ -55,8 +54,12 @@ const LeagueSheetsEnvironmentSchema = z.object({
   GOOGLE_SERVICE_ACCOUNT_JSON: z.string().min(1),
   YSL_ADMIN_SPREADSHEET_ID: z.string().min(1),
   YSL_PUBLIC_SPREADSHEET_ID: z.string().min(1),
-  ROLE_NIFLHEIM_FREE_AGENT_ID: z.string().regex(/^\d{16,20}$/).optional(),
+  // Retired by #198: Niflheim is a real, layered division now. Still accepted so an
+  // old Railway value cannot block startup; it is ignored with one warning.
+  ROLE_NIFLHEIM_FREE_AGENT_ID: z.string().optional(),
 });
+
+let warnedRetiredNiflheimRole = false;
 
 // Pace league reads below the service-account limit and respect quota cooldowns.
 // A failed read is returned to durable recovery rather than replayed here.
@@ -130,6 +133,10 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
   config: LeagueSheetsConfig;
 } {
   const parsed = LeagueSheetsEnvironmentSchema.parse(environment);
+  if (parsed.ROLE_NIFLHEIM_FREE_AGENT_ID?.trim() && !warnedRetiredNiflheimRole) {
+    warnedRetiredNiflheimRole = true;
+    console.warn('ROLE_NIFLHEIM_FREE_AGENT_ID is no longer used and is ignored. Remove it from the bot environment.');
+  }
   let credentials: unknown;
   try { credentials = JSON.parse(parsed.GOOGLE_SERVICE_ACCOUNT_JSON); }
   catch { throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON must contain valid JSON.'); }
@@ -142,8 +149,7 @@ export function createGoogleLeagueSheetsGateway(environment: NodeJS.ProcessEnv =
     const client = await auth.getClient();
     return (await client.request<T>({ ...options, retry: false })).data;
   });
-  return { gateway, config: { adminSpreadsheetId: parsed.YSL_ADMIN_SPREADSHEET_ID, publicSpreadsheetId: parsed.YSL_PUBLIC_SPREADSHEET_ID,
-    ...(parsed.ROLE_NIFLHEIM_FREE_AGENT_ID ? { niflheimFreeAgentRoleId: parsed.ROLE_NIFLHEIM_FREE_AGENT_ID } : {}) } };
+  return { gateway, config: { adminSpreadsheetId: parsed.YSL_ADMIN_SPREADSHEET_ID, publicSpreadsheetId: parsed.YSL_PUBLIC_SPREADSHEET_ID } };
 }
 
 type LeagueSheetsRequest = { url: string; method?: 'GET' | 'POST'; data?: unknown };
@@ -736,7 +742,6 @@ export class LeagueSheetsService {
           readDivisions.map((division) => [division, parsePublic(division, read.get(division)!)]),
         ),
         freeAgentRoleId,
-        ...(this.config.niflheimFreeAgentRoleId ? { niflheimFreeAgentRoleId: this.config.niflheimFreeAgentRoleId } : {}),
       },
       sources: { teams, rosters, names, publicByDivision, selfDropPresentation },
     };
@@ -773,8 +778,7 @@ export class LeagueSheetsService {
       affectedDivisions.map((division, index) => [division,
       parsePublic(division, publicRows[index] ?? [])]),
     );
-    return { teams, rosters, names, discordMembers: member ? [member] : [], publicRosters, freeAgentRoleId,
-      ...(this.config.niflheimFreeAgentRoleId ? { niflheimFreeAgentRoleId: this.config.niflheimFreeAgentRoleId } : {}) };
+    return { teams, rosters, names, discordMembers: member ? [member] : [], publicRosters, freeAgentRoleId };
   }
 
   async assertUnchanged(loaded: LoadedLeagueSnapshot): Promise<void> {

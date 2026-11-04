@@ -7,9 +7,9 @@ import {
   type GuildMember,
   type GuildTextBasedChannel,
 } from 'discord.js';
-import { LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange, type DiscordNicknameChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { isLayeredDivision, LeagueMutationValidationError, type DiscordLeagueMember, type DiscordRoleChange, type DiscordNicknameChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import type { AccountReplacementMember, AccountReplacementRoleChange } from '../domain/leagueAccountReplacement.js';
-import type { LeagueAnnouncement, LeagueDiscordPort, LeagueRoleState } from './leagueTransactions.js';
+import { managedRoleIds, type LeagueAnnouncement, type LeagueDiscordPort, type LeagueRoleState } from './leagueTransactions.js';
 import { readLeagueMembers, type LeagueMemberReadOptions, type MemberReadClock } from './leagueMemberReads.js';
 
 export class DiscordRoleReconciliationRequiredError extends Error {
@@ -24,7 +24,17 @@ function roleSnapshot(member: GuildMember): DiscordLeagueMember {
   return { discordId: member.id, displayName: member.displayName, nickname: member.nickname, roleIds: [...member.roles.cache.keys()] };
 }
 
+function assertLayeredRoleState(member: GuildMember, expected: LeagueRoleState): void {
+  const layered = expected.layered;
+  if (!layered) return;
+  const teamRoles = layered.configuredTeamRoleIds.filter((roleId) => member.roles.cache.has(roleId));
+  const teamMatches = layered.expectedTeamRoleId ? teamRoles.length === 1 && teamRoles[0] === layered.expectedTeamRoleId : teamRoles.length === 0;
+  if (!teamMatches || member.roles.cache.has(layered.divisionRoleId) !== Boolean(layered.expectedTeamRoleId))
+    throw new Error(`Discord member ${member.id} complete league role state changed before the transaction finished.`);
+}
+
 function assertMemberRoleState(member: GuildMember, expected: LeagueRoleState): void {
+  assertLayeredRoleState(member, expected);
   if (expected.observedManagedRoleIds) {
     const managed = new Set([...expected.configuredTeamRoleIds, ...expected.configuredDivisionRoleIds, expected.freeAgentRoleId]);
     const actual = [...member.roles.cache.keys()].filter(id => managed.has(id)).sort();
@@ -144,7 +154,7 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     const change = plan.discordRoleChanges[0]!;
     const before = plan.reinstatement!.beforeManagedRoleIds;
     const after = [plan.teams[0]!.teamRoleId, plan.teams[0]!.divisionRoleId].sort();
-    const managedRoleIds = [...new Set([snapshot.freeAgentRoleId, ...snapshot.teams.filter(t => t.active).flatMap(t => [t.teamRoleId, t.divisionRoleId])])];
+    const managedRoleIds = [...new Set([snapshot.freeAgentRoleId, ...snapshot.teams.filter(t => t.active && !isLayeredDivision(t.division)).flatMap(t => [t.teamRoleId, t.divisionRoleId])])];
     if (JSON.stringify(member.roleIds.filter(id => managedRoleIds.includes(id)).sort()) !== JSON.stringify(before))
       throw new LeagueMutationValidationError('The returning player’s roles changed. Review a fresh preview.');
     await this.assertAccountReplacementRoleOwnership([{ ...change, before, after, managedRoleIds }]);
@@ -262,13 +272,9 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     observedManagedRoleIds: string[],
   ): Promise<void> {
     const member = await fetchFreshMember(this.guild, change.discordId);
-    const managedRoleIds = new Set([
-      ...expected.configuredTeamRoleIds,
-      ...expected.configuredDivisionRoleIds,
-      expected.freeAgentRoleId,
-    ]);
+    const managed = managedRoleIds(expected);
     const currentManagedRoleIds = [...member.roles.cache.keys()]
-      .filter((roleId) => managedRoleIds.has(roleId))
+      .filter((roleId) => managed.has(roleId))
       .sort();
     if (JSON.stringify(currentManagedRoleIds) !== JSON.stringify([...observedManagedRoleIds].sort())) {
       throw new LeagueMutationValidationError(

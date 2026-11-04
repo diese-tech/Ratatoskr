@@ -53,9 +53,6 @@ export type LeagueSnapshot = {
   discordMembers: DiscordLeagueMember[];
   publicRosters: Partial<Record<LeagueDivision, PublicDivisionRoster>>;
   freeAgentRoleId: string;
-  // An independently managed pool; this does not make players eligible for
-  // transactions in the tracked sheet divisions.
-  niflheimFreeAgentRoleId?: string;
 };
 
 export type PublicRosterChange = {
@@ -125,17 +122,14 @@ export function auditLeagueRoster(
 ): string[] {
   const issues: string[] = [];
   const activeTeams = snapshot.teams.filter((team) => team.active);
-  const niflheimRole = snapshot.niflheimFreeAgentRoleId;
-  const separateNiflheimRole = niflheimRole && niflheimRole !== snapshot.freeAgentRoleId
-    && !activeTeams.some(team => team.teamRoleId === niflheimRole || team.divisionRoleId === niflheimRole);
-  if (niflheimRole && !separateNiflheimRole)
-    issues.push('The Niflheim Free Agent role overlaps a tracked league role. Configure a separate role before excluding Niflheim players.');
   const teamsByRole = new Map<string, LeagueTeam>();
   const teamsByPublicBlock = new Map<string, LeagueTeam>();
   const roleByDivision = new Map<LeagueDivision, string>();
   const divisionByRole = new Map<string, LeagueDivision>();
   const configuredTeamRoleIds = new Set(activeTeams.map((team) => team.teamRoleId));
   const configuredDivisionRoleIds = new Set(activeTeams.map((team) => team.divisionRoleId));
+  // Division roles a player's primary record is compared with; layered division roles are checked separately.
+  const primaryDivisionRoleIds = new Set(activeTeams.filter((team) => !isLayeredDivision(team.division)).map((team) => team.divisionRoleId));
   for (const roleId of configuredTeamRoleIds) {
     if (configuredDivisionRoleIds.has(roleId)) {
       issues.push(`Role ${roleId} is configured as both a team role and a division role.`);
@@ -184,7 +178,25 @@ export function auditLeagueRoster(
   for (const [discordId, rows] of currentNameRows) {
     if (rows.length !== 1) issues.push(`Discord member ${discordId} must have exactly one current name record.`);
   }
+  const layeredById = new Map<string, LeagueRosterRow>();
   for (const row of snapshot.rosters) {
+    if (isLayeredDivision(row.division)) {
+      if (layeredById.has(row.discordId)) issues.push(`Discord member ${row.discordId} has more than one ${row.division} roster assignment.`);
+      layeredById.set(row.discordId, row);
+      const team = teamsByRole.get(row.teamRoleId);
+      if (!team) issues.push(`Current Rosters member ${row.discordId} references an inactive or unknown team role.`);
+      else if (row.division !== team.division || row.franchise !== team.franchise || row.team !== team.teamRole) {
+        issues.push(`Current Rosters member ${row.discordId} does not match configured team ${team.teamRole}.`);
+      }
+      if (!names.get(row.discordId)) issues.push(`Current Rosters member ${row.discordId} has no Current League Name.`);
+      // The layered row sits on an active primary record in the parent division (ADR 0002).
+      const base = currentNameRows.get(row.discordId);
+      const parent = LEAGUE_DIVISION_METADATA[row.division].layeredOn;
+      if (!base?.length || (base.length === 1 && (base[0]!.division !== parent || !['Free Agent', 'Player', 'Captain'].includes(base[0]!.leagueStatus)))) {
+        issues.push(`${row.division} roster member ${row.discordId} is not a current ${parent} player or free agent.`);
+      }
+      continue;
+    }
     rosterCountById.set(row.discordId, (rosterCountById.get(row.discordId) ?? 0) + 1);
     if (rosterById.has(row.discordId)) issues.push(`Discord member ${row.discordId} appears more than once in Current Rosters.`);
     rosterById.set(row.discordId, row);
@@ -219,19 +231,20 @@ export function auditLeagueRoster(
     const member = memberById.get(discordId);
     // A returning player's nickname is restored and verified by the reinstatement itself.
     if (!member || discordId === options.allowReinstatementMemberId) continue;
-    const roster = rosterById.get(discordId);
-    const managedNamesAgree = !roster || roster.player === rows[0]!.currentLeagueName;
+    const managedRows = [rosterById.get(discordId), layeredById.get(discordId)].filter((row) => row !== undefined);
+    const managedNamesAgree = managedRows.every((row) => row.player === rows[0]!.currentLeagueName);
     const expectedDiscordRename = discordId === options.allowDiscordNameRepairMemberId && managedNamesAgree;
     if (!expectedDiscordRename
-      && (rows[0]!.currentLeagueName !== member.displayName.trim() || (roster && roster.player !== member.displayName.trim()))) {
+      && (rows[0]!.currentLeagueName !== member.displayName.trim() || managedRows.some((row) => row.player !== member.displayName.trim()))) {
       issues.push(`Managed player names for ${discordId} do not match the current Discord display name.`);
     }
   }
 
   for (const member of snapshot.discordMembers) {
     if (member.discordId === options.allowReinstatementMemberId) continue;
-    const assignedTeamRoles = member.roleIds.filter((roleId) => teamsByRole.has(roleId));
+    const assignedTeamRoles = member.roleIds.filter((roleId) => teamsByRole.has(roleId) && !isLayeredDivision(teamsByRole.get(roleId)!.division));
     const roster = rosterById.get(member.discordId);
+    issues.push(...layeredRoleIssues(member, layeredById.get(member.discordId), activeTeams));
     if (assignedTeamRoles.length > 1) issues.push(`Discord member ${member.discordId} has multiple team roles.`);
     if (assignedTeamRoles.length === 1 && roster?.teamRoleId !== assignedTeamRoles[0]) {
       issues.push(`Discord member ${member.discordId} team role does not match Current Rosters.`);
@@ -239,7 +252,7 @@ export function auditLeagueRoster(
     if (assignedTeamRoles.length === 0 && roster) issues.push(`Discord member ${member.discordId} is rostered without its team role.`);
     if (roster) {
       const team = teamsByRole.get(roster.teamRoleId);
-      const assignedDivisionRoles = member.roleIds.filter((roleId) => configuredDivisionRoleIds.has(roleId));
+      const assignedDivisionRoles = member.roleIds.filter((roleId) => primaryDivisionRoleIds.has(roleId));
       if (team && (assignedDivisionRoles.length !== 1 || assignedDivisionRoles[0] !== team.divisionRoleId)) {
         issues.push(`Discord member ${member.discordId} division roles do not match ${team.division}.`);
       }
@@ -252,14 +265,13 @@ export function auditLeagueRoster(
       if (recordedFreeAgent && !member.roleIds.includes(snapshot.freeAgentRoleId)) {
         issues.push(`Discord member ${member.discordId} is recorded as a free agent but is missing the Free Agent role.`);
       }
-      const untrackedNiflheimPlayer = separateNiflheimRole && member.roleIds.includes(niflheimRole!)
-        && assignedTeamRoles.length === 0 && !snapshot.names.some(row => row.discordId === member.discordId);
-      if (!recordedFreeAgent && !untrackedNiflheimPlayer && member.roleIds.includes(snapshot.freeAgentRoleId)) {
+      if (!recordedFreeAgent && member.roleIds.includes(snapshot.freeAgentRoleId)) {
         issues.push(`Discord member ${member.discordId} has the Free Agent role but is not recorded as a current free agent.`);
       }
     }
   }
   for (const row of snapshot.rosters) {
+    if (isLayeredDivision(row.division) && rosterById.has(row.discordId)) continue;
     if (!memberById.has(row.discordId) && row.discordId !== options.allowAbsentRosterMemberId) {
       issues.push(`Current Rosters member ${row.discordId} is not in the Discord member snapshot.`);
     }
@@ -277,7 +289,7 @@ export function auditLeagueRoster(
       continue;
     }
     const divisionRoleId = activeTeams.find((team) => team.division === row.division)?.divisionRoleId;
-    const assignedDivisionRoles = member.roleIds.filter((roleId) => configuredDivisionRoleIds.has(roleId));
+    const assignedDivisionRoles = member.roleIds.filter((roleId) => primaryDivisionRoleIds.has(roleId));
     if (!divisionRoleId || assignedDivisionRoles.length !== 1 || assignedDivisionRoles[0] !== divisionRoleId) {
       issues.push(`Discord member ${row.discordId} division roles do not match ${row.division}.`);
     }
@@ -310,8 +322,42 @@ export function auditLeagueRoster(
   return issues;
 }
 
+// A member holds a layered division's team and division role exactly when they have its roster row.
+function layeredRoleIssues(member: DiscordLeagueMember, row: LeagueRosterRow | undefined, activeTeams: LeagueTeam[]): string[] {
+  const issues: string[] = [];
+  for (const division of LEAGUE_DIVISIONS.filter(isLayeredDivision)) {
+    const teams = activeTeams.filter((team) => team.division === division);
+    if (!teams.length) continue;
+    const mine = row?.division === division ? row : undefined;
+    const teamRoles = member.roleIds.filter((roleId) => teams.some((team) => team.teamRoleId === roleId));
+    if (teamRoles.length > 1) issues.push(`Discord member ${member.discordId} has multiple ${division} team roles.`);
+    else if (teamRoles.length === 1 && teamRoles[0] !== mine?.teamRoleId) {
+      issues.push(`Discord member ${member.discordId} ${division} team role does not match Current Rosters.`);
+    } else if (!teamRoles.length && mine) issues.push(`Discord member ${member.discordId} is on a ${division} roster without its team role.`);
+    if (member.roleIds.includes(teams[0]!.divisionRoleId) !== Boolean(mine)) {
+      issues.push(`Discord member ${member.discordId} ${division} division role does not match Current Rosters.`);
+    }
+  }
+  return issues;
+}
+
+// A layered division (Niflheim) is a second membership on top of the player's
+// record in another division (#198, ADR 0002). "Primary" rows are everything else
+// and keep every pre-Niflheim behavior; layered rows are handled explicitly.
+export function isLayeredDivision(division: LeagueDivision): boolean {
+  return LEAGUE_DIVISION_METADATA[division].layeredOn !== undefined;
+}
+
+export function primaryRoster(rows: readonly LeagueRosterRow[], discordId: string): LeagueRosterRow | undefined {
+  return rows.find((row) => row.discordId === discordId && !isLayeredDivision(row.division));
+}
+
+export function layeredRoster(rows: readonly LeagueRosterRow[], discordId: string): LeagueRosterRow | undefined {
+  return rows.find((row) => row.discordId === discordId && isLayeredDivision(row.division));
+}
+
 function requireRoster(snapshot: LeagueSnapshot, discordId: string): LeagueRosterRow {
-  const rows = snapshot.rosters.filter((row) => row.discordId === discordId);
+  const rows = snapshot.rosters.filter((row) => row.discordId === discordId && !isLayeredDivision(row.division));
   if (!rows.length) throw new LeagueMutationValidationError(`<@${discordId}> is not rostered on an active YSL team.`);
   if (rows.length !== 1) throw new Error(`${discordId} has multiple roster assignments.`);
   return rows[0]!;
@@ -350,7 +396,7 @@ function freeAgentAreaUsesName(snapshot: LeagueSnapshot, division: LeagueDivisio
     && row.leagueStatus === 'Free Agent'
     && row.division === division
     && row.currentLeagueName === name
-    && !snapshot.rosters.some((roster) => roster.discordId === row.discordId));
+    && !primaryRoster(snapshot.rosters, row.discordId));
 }
 
 export function buildTradePlan(snapshot: LeagueSnapshot, firstId: string, secondId: string): LeagueMutationPlan {
@@ -370,7 +416,7 @@ export function buildTradePlan(snapshot: LeagueSnapshot, firstId: string, second
   }
   return {
     kind: 'trade',
-    rosters: snapshot.rosters.map((row) => row.discordId === firstId ? replaceRosterTeam(row, secondTeam) : row.discordId === secondId ? replaceRosterTeam(row, firstTeam) : { ...row }),
+    rosters: snapshot.rosters.map((row) => row.sheetRow === first.sheetRow ? replaceRosterTeam(row, secondTeam) : row.sheetRow === second.sheetRow ? replaceRosterTeam(row, firstTeam) : { ...row }),
     nameUpdates: snapshot.names.map((row) => row.discordId === firstId && row.nameStatus === 'Current Discord Name'
       ? { ...row, franchise: secondTeam.franchise, division: secondTeam.division }
       : row.discordId === secondId && row.nameStatus === 'Current Discord Name'
@@ -409,7 +455,7 @@ export function buildOneWayTradePlan(snapshot: LeagueSnapshot, playerId: string,
   }
   return {
     kind: 'trade',
-    rosters: snapshot.rosters.map(row => row.discordId === playerId ? replaceRosterTeam(row, receiver) : { ...row }),
+    rosters: snapshot.rosters.map(row => row.sheetRow === roster.sheetRow ? replaceRosterTeam(row, receiver) : { ...row }),
     nameUpdates: snapshot.names.map(row => row.sheetRow === name.sheetRow ? { ...row, franchise: receiver.franchise } : { ...row }),
     publicChanges: [
       { division: sender.division, area: 'team', group: sender.franchise, from: name.currentLeagueName, to: '' },
@@ -443,7 +489,7 @@ function buildExitPlan(
 
   let replacementName: LeagueNameRow | undefined;
   if (replacementId) {
-    if (snapshot.rosters.some((row) => row.discordId === replacementId)) {
+    if (primaryRoster(snapshot.rosters, replacementId)) {
       throw new LeagueMutationValidationError('The selected replacement is not a free agent.');
     }
     replacementName = currentNameRow(snapshot, replacementId);
@@ -465,8 +511,9 @@ function buildExitPlan(
   const outgoingStatus = kind === 'drop'
     ? 'Free Agent'
     : kind === 'departure' ? 'Inactive' : SELF_DROP_LEAGUE_STATUS;
+  // Only the primary assignment ends here; a Niflheim row is handled by #200.
   const nextRosters = snapshot.rosters
-    .filter((row) => row.discordId !== discordId)
+    .filter((row) => row.sheetRow !== roster.sheetRow)
     .map((row) => ({ ...row }));
   if (replacementId && replacementName) {
     nextRosters.push({
@@ -546,7 +593,7 @@ export function buildSelfDropPlan(snapshot: LeagueSnapshot, discordId: string, r
 }
 
 export function buildPickupPlan(snapshot: LeagueSnapshot, discordId: string, teamRoleId: string): LeagueMutationPlan {
-  if (snapshot.rosters.some((row) => row.discordId === discordId)) throw new LeagueMutationValidationError('The selected player is not a free agent.');
+  if (primaryRoster(snapshot.rosters, discordId)) throw new LeagueMutationValidationError('The selected player is not a free agent.');
   const team = requireTeam(snapshot, teamRoleId);
   const currentName = currentNameRow(snapshot, discordId);
   if (currentName.leagueStatus !== 'Free Agent') throw new LeagueMutationValidationError('The selected player is not a free agent.');
@@ -587,14 +634,15 @@ export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, req
   const nextName = requestedName.trim();
   if (!nextName) throw new LeagueMutationValidationError('League name cannot be blank.');
   const current = currentNameRow(snapshot, discordId);
-  const roster = snapshot.rosters.find((row) => row.discordId === discordId);
+  const roster = primaryRoster(snapshot.rosters, discordId);
+  const layered = layeredRoster(snapshot.rosters, discordId);
   if (current.currentLeagueName === nextName && !allowUnchangedName) throw new LeagueMutationValidationError('That is already the player\'s Current League Name.');
   const nameUsedInSameArea = snapshot.names.some((row) => {
     if (row.discordId === discordId || row.nameStatus !== 'Current Discord Name' || row.currentLeagueName !== nextName) return false;
-    const otherRoster = snapshot.rosters.find((candidate) => candidate.discordId === row.discordId);
-    return roster
+    const otherRoster = primaryRoster(snapshot.rosters, row.discordId);
+    return (layered && layeredRoster(snapshot.rosters, row.discordId)?.teamRoleId === layered.teamRoleId) || (roster
       ? otherRoster?.teamRoleId === roster.teamRoleId
-      : !otherRoster && row.leagueStatus === 'Free Agent' && row.division === current.division;
+      : !otherRoster && row.leagueStatus === 'Free Agent' && row.division === current.division);
   });
   if (nameUsedInSameArea) throw new LeagueMutationValidationError('That league name is already used by another player in this roster area.');
   const existingAlias = current.currentLeagueName === nextName || snapshot.names.some((row) => row.discordId === discordId && row.knownName === current.currentLeagueName);
@@ -611,15 +659,18 @@ export function buildRenamePlan(snapshot: LeagueSnapshot, discordId: string, req
       franchise: current.franchise,
       leagueStatus: current.leagueStatus,
     },
+    // One league name per person: a layered player's Niflheim block is renamed too.
     publicChanges: current.currentLeagueName === nextName ? [] : [{
       division: current.division,
       area: roster ? 'team' : 'free-agent',
       group: roster?.franchise ?? 'Free Agents',
       from: current.currentLeagueName,
       to: nextName,
-    }],
+    }, ...(layered ? [{
+      division: layered.division, area: 'team' as const, group: layered.franchise, from: current.currentLeagueName, to: nextName,
+    }] : [])],
     discordRoleChanges: [],
-    teams: roster ? [requireTeam(snapshot, roster.teamRoleId)] : [],
+    teams: [...(roster ? [requireTeam(snapshot, roster.teamRoleId)] : []), ...(layered ? [requireTeam(snapshot, layered.teamRoleId)] : [])],
     players: [nextName],
     playerIds: [discordId],
   };
@@ -679,7 +730,7 @@ export function buildReinstatementPlan(snapshot: LeagueSnapshot, selection: Rein
     || source.teamRoleId !== selection.teamRoleId || selection.returnStatus !== 'Player'
     || selection.preserveFutureSanction !== true)
     throw new LeagueMutationValidationError('The selected player, original action or return decision changed. Review a fresh preview.');
-  if (snapshot.rosters.some(row => row.discordId === selection.playerId))
+  if (primaryRoster(snapshot.rosters, selection.playerId))
     throw new LeagueMutationValidationError('This player is already rostered. Review the current assignment; no reinstatement is needed.');
   const name = currentNameRow(snapshot, selection.playerId);
   if (name.franchise || name.leagueStatus !== source.resultingStatus || name.division !== source.division)
@@ -690,9 +741,9 @@ export function buildReinstatementPlan(snapshot: LeagueSnapshot, selection: Rein
   if (teamAreaUsesName(snapshot, team.teamRoleId, name.currentLeagueName))
     throw new LeagueMutationValidationError('Another player already uses this name in the destination roster. Resolve the identity conflict first.');
   const member = snapshot.discordMembers.find(row => row.discordId === selection.playerId);
-  const managed = new Set([snapshot.freeAgentRoleId, ...snapshot.teams.filter(t => t.active).flatMap(t => [t.teamRoleId, t.divisionRoleId])]);
+  const managed = new Set([snapshot.freeAgentRoleId, ...snapshot.teams.filter(t => t.active && !isLayeredDivision(t.division)).flatMap(t => [t.teamRoleId, t.divisionRoleId])]);
   const before = (member?.roleIds ?? []).filter(id => managed.has(id)).sort();
-  if (snapshot.teams.some(t => t.active && before.includes(t.teamRoleId)))
+  if (snapshot.teams.some(t => t.active && !isLayeredDivision(t.division) && before.includes(t.teamRoleId)))
     throw new LeagueMutationValidationError('This player already has a team role without a roster assignment. Reconcile the records first.');
   // Identity is the Discord ID and verified exit, never the name. If the player changed their
   // Discord name while away, the same transaction sets their server nickname back to the

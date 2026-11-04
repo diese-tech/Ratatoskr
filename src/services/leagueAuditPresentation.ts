@@ -1,4 +1,5 @@
-import type { LeagueSnapshot } from '../domain/leagueOperations.js';
+import { LEAGUE_DIVISION_METADATA } from '../domain/leagueDivisions.js';
+import { layeredRoster, primaryRoster, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { divisionAlternation, type LeagueDivision } from '../domain/leagueDivisions.js';
 
 const D = divisionAlternation();
@@ -18,8 +19,15 @@ function playerName(snapshot: LeagueSnapshot, discordId: string): string {
     ?? 'An unidentified player';
 }
 
+// The player's primary (non-Niflheim) assignment; layered findings name their division.
 function rosterFor(snapshot: LeagueSnapshot, discordId: string) {
-  return snapshot.rosters.find((row) => row.discordId === discordId);
+  return primaryRoster(snapshot.rosters, discordId);
+}
+
+function layeredTeamRoles(snapshot: LeagueSnapshot, discordId: string, division: string): string[] {
+  const member = snapshot.discordMembers.find((entry) => entry.discordId === discordId);
+  return (member?.roleIds ?? []).flatMap((roleId) => snapshot.teams
+    .filter((team) => team.division === division && team.teamRoleId === roleId).map((team) => team.teamRole));
 }
 
 function roleName(snapshot: LeagueSnapshot, roleId: string): string {
@@ -50,9 +58,6 @@ function discordDivisionRoles(snapshot: LeagueSnapshot, discordId: string): stri
 
 function humanize(snapshot: LeagueSnapshot, issue: string): string {
   let match: RegExpMatchArray | null;
-  if (issue === 'The Niflheim Free Agent role overlaps a tracked league role. Configure a separate role before excluding Niflheim players.')
-    return issue;
-
   match = issue.match(/^Managed player names for (\S+) do not match the current Discord display name\.$/);
   if (match) {
     const discordId = match[1]!;
@@ -107,8 +112,22 @@ function humanize(snapshot: LeagueSnapshot, issue: string): string {
   }
   match = issue.match(/^Current player (\S+) must have exactly one Current Rosters assignment\.$/);
   if (match) {
-    const count = snapshot.rosters.filter((row) => row.discordId === match![1]).length;
+    const count = snapshot.rosters.filter((row) => row.discordId === match![1] && primaryRoster([row], row.discordId)).length;
     return `${playerName(snapshot, match[1]!)} is marked as an active player but has ${count} Current Rosters assignments. Keep exactly one active assignment.`;
+  }
+  match = issue.match(new RegExp(`^Discord member (\\S+) has more than one (${D}) roster assignment\\.$`));
+  if (match) return `${playerName(snapshot, match[1]!)} has more than one ${match[2]} team in Current Rosters. Keep one.`;
+  match = issue.match(new RegExp(`^(${D}) roster member (\\S+) is not a current (${D}) player or free agent\\.$`));
+  if (match) {
+    const name = snapshot.names.find((row) => row.discordId === match![2] && row.nameStatus === 'Current Discord Name');
+    return `${playerName(snapshot, match[2]!)} is on a ${match[1]} team, but Player Name History lists them as ${name ? `${name.division} ${name.leagueStatus}` : 'no current record'}. ${match[1]} players must be current ${match[3]} players or free agents. Fix their ${match[3]} record or remove the ${match[1]} roster row.`;
+  }
+  match = issue.match(new RegExp(`^Discord member (\\S+) (?:has multiple (${D}) team roles|(${D}) team role does not match Current Rosters|is on a (${D}) roster without its team role|(${D}) division role does not match Current Rosters)\\.$`));
+  if (match) {
+    const division = (match[2] ?? match[3] ?? match[4] ?? match[5])!;
+    const row = layeredRoster(snapshot.rosters, match[1]!);
+    const what = match[5] ? 'division role' : 'team role';
+    return `${playerName(snapshot, match[1]!)} — Discord ${division} roles: ${list(layeredTeamRoles(snapshot, match[1]!, division))}; Current Rosters ${division} team: ${row?.team ?? 'none'}. Make the ${division} ${what} match.`;
   }
   match = issue.match(/^Discord member (\S+) has multiple team roles\.$/);
   if (match) return `${playerName(snapshot, match[1]!)} has multiple team roles in Discord (${list(discordTeamRoles(snapshot, match[1]!))}). Keep only the current team.`;

@@ -767,3 +767,18 @@ test('reinstatement validates exact inactive managed roles, safe role ownership 
   await gateway.rollbackRoleChange(plan.discordRoleChanges[0]!, before, after);
   assert.deepEqual([...cache.keys()], ['unmanaged']);
 });
+
+test('live role checks require a layered Niflheim team and division role to match the roster (#198)', async () => {
+  const roles = ['free-agent', 'division-s', 'team-n', 'division-n'];
+  const member = leagueMember('faye', roles);
+  const guild = { id: 'guild', members: { fetch: async () => member } } as unknown as Guild;
+  const gateway = new DiscordLeagueGateway(guild, 'transactions');
+  const expected = { configuredTeamRoleIds: ['team-s'], expectedTeamRoleId: null, configuredDivisionRoleIds: ['division-s'],
+    freeAgentRoleId: 'free-agent', expectsFreeAgent: true, divisionRoleId: 'division-s',
+    layered: { configuredTeamRoleIds: ['team-n'], expectedTeamRoleId: 'team-n', divisionRoleId: 'division-n' } };
+  await gateway.validateRoleState('faye', expected);
+  member.roles.cache.delete('team-n');
+  await assert.rejects(() => gateway.validateRoleState('faye', expected), /league role state changed/);
+  await gateway.validateRoleState('faye', { ...expected, layered: { ...expected.layered, expectedTeamRoleId: null } })
+    .then(() => assert.fail('division role without a roster row must not pass'), (error) => assert.match(String(error), /league role state changed/));
+});
