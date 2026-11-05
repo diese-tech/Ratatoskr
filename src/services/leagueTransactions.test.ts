@@ -916,7 +916,8 @@ test('Niflheim moves run through the worker with layered role states and keep th
     });
     assert.deepEqual(seen, [{
       change: { discordId: 'faye', remove: add ? ['team-n1'] : ['team-n1', 'division-n'], add: add ? [add] : [] },
-      before: 'team-n1', after: add, freeAgent: [true, true], pinned: undefined,
+      // A transfer pins the unchanged primary roles, which selects singular cache-safe role writes.
+      before: 'team-n1', after: add, freeAgent: [true, true], pinned: add ? ['free-agent', 'division-s'] : undefined,
     }], label);
     assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed', label);
     f.db.close();

@@ -490,8 +490,18 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
     ]));
-    // Primary transfers pin the exact managed roles; a layered transfer's roles are checked by `layered`.
-    if (isOneWayTrade(plan) && !isLayeredDivision(plan.teams[0]!.division)) {
+    // A transfer pins the exact managed roles so its two writes use singular, cache-safe role
+    // deltas. A Niflheim transfer leaves the primary roles as they are (its own roles are
+    // checked by `layered`), so it pins the primary roles the player holds now (#200).
+    if (isOneWayTrade(plan) && isLayeredDivision(plan.teams[0]!.division)) {
+      const change = plan.discordRoleChanges[0]!;
+      const before = beforeByPlayer.get(change.discordId)!;
+      const primaryManaged = new Set([...before.configuredTeamRoleIds, ...before.configuredDivisionRoleIds, before.freeAgentRoleId]);
+      const held = (loaded.snapshot.discordMembers.find((member) => member.discordId === change.discordId)?.roleIds ?? [])
+        .filter((roleId) => primaryManaged.has(roleId));
+      before.observedManagedRoleIds = held;
+      afterByPlayer.get(change.discordId)!.observedManagedRoleIds = [...held];
+    } else if (isOneWayTrade(plan)) {
       const change = plan.discordRoleChanges[0]!;
       const before = beforeByPlayer.get(change.discordId)!;
       const after = afterByPlayer.get(change.discordId)!;
