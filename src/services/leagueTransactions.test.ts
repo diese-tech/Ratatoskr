@@ -937,3 +937,21 @@ test('a chosen division is saved as an optional fourth intent element; older int
   assert.deepEqual(buildLeagueIntentPlan('["drop","one",null]', current), buildDropPlan(current, 'one'));
   assert.throws(() => buildLeagueIntentPlan('["drop","faye",null,"Midgard"]', current), /Unsupported league division/);
 });
+
+test('a departed Svartalfheim free agent on a Niflheim team leaves both lists through the worker (#200)', async () => {
+  const f = fixture();
+  addNiflheim(f.current);
+  f.current.discordMembers = f.current.discordMembers.filter((entry) => entry.discordId !== 'faye');
+  const build = (current: LeagueSnapshot) => buildDeparturePlan(current, 'faye');
+  const plan = build(f.current);
+  assert.deepEqual(plan.publicChanges.map((change) => `${change.division}:${change.area}`), ['Niflheim:team', 'Svartalfheim:free-agent']);
+  assert.deepEqual(plan.discordRoleChanges, []);
+  const result = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-11-05T17:00:00-05:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: build, expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan),
+  });
+  assert.ok(f.events.includes('discord-absence:faye'));
+  assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
+  f.db.close();
+});

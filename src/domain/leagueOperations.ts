@@ -285,7 +285,8 @@ export function auditLeagueRoster(
     }
     const member = memberById.get(row.discordId);
     if (!member) {
-      issues.push(`Current free agent ${row.discordId} is not in the Discord member snapshot.`);
+      // A departing free agent on a Niflheim team is the exit being processed (#200).
+      if (row.discordId !== options.allowAbsentRosterMemberId) issues.push(`Current free agent ${row.discordId} is not in the Discord member snapshot.`);
       continue;
     }
     const divisionRoleId = activeTeams.find((team) => team.division === row.division)?.divisionRoleId;

@@ -225,7 +225,7 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
       const isAbsentExitPlayer = (plan.kind === 'departure' || plan.kind === 'self-drop')
         && discordId === plan.playerIds[0]
         && !plan.discordRoleChanges.some((change) => change.discordId === discordId);
-      if (isAbsentExitPlayer && rosterRows.length === 1) {
+      if (isAbsentExitPlayer && (rosterRows.length === 1 || layeredRoster(snapshot.rosters, discordId))) {
         continue;
       }
       throw new Error(`Discord member ${discordId} could not be loaded.`);
