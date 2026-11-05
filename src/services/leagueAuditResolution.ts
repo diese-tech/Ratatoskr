@@ -12,7 +12,7 @@ import {
   type PublicRosterChange,
 } from '../domain/leagueOperations.js';
 import { layeredRoleState, managedRoleIds, type LeagueRoleState } from './leagueTransactions.js';
-import { isLayeredDivision, primaryRoster, type DiscordLeagueMember } from '../domain/leagueOperations.js';
+import { isLayeredDivision, layeredRoster, primaryRoster, type DiscordLeagueMember } from '../domain/leagueOperations.js';
 import {
   LeagueSheetDriftError,
   type LoadedLeagueSnapshot,
@@ -222,6 +222,14 @@ export function buildLeagueAuditSheetRepair(
         division: name.division, area: 'free-agent', group: 'Free Agents',
         from: name.currentLeagueName, to: '',
       }];
+    }
+    // The person leaves the league, so a Niflheim membership ends in the same repair (#200).
+    const layered = layeredRoster(snapshot.rosters, discordId);
+    if (layered) {
+      plan.rosters = plan.rosters.filter((row) => row.sheetRow !== layered.sheetRow);
+      if ((snapshot.publicRosters[layered.division]?.teams[layered.franchise] ?? []).includes(name.currentLeagueName)) {
+        plan.publicChanges.push({ division: layered.division, area: 'team', group: layered.franchise, from: name.currentLeagueName, to: '' });
+      }
     }
     plan.players = [name.currentLeagueName];
     plan.playerIds = [discordId];

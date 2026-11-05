@@ -69,3 +69,20 @@ test('present old accounts lose only managed roles and changed names are explici
   assert.deepEqual(plan.roles.find((role) => role.discordId === 'new')?.add, ['a', 'division']);
   assert.ok(plan.manualReview.some((item) => item.includes('captain-access')), 'preview must identify unmapped access for manual review');
 });
+
+test('account replacement carries a Niflheim row, its public cell and its roles to the new account (#200)', () => {
+  const input = accountReplacementFixture();
+  const snapshot = input.snapshot;
+  // Same league, played in Svartalfheim, with "one" also on Niflheim team N.
+  for (const row of [...snapshot.teams, ...snapshot.rosters, ...snapshot.names]) if (row.division === 'Vanaheim') row.division = 'Svartalfheim';
+  snapshot.publicRosters = { Svartalfheim: snapshot.publicRosters.Vanaheim!, Niflheim: { teams: { N: ['One'] }, freeAgents: [] } };
+  snapshot.teams.push({ teamKey: 'n', franchise: 'N', division: 'Niflheim', teamRoleId: 'n', teamRole: 'N ND', divisionRoleId: 'division-n', active: true });
+  snapshot.rosters.push({ sheetRow: 9, division: 'Niflheim', franchise: 'N', teamRoleId: 'n', team: 'N ND', discordId: 'one', player: 'One', rosterStatus: 'Player' });
+  input.newMember.roleIds = ['unmanaged-staff'];
+  input.newMember.displayName = 'One New';
+
+  const plan = buildLeagueAccountReplacementPlan(input);
+  assert.deepEqual(plan.layeredAfter, { ...snapshot.rosters.at(-1), discordId: 'new', player: 'One New' });
+  assert.deepEqual(plan.publicChanges.map((change) => `${change.division}:${change.group}:${change.to}`), ['Svartalfheim:A:One New', 'Niflheim:N:One New']);
+  assert.deepEqual(plan.roles[0]?.add, ['a', 'division', 'n', 'division-n']);
+});

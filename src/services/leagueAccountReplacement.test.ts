@@ -539,3 +539,31 @@ test('a halfway two-workbook failure remains partial until an explicit recovery 
     assert.equal(f.gateway.writes.length, 1, 'recovery must not replay either workbook write');
   } finally { f.worker.stop(); f.db.close(); }
 });
+
+test('a Niflheim row, cell and roles move with the identity, and the Niflheim captain role is flagged for review (#200)', async () => {
+  const sources = accountReplacementSources();
+  const g = sources.gateway;
+  // The same league played in Svartalfheim, with "one" also captaining Niflheim team N.
+  for (const tab of ['League Teams', 'Current Rosters', 'Player Name History'])
+    for (const row of g.rows('admin', tab)) row.forEach((cell, index) => { if (cell === 'Vanaheim') row[index] = 'Svartalfheim'; });
+  g.data.set('public:Svartalfheim Roster', g.rows('public', 'Vanaheim Roster'));
+  g.data.set('public:Vanaheim Roster', Array.from({ length: 99 }, () => Array(15).fill('')));
+  g.rows('admin', 'League Teams').push(['n', 'Dream Walkers', 'Niflheim', 'n', 'Dream Walkers ND', '', '', 'division-n', '', 'nif-captain', '', 'Yes']);
+  g.rows('admin', 'Current Rosters').push(['Niflheim', 'Dream Walkers', 'n', 'Dream Walkers ND', 'one', 'One', 'Captain']);
+  const niflheim = Array.from({ length: 99 }, () => Array(15).fill(''));
+  niflheim[4]![2] = 'One';
+  g.data.set('public:Niflheim Roster', niflheim);
+  sources.members.get('new')!.displayName = 'One New';
+  sources.members.get('new')!.roleIds = ['unmanaged'];
+  const f = fixture(openDatabase(':memory:'), sources);
+  try {
+    const preview = await f.service.preview('admin', 'one', 'new');
+    assert.ok(preview.plan.manualReview.some((item) => item.includes('nif-captain')));
+    assert.ok(preview.plan.manualReview.some((item) => item.includes('captain-access')));
+    const job = await f.service.confirm({ actorUserId: 'admin', oldDiscordId: 'one', newDiscordId: 'new', expectedFingerprint: preview.fingerprint, approvalReference: preview.approvalReference, samePlayerConfirmed: true });
+    assert.equal((await settle(f, job.reference)).status, 'COMPLETED');
+    assert.deepEqual(g.rows('admin', 'Current Rosters').at(-1)!.slice(0, 7), ['Niflheim', 'Dream Walkers', 'n', 'Dream Walkers ND', 'new', 'One New', 'Captain']);
+    assert.equal(g.rows('public', 'Niflheim Roster')[4]![2], 'One New');
+    assert.deepEqual(f.members.get('new')!.roleIds.sort(), ['a', 'division', 'division-n', 'n', 'unmanaged']);
+  } finally { f.worker.stop(); f.db.close(); }
+});

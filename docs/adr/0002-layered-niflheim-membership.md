@@ -36,6 +36,10 @@ Before this decision, Rat assumed one Current Rosters row, one primary status an
 
 - Layered players pass a clean audit. Each violation gets its own plain-English finding. Role findings route to "Set Discord roles from roster sheets", which adds or removes only the incorrect managed roles and never removes a valid Niflheim role.
 - Behavior for players without a Niflheim row is unchanged. A golden test from before #197 pins it.
-- Niflheim roster transactions are left to [#200](https://github.com/diese-tech/Ratatoskr/issues/200): trades and pickups within Niflheim, a Niflheim drop, and departures that end both memberships. Until then, account replacement refuses a layered player rather than guessing. A Svartalfheim departure or self-drop ends only the Svartalfheim membership, and the audit then reports the leftover Niflheim row for staff to remove.
+- Niflheim roster transactions ([#200](https://github.com/diese-tech/Ratatoskr/issues/200)) target one membership:
+  - A Niflheim trade, 1-for-0 transfer or drop changes only Niflheim rows, ND roles and the Niflheim tab. A drop never removes `Free Agent` or a Svartalfheim role.
+  - A Niflheim pickup takes a Svartalfheim free agent with no Niflheim team, who stays a Svartalfheim free agent.
+  - Departure, self-drop and the audit's "Mark player inactive" end both memberships in one change. Reinstatement restores the Niflheim row the exit removed. Account replacement carries the Niflheim row with the identity.
+  - A player on two teams needs the `division` option for a trade or drop. Niflheim history rows never move a Svartalfheim draft pick. Niflheim top-4 tracking is out of scope (owner decision).
 - Niflheim is temporary. Deactivating its League Teams rows stops Rat reading it, and removing `Niflheim` from `LEAGUE_DIVISIONS` is the code cleanup.
 - Pull-up subs are not modeled.

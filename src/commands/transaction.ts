@@ -6,19 +6,22 @@ import { buildLeagueIntentPlan, type LeagueTransactionIntent } from '../services
 import {
   MessageFlags,
   SlashCommandBuilder,
+  type SlashCommandStringOption,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
 import type Database from 'better-sqlite3';
 import {
+  isLayeredDivision,
   isOneWayTrade,
   LeagueMutationValidationError,
   type LeagueMutationPlan,
   type LeagueSnapshot,
+  type LeagueTeam,
 } from '../domain/leagueOperations.js';
 import { hasAccess } from '../services/authorization.js';
-import { compareDivisions } from '../domain/leagueDivisions.js';
+import { compareDivisions, LEAGUE_DIVISIONS, LEAGUE_DIVISION_METADATA } from '../domain/leagueDivisions.js';
 import { loadLeagueOperationsConfig } from '../config/league-operations.js';
 import { DiscordLeagueGateway } from '../services/leagueDiscord.js';
 import { createGoogleLeagueSheetsGateway, LeagueSheetsService } from '../services/leagueSheets.js';
@@ -35,6 +38,15 @@ import {
 import { persistPreviewAfterDelivery } from '../services/transactionPreview.js';
 import { leagueStatusLabel, savedLeagueErrorMessage, leagueValidationMessage } from '../services/leaguePresentation.js';
 
+// Picks one membership when a player is on both a Svartalfheim and a Niflheim team (#200).
+const targetDivisions = LEAGUE_DIVISIONS.filter((division) => isLayeredDivision(division)
+  || LEAGUE_DIVISIONS.some((layered) => LEAGUE_DIVISION_METADATA[layered].layeredOn === division));
+function divisionOption(option: SlashCommandStringOption): SlashCommandStringOption {
+  return option.setName('division')
+    .setDescription('Only for players on two teams: which division this change is for.')
+    .addChoices(...targetDivisions.map((division) => ({ name: division, value: division })));
+}
+
 export const transactionCommand = new SlashCommandBuilder()
   .setName('transaction')
   .setDescription('Process approved YSL roster changes.')
@@ -49,12 +61,14 @@ export const transactionCommand = new SlashCommandBuilder()
     .addUserOption((option) => option.setName('player_one').setDescription('Player leaving the first team.').setRequired(true))
     .addUserOption((option) => option.setName('player_two').setDescription('Player leaving the other team in a swap.'))
     .addRoleOption((option) => option.setName('receiving_team').setDescription('Team receiving the player when no player comes back.'))
+    .addStringOption(divisionOption)
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('drop')
     .setDescription('Release a rostered player into their division free-agent pool.')
     .addUserOption((option) => option.setName('player').setDescription('Rostered player to release.').setRequired(true))
     .addUserOption((option) => option.setName('replacement').setDescription('Optional same-division free agent replacing them.'))
+    .addStringOption(divisionOption)
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('self-drop')
@@ -65,6 +79,7 @@ export const transactionCommand = new SlashCommandBuilder()
       .setAutocomplete(true)
       .setRequired(true))
     .addUserOption((option) => option.setName('replacement').setDescription('Optional same-division free agent replacing them.'))
+    .addStringOption(divisionOption)
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('departure')
@@ -75,6 +90,7 @@ export const transactionCommand = new SlashCommandBuilder()
       .setAutocomplete(true)
       .setRequired(true))
     .addUserOption((option) => option.setName('replacement').setDescription('Optional same-division free agent replacing them.'))
+    .addStringOption(divisionOption)
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')))
   .addSubcommand((subcommand) => subcommand
     .setName('pickup')
@@ -90,6 +106,13 @@ export const transactionCommand = new SlashCommandBuilder()
     .addBooleanOption((option) => option.setName('confirm').setDescription('Choose true after reviewing the transaction preview.')));
 
 function intentKey(interaction: ChatInputCommandInteraction): string {
+  const key = baseIntentKey(interaction);
+  const division = interaction.options.getString('division');
+  // Appended only when chosen, so intents saved before #200 keep their keys.
+  return division && !key.startsWith('["trade-one-way",') ? JSON.stringify([...JSON.parse(key) as unknown[], division]) : key;
+}
+
+function baseIntentKey(interaction: ChatInputCommandInteraction): string {
   const subcommand = interaction.options.getSubcommand();
   if (subcommand === 'trade') {
     const player = interaction.options.getUser('player_one', true).id;
@@ -115,6 +138,11 @@ function intentKey(interaction: ChatInputCommandInteraction): string {
   return JSON.stringify([subcommand, player]);
 }
 
+// Niflheim teams are named with their division so staff can see which membership changes.
+function teamName(team: LeagueTeam): string {
+  return isLayeredDivision(team.division) ? `${team.franchise} (${team.division})` : team.franchise;
+}
+
 function preview(plan: LeagueMutationPlan): string {
   if (plan.kind === 'trade') {
     if (isOneWayTrade(plan)) {
@@ -123,7 +151,7 @@ function preview(plan: LeagueMutationPlan): string {
       const receivingAfter = plan.rosters.filter(row => row.teamRoleId === receiver!.teamRoleId).length;
       return [
         '**Trade preview · 1-for-0 (one-way transfer)**',
-        `${plan.players[0]} (<@${plan.playerIds[0]}>): ${sender!.franchise} → ${receiver!.franchise}`,
+        `${plan.players[0]} (<@${plan.playerIds[0]}>): ${teamName(sender!)} → ${teamName(receiver!)}`,
         `${sender!.franchise} roster: ${sendingAfter + 1} → ${sendingAfter}`,
         `${receiver!.franchise} roster: ${receivingAfter - 1} → ${receivingAfter}`,
         ...(receivingAfter > 7 ? ['The receiving roster would exceed seven players. Confirm only if staff approve the exception.'] : []),
@@ -134,19 +162,26 @@ function preview(plan: LeagueMutationPlan): string {
     }
     return [
       '**Trade preview**',
-      `${plan.players[0]}: ${plan.teams[0]!.franchise} → ${plan.teams[1]!.franchise}`,
-      `${plan.players[1]}: ${plan.teams[1]!.franchise} → ${plan.teams[0]!.franchise}`,
+      `${plan.players[0]}: ${teamName(plan.teams[0]!)} → ${teamName(plan.teams[1]!)}`,
+      `${plan.players[1]}: ${teamName(plan.teams[1]!)} → ${teamName(plan.teams[0]!)}`,
       '',
       'No changes were made. Re-run this command with `confirm:True` to process the approved trade.',
     ].join('\n');
   }
   if (plan.kind === 'drop' || plan.kind === 'departure' || plan.kind === 'self-drop') {
-    const destination = plan.kind === 'drop' ? 'Free Agents' : plan.kind === 'departure' ? 'Inactive' : 'Self-Drop Suspension';
-    const replacement = plan.players[1] ? `\n${plan.players[1]}: Free Agents → ${plan.teams[0]!.franchise}` : '';
+    const parent = LEAGUE_DIVISION_METADATA[plan.teams[0]!.division].layeredOn;
+    const destination = plan.kind === 'drop' ? parent ? `Released (${parent} status unchanged)` : 'Free Agents'
+      : plan.kind === 'departure' ? 'Inactive' : 'Self-Drop Suspension';
+    const moves = plan.teams.map((team) => `${plan.players[0]}: ${teamName(team)} → ${destination}`).join('\n');
+    const replacement = plan.players[1] ? `\n${plan.players[1]}: Free Agents → ${teamName(plan.teams[0]!)}` : '';
     const label = plan.kind === 'self-drop' ? 'Self-drop' : plan.kind[0]!.toUpperCase() + plan.kind.slice(1);
-    return `**${label} preview**\n${plan.players[0]}: ${plan.teams[0]!.franchise} → ${destination}${replacement}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
+    return `**${label} preview**\n${moves}${replacement}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
   }
-  if (plan.kind === 'pickup') return `**Pickup preview**\n${plan.players[0]}: Free Agents → ${plan.teams[0]!.franchise}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
+  if (plan.kind === 'pickup') {
+    const parent = LEAGUE_DIVISION_METADATA[plan.teams[0]!.division].layeredOn;
+    const stays = parent ? `\nThey stay a ${parent} free agent.` : '';
+    return `**Pickup preview**\n${plan.players[0]}: Free Agents → ${teamName(plan.teams[0]!)}${stays}\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
+  }
   return `**Name-change preview**\nDiscord server nickname: ${plan.discordNicknameChange?.beforeDisplayName ?? plan.players[0]} → ${plan.players[0]}\nOfficial league name: ${plan.players[0]}\nCurrent Rosters, Player Name History and public roster will be synced; historical aliases remain preserved.\n\nNo changes were made. Re-run with \`confirm:True\` to continue.`;
 }
 

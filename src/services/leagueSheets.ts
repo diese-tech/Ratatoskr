@@ -17,7 +17,7 @@ import {
   SELF_DROP_LEAGUE_STATUS,
   isOneWayTrade,
 } from '../domain/leagueOperations.js';
-import { LEAGUE_DIVISIONS, LEAGUE_DIVISION_METADATA, parseLeagueDivision } from '../domain/leagueDivisions.js';
+import { LEAGUE_DIVISIONS, LEAGUE_DIVISION_METADATA, isLeagueDivision, parseLeagueDivision } from '../domain/leagueDivisions.js';
 
 type Cell = string | number | boolean | null;
 type CellRows = Cell[][];
@@ -573,6 +573,12 @@ export class LeagueSheetsService {
     ];
     after.rosters[rosterRow - 5]![4] = plan.newDiscordId;
     after.rosters[rosterRow - 5]![5] = plan.rosterAfter.player;
+    if (plan.layeredAfter) {
+      const layeredRow = plan.layeredAfter.sheetRow;
+      adminUpdates.push({ range: `'Current Rosters'!E${layeredRow}:F${layeredRow}`, values: [[plan.newDiscordId, plan.layeredAfter.player]] });
+      after.rosters[layeredRow - 5]![4] = plan.newDiscordId;
+      after.rosters[layeredRow - 5]![5] = plan.layeredAfter.player;
+    }
     after.names[nameRow - 5]![3] = plan.oldNameAfter.nameStatus;
     after.names[plan.newName.sheetRow - 5] = nextName;
     const publicUpdates = this.resolvePublicChanges(loaded, plan.publicChanges);
@@ -678,25 +684,29 @@ export class LeagueSheetsService {
       }
     }
     const plan = prepared.plan;
+    const assignments = [plan.rosterAfter, ...(plan.layeredAfter ? [plan.layeredAfter] : [])];
     const roster = fresh.snapshot.rosters.filter((row) => row.discordId === plan.newDiscordId);
     const currentNames = fresh.snapshot.names.filter((row) => row.discordId === plan.newDiscordId && row.nameStatus === 'Current Discord Name');
     const equal = <T extends object>(expected: T, actual: T | undefined) => actual
       && (Object.keys(expected) as Array<keyof T>).every((key) => expected[key] === actual[key]);
-    if (roster.length !== 1 || currentNames.length !== 1 || !equal(plan.rosterAfter, roster[0]) || !equal(plan.newName, currentNames[0])
+    if (roster.length !== assignments.length || currentNames.length !== 1
+      || assignments.some((expected) => !equal(expected, roster.find((row) => row.sheetRow === expected.sheetRow))) || !equal(plan.newName, currentNames[0])
       || fresh.snapshot.rosters.some((row) => row.discordId === plan.oldDiscordId)
       || fresh.snapshot.names.some((row) => row.discordId === plan.oldDiscordId && row.nameStatus === 'Current Discord Name'))
       throw new LeagueSheetReconciliationRequiredError('Account replacement active identity invariants do not match the approved plan.');
     for (const expected of [plan.oldNameAfter, ...plan.preservedHistory.nameRows])
       if (!equal(expected, fresh.snapshot.names.find(row => row.sheetRow === expected.sheetRow)))
         throw new LeagueSheetReconciliationRequiredError('The original account name/alias history changed. Review preserved attribution before reconciliation.');
-    const block = publicTeamCellsFor(plan.rosterAfter.division)[plan.rosterAfter.franchise];
-    const expectedBlock = prepared.after.publicByDivision[plan.rosterAfter.division];
-    const currentBlock = fresh.sources.publicByDivision[plan.rosterAfter.division];
-    const ownedRows = block && Array.from({ length: block.endRow - block.startRow + 1 }, (_, index) => index + block.startRow - 1);
-    const identityRows = ownedRows?.filter(row => value(expectedBlock, row, block!.column) === plan.rosterAfter.player);
-    if (identityRows?.length !== 1 || value(currentBlock, identityRows[0]!, block!.column) !== plan.rosterAfter.player
-      || ownedRows!.filter(row => value(currentBlock, row, block!.column) === plan.rosterAfter.player).length !== 1)
-      throw new LeagueSheetReconciliationRequiredError('The replacement public roster assignment is missing, moved or duplicated.');
+    for (const assignment of assignments) {
+      const block = publicTeamCellsFor(assignment.division)[assignment.franchise];
+      const expectedBlock = prepared.after.publicByDivision[assignment.division];
+      const currentBlock = fresh.sources.publicByDivision[assignment.division];
+      const ownedRows = block && Array.from({ length: block.endRow - block.startRow + 1 }, (_, index) => index + block.startRow - 1);
+      const identityRows = ownedRows?.filter(row => value(expectedBlock, row, block!.column) === assignment.player);
+      if (identityRows?.length !== 1 || value(currentBlock, identityRows[0]!, block!.column) !== assignment.player
+        || ownedRows!.filter(row => value(currentBlock, row, block!.column) === assignment.player).length !== 1)
+        throw new LeagueSheetReconciliationRequiredError('The replacement public roster assignment is missing, moved or duplicated.');
+    }
     return { draftVerification: prepared.draftVerification,
       sourceFingerprint: createHash('sha256').update(JSON.stringify({ sources: fresh.sources, drafts })).digest('hex') };
   }
@@ -991,11 +1001,14 @@ export class LeagueSheetsService {
       record.processedById, record.announcementId ?? '', 'Completed',
       `${record.processedBy}; reinstates ${plan.reinstatement.source.reference}; approved advisories: ${plan.reinstatement.selection.overrides.join(', ')}; future sanction preserved${plan.reinstatement.selection.reason ? `; reason: ${plan.reinstatement.selection.reason}` : ''}`,
     ]] : exitDestination ? [
-      [
-        record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
-        plan.teams[0]!.franchise, exitDestination, plan.playerIds[0]!, plan.players[0]!,
+      // One row per team left: departure and self-drop can end a Niflheim membership too (#200).
+      ...plan.teams.map((team) => [
+        record.reference, plan.kind, record.effectiveDate, team.division,
+        team.franchise, plan.kind === 'drop' && LEAGUE_DIVISION_METADATA[team.division].layeredOn
+          ? `Released (${LEAGUE_DIVISION_METADATA[team.division].layeredOn} status unchanged)` : exitDestination,
+        plan.playerIds[0]!, plan.players[0]!,
         record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
-      ],
+      ]),
       ...(plan.playerIds[1] ? [[
         record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
         'Free Agents', plan.teams[0]!.franchise, plan.playerIds[1], plan.players[1]!,
@@ -1029,11 +1042,13 @@ export class LeagueSheetsService {
     const picks = tracking?.picks ?? new Map<string, DraftPickMove>();
     const moved = new Map<string, DraftPickMove>();
     for (const row of transactionRows) {
-      const pick = picks.get(String(row[6] ?? ''));
+      // Draft Picks tracks the primary draft; a Niflheim move never moves that pick.
+      const layeredRow = isLeagueDivision(String(row[3] ?? '')) && LEAGUE_DIVISION_METADATA[String(row[3]) as LeagueDivision].layeredOn;
+      const pick = layeredRow ? undefined : picks.get(String(row[6] ?? ''));
       // The transaction row carries the current name; Draft Picks may predate a rename.
       if (pick) moved.set(pick.discordId, { ...pick, player: String(row[7] ?? '') || pick.player });
       // Column M drives the Transaction History yellow conditional-format rule.
-      row.push(pick ? draftPickLabel(pick) : !tracking || tracking.health.status === 'ready' ? ''
+      row.push(pick ? draftPickLabel(pick) : layeredRow || !tracking || tracking.health.status === 'ready' ? ''
         : tracking.health.status === 'missing-tab' ? 'Not verified: Draft Picks tab missing'
           : tracking.health.status === 'empty-tab' ? 'Not verified: Draft Picks empty' : 'Not verified: Draft Picks incomplete');
     }

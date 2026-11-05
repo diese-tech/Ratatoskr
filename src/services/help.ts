@@ -81,7 +81,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       {
         usage: '/transaction trade | drop | self-drop | pickup | rename | departure',
         description:
-          'Allfather, Aesir and Valkyrie staff: run once to see the changes, then run the same command with confirm:true to approve. Rename changes the Discord server nickname and league records, keeping old names. Drop, self-drop and departure can include a replacement from the same division. Self-drop suspends the player for this season and the next; it does not make them a Free Agent. Rat checks Discord and both roster sheets, records who approved it, then posts the completed move in transactions.',
+          'Allfather, Aesir and Valkyrie staff: run once to see the changes, then run the same command with confirm:true to approve. Rename changes the Discord server nickname and league records, keeping old names. Drop, self-drop and departure can include a replacement from the same division. Self-drop suspends the player for this season and the next; it does not make them a Free Agent. Niflheim pickups come from Svartalfheim free agents, who stay free agents there. For a player on both a Svartalfheim and a Niflheim team, choose division to say which team a trade or drop is for; departure and self-drop end both. Rat checks Discord and both roster sheets, records who approved it, then posts the completed move in transactions.',
       },
     ],
   },

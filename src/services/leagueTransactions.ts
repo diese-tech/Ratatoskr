@@ -225,7 +225,7 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
       const isAbsentExitPlayer = (plan.kind === 'departure' || plan.kind === 'self-drop')
         && discordId === plan.playerIds[0]
         && !plan.discordRoleChanges.some((change) => change.discordId === discordId);
-      if (isAbsentExitPlayer && rosterRows.length === 1) {
+      if (isAbsentExitPlayer && (rosterRows.length === 1 || layeredRoster(snapshot.rosters, discordId))) {
         continue;
       }
       throw new Error(`Discord member ${discordId} could not be loaded.`);
@@ -347,20 +347,26 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
     };
   }
   const team = plan.teams[0]!;
+  // Departure and self-drop can end a Svartalfheim and a Niflheim membership together (#200).
+  const allTeams = plan.teams.map((entry) => mention(entry.teamRoleId)).join(' and ');
   const replacement = plan.playerIds[1]
     ? ` ${mention(team.teamRoleId)} picks up ${player(1)} in their place.`
     : '';
   let line: string;
   if (plan.kind === 'reinstatement') line = `${player(0)} returns to ${mention(team.teamRoleId)}.\n\nOfficial league date: ${effectiveDate ?? plan.reinstatement!.selection.effectiveDate}.`;
-  else if (plan.kind === 'departure') line = `${player(0)} leaves ${mention(team.teamRoleId)} and the YSL server.${replacement}`;
-  else if (plan.kind === 'self-drop') line = `${player(0)} self-drops from ${mention(team.teamRoleId)}.${replacement}`;
+  else if (plan.kind === 'departure') line = `${player(0)} leaves ${allTeams} and the YSL server.${replacement}`;
+  else if (plan.kind === 'self-drop') line = `${player(0)} self-drops from ${allTeams}.${replacement}`;
+  else if (plan.kind === 'drop' && isLayeredDivision(team.division)) line = `${player(0)} leaves ${mention(team.teamRoleId)}.${replacement}`;
   else if (plan.kind === 'drop' && plan.playerIds[1]) {
     line = `${mention(team.teamRoleId)} drops ${player(0)} into free agency and picks up ${player(1)}.`;
   } else if (plan.kind === 'drop') line = `${player(0)} leaves ${mention(team.teamRoleId)} and enters free agency.`;
+  // A Niflheim pickup comes from the Svartalfheim pool and the player stays a free agent there.
+  else if (isLayeredDivision(team.division)) line = `${player(0)} joins ${mention(team.teamRoleId)}.`;
   else line = `${player(0)} leaves free agency to join ${mention(team.teamRoleId)}.`;
+  const teamRoleIds = plan.teams.map((entry) => entry.teamRoleId);
   return {
-    content: content([team.teamRoleId]),
-    allowedRoleIds: [team.teamRoleId],
+    content: content(teamRoleIds),
+    allowedRoleIds: teamRoleIds,
     title: 'Word Travels the Branches',
     description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${line}`,
     footer: `Posted by ${actorName}`,
@@ -484,7 +490,18 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
     ]));
-    if (isOneWayTrade(plan)) {
+    // A transfer pins the exact managed roles so its two writes use singular, cache-safe role
+    // deltas. A Niflheim transfer leaves the primary roles as they are (its own roles are
+    // checked by `layered`), so it pins the primary roles the player holds now (#200).
+    if (isOneWayTrade(plan) && isLayeredDivision(plan.teams[0]!.division)) {
+      const change = plan.discordRoleChanges[0]!;
+      const before = beforeByPlayer.get(change.discordId)!;
+      const primaryManaged = new Set([...before.configuredTeamRoleIds, ...before.configuredDivisionRoleIds, before.freeAgentRoleId]);
+      const held = (loaded.snapshot.discordMembers.find((member) => member.discordId === change.discordId)?.roleIds ?? [])
+        .filter((roleId) => primaryManaged.has(roleId));
+      before.observedManagedRoleIds = held;
+      afterByPlayer.get(change.discordId)!.observedManagedRoleIds = [...held];
+    } else if (isOneWayTrade(plan)) {
       const change = plan.discordRoleChanges[0]!;
       const before = beforeByPlayer.get(change.discordId)!;
       const after = afterByPlayer.get(change.discordId)!;
