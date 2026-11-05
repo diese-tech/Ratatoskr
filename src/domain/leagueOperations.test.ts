@@ -7,6 +7,7 @@ import {
   buildDropPlan,
   buildOneWayTradePlan,
   buildPickupPlan,
+  buildReinstatementPlan,
   buildRenamePlan,
   buildSelfDropPlan,
   buildTradePlan,
@@ -620,4 +621,24 @@ test('departure and self-drop end both memberships in one plan', () => {
   assert.deepEqual(departure.publicChanges.map((change) => `${change.division}:${change.group}`), ['Svartalfheim:Little Monsters', 'Niflheim:Something Spicy']);
   assert.equal(departure.nameUpdates.find((row) => row.discordId === 'qronch')!.leagueStatus, 'Inactive');
   assert.deepEqual(auditLeagueRoster(applyPlan(current, departure), { allowAbsentRosterMemberId: 'qronch' }), []);
+});
+
+test('reinstatement restores the Niflheim row the original exit removed, and refuses if that team is gone', () => {
+  const current = niflheimSnapshot();
+  const away = applyPlan(current, buildSelfDropPlan(current, 'qronch'));
+  const source = {
+    reference: 'YSL-TRX-1', playerId: 'qronch', kind: 'self-drop', effectiveDate: '2026-11-01', processedBy: 'Admin', processedById: 'admin',
+    teamRoleId: 'team-s-lm', franchise: 'Little Monsters', division: 'Svartalfheim', resultingStatus: SELF_DROP_LEAGUE_STATUS, layeredTeamRoleId: 'team-n-ss',
+  } as const;
+  const selection = {
+    version: 1, kind: 'reinstate', playerId: 'qronch', sourceReference: 'YSL-TRX-1', teamRoleId: 'team-s-lm',
+    returnStatus: 'Player', effectiveDate: '2026-11-05', overrides: [] as string[], preserveFutureSanction: true,
+  } as const;
+  const plan = buildReinstatementPlan(away, selection, source);
+  assert.deepEqual(niflheimRows(plan.rosters), ['faye:Something Spicy', 'mia:Little Monsters', 'qronch:Something Spicy']);
+  assert.deepEqual(plan.discordRoleChanges, [{ discordId: 'qronch', remove: [], add: ['team-s-lm', 'team-n-ss', 'division-n'] }]);
+  assert.deepEqual(auditLeagueRoster(applyPlan(away, plan)), []);
+
+  away.teams = away.teams.filter((team) => team.teamRoleId !== 'team-n-ss');
+  assert.throws(() => buildReinstatementPlan(away, selection, source), /Niflheim team no longer exists/);
 });

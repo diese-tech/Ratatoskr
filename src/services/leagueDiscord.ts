@@ -153,11 +153,14 @@ export class DiscordLeagueGateway implements LeagueDiscordPort {
     if (!member || member.bot) throw new LeagueMutationValidationError('The returning player must be a current human member of this server. Ask them to rejoin, then preview again.');
     const change = plan.discordRoleChanges[0]!;
     const before = plan.reinstatement!.beforeManagedRoleIds;
-    const after = [plan.teams[0]!.teamRoleId, plan.teams[0]!.divisionRoleId].sort();
+    // A restored Niflheim membership adds its team and division role too (#200).
+    const layeredIds = plan.teams.slice(1).flatMap(t => [t.teamRoleId, t.divisionRoleId]);
+    const after = [plan.teams[0]!.teamRoleId, plan.teams[0]!.divisionRoleId, ...layeredIds].sort();
     const managedRoleIds = [...new Set([snapshot.freeAgentRoleId, ...snapshot.teams.filter(t => t.active && !isLayeredDivision(t.division)).flatMap(t => [t.teamRoleId, t.divisionRoleId])])];
-    if (JSON.stringify(member.roleIds.filter(id => managedRoleIds.includes(id)).sort()) !== JSON.stringify(before))
+    if (JSON.stringify(member.roleIds.filter(id => managedRoleIds.includes(id)).sort()) !== JSON.stringify(before)
+      || member.roleIds.some(id => layeredIds.includes(id)))
       throw new LeagueMutationValidationError('The returning player’s roles changed. Review a fresh preview.');
-    await this.assertAccountReplacementRoleOwnership([{ ...change, before, after, managedRoleIds }]);
+    await this.assertAccountReplacementRoleOwnership([{ ...change, before, after, managedRoleIds: [...managedRoleIds, ...layeredIds] }]);
   }
 
   async getMembers(options: LeagueMemberReadOptions = {}): Promise<DiscordLeagueMember[]> {

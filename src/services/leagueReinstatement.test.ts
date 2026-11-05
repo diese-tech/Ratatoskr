@@ -798,3 +798,15 @@ test('nickname failures roll back or reconcile, and a Sheet failure after the ni
     } finally { f.close(); }
   }
 });
+
+test('an exit that ended a Niflheim membership is found from its primary history row and remembers the Niflheim team (#200)', async () => {
+  const db = openDatabase(':memory:');
+  const team = (division: 'Svartalfheim' | 'Niflheim', teamRoleId: string) => ({ teamKey: teamRoleId, franchise: 'Little Monsters', division, teamRoleId, teamRole: teamRoleId, divisionRoleId: `division-${division}`, active: true });
+  const plan = { kind: 'self-drop', rosters: [], nameUpdates: [], publicChanges: [], discordRoleChanges: [], teams: [team('Svartalfheim', 'lm-sd'), team('Niflheim', 'lm-nd')], players: ['Qronch'], playerIds: ['qronch'] };
+  createLeagueTransaction(db, { reference: 'YSL-TRX-Q', guildId: 'g', kind: 'self-drop', actorUserId: 'fuego', payload: { plan, record: {} } });
+  db.prepare("UPDATE league_transactions SET status='completed' WHERE reference='YSL-TRX-Q'").run();
+  const row = (division: string) => ['YSL-TRX-Q', 'self-drop', '2026-11-01', division, 'Little Monsters', 'Suspended - Self-Drop (Current + Next Season)', 'qronch', 'Qronch', 'fuego', '', 'Completed', 'Fuego'];
+  const sources = await reinstatementSources(db, 'g', { readTransactionHistory: async () => [row('Svartalfheim'), row('Niflheim')] } as never);
+  assert.deepEqual(sources.map((source) => [source.teamRoleId, source.layeredTeamRoleId]), [['lm-sd', 'lm-nd']]);
+  db.close();
+});

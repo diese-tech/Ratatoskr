@@ -34,6 +34,7 @@ export function leagueOpsPreviewText(data: DeepReadonly<Pick<LeagueOpsPanelData,
     const p = replacement.plan;
     return [`Move ${p.rosterBefore.player} to their new Discord account.`, `Old account: ${p.oldDiscordId}; new account: ${p.newDiscordId}.`, `Roster name: ${p.rosterBefore.player} → ${p.rosterAfter.player}`,
       `Keep their team and position: ${p.rosterAfter.franchise}, ${p.rosterAfter.division}, ${p.rosterAfter.rosterStatus}.`,
+      ...(p.layeredAfter ? [`Keep their ${p.layeredAfter.division} team too: ${p.layeredAfter.franchise}, ${p.layeredAfter.rosterStatus}.`] : []),
       'Keep the old account and names in history. Add one current name for the new account. Past transactions keep their original account IDs.',
       `Name History row ${p.oldNameAfter.sheetRow}: ${p.oldNameBefore.currentLeagueName} / ${p.oldNameBefore.knownName} → Previous / Alternate.`,
       `New current name in row ${p.newName.sheetRow}: ${p.newName.currentLeagueName}; preserve ${p.preservedHistory.nameRows.length} past-name rows.`,

@@ -573,6 +573,12 @@ export class LeagueSheetsService {
     ];
     after.rosters[rosterRow - 5]![4] = plan.newDiscordId;
     after.rosters[rosterRow - 5]![5] = plan.rosterAfter.player;
+    if (plan.layeredAfter) {
+      const layeredRow = plan.layeredAfter.sheetRow;
+      adminUpdates.push({ range: `'Current Rosters'!E${layeredRow}:F${layeredRow}`, values: [[plan.newDiscordId, plan.layeredAfter.player]] });
+      after.rosters[layeredRow - 5]![4] = plan.newDiscordId;
+      after.rosters[layeredRow - 5]![5] = plan.layeredAfter.player;
+    }
     after.names[nameRow - 5]![3] = plan.oldNameAfter.nameStatus;
     after.names[plan.newName.sheetRow - 5] = nextName;
     const publicUpdates = this.resolvePublicChanges(loaded, plan.publicChanges);
@@ -678,25 +684,29 @@ export class LeagueSheetsService {
       }
     }
     const plan = prepared.plan;
+    const assignments = [plan.rosterAfter, ...(plan.layeredAfter ? [plan.layeredAfter] : [])];
     const roster = fresh.snapshot.rosters.filter((row) => row.discordId === plan.newDiscordId);
     const currentNames = fresh.snapshot.names.filter((row) => row.discordId === plan.newDiscordId && row.nameStatus === 'Current Discord Name');
     const equal = <T extends object>(expected: T, actual: T | undefined) => actual
       && (Object.keys(expected) as Array<keyof T>).every((key) => expected[key] === actual[key]);
-    if (roster.length !== 1 || currentNames.length !== 1 || !equal(plan.rosterAfter, roster[0]) || !equal(plan.newName, currentNames[0])
+    if (roster.length !== assignments.length || currentNames.length !== 1
+      || assignments.some((expected) => !equal(expected, roster.find((row) => row.sheetRow === expected.sheetRow))) || !equal(plan.newName, currentNames[0])
       || fresh.snapshot.rosters.some((row) => row.discordId === plan.oldDiscordId)
       || fresh.snapshot.names.some((row) => row.discordId === plan.oldDiscordId && row.nameStatus === 'Current Discord Name'))
       throw new LeagueSheetReconciliationRequiredError('Account replacement active identity invariants do not match the approved plan.');
     for (const expected of [plan.oldNameAfter, ...plan.preservedHistory.nameRows])
       if (!equal(expected, fresh.snapshot.names.find(row => row.sheetRow === expected.sheetRow)))
         throw new LeagueSheetReconciliationRequiredError('The original account name/alias history changed. Review preserved attribution before reconciliation.');
-    const block = publicTeamCellsFor(plan.rosterAfter.division)[plan.rosterAfter.franchise];
-    const expectedBlock = prepared.after.publicByDivision[plan.rosterAfter.division];
-    const currentBlock = fresh.sources.publicByDivision[plan.rosterAfter.division];
-    const ownedRows = block && Array.from({ length: block.endRow - block.startRow + 1 }, (_, index) => index + block.startRow - 1);
-    const identityRows = ownedRows?.filter(row => value(expectedBlock, row, block!.column) === plan.rosterAfter.player);
-    if (identityRows?.length !== 1 || value(currentBlock, identityRows[0]!, block!.column) !== plan.rosterAfter.player
-      || ownedRows!.filter(row => value(currentBlock, row, block!.column) === plan.rosterAfter.player).length !== 1)
-      throw new LeagueSheetReconciliationRequiredError('The replacement public roster assignment is missing, moved or duplicated.');
+    for (const assignment of assignments) {
+      const block = publicTeamCellsFor(assignment.division)[assignment.franchise];
+      const expectedBlock = prepared.after.publicByDivision[assignment.division];
+      const currentBlock = fresh.sources.publicByDivision[assignment.division];
+      const ownedRows = block && Array.from({ length: block.endRow - block.startRow + 1 }, (_, index) => index + block.startRow - 1);
+      const identityRows = ownedRows?.filter(row => value(expectedBlock, row, block!.column) === assignment.player);
+      if (identityRows?.length !== 1 || value(currentBlock, identityRows[0]!, block!.column) !== assignment.player
+        || ownedRows!.filter(row => value(currentBlock, row, block!.column) === assignment.player).length !== 1)
+        throw new LeagueSheetReconciliationRequiredError('The replacement public roster assignment is missing, moved or duplicated.');
+    }
     return { draftVerification: prepared.draftVerification,
       sourceFingerprint: createHash('sha256').update(JSON.stringify({ sources: fresh.sources, drafts })).digest('hex') };
   }

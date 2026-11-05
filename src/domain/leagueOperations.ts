@@ -801,6 +801,8 @@ export type ReinstatementSource = {
   effectiveDate: string; processedBy: string; processedById: string;
   teamRoleId: string; franchise: string; division: LeagueDivision; resultingStatus: string;
   completedAt?: string; announcementId?: string;
+  /** The Niflheim team the original exit also removed (#200); restored by the return. */
+  layeredTeamRoleId?: string;
 };
 export type ReinstatementSelection = {
   version: 1; kind: 'reinstate'; playerId: string; sourceReference: string;
@@ -853,19 +855,33 @@ export function buildReinstatementPlan(snapshot: LeagueSnapshot, selection: Rein
   if (count >= 7) advisories.push({ id: 'roster-count', text: `Roster count: ${count}/7 before return. Staff may approve a policy exception; the public block still needs an empty owned cell.` });
   if (/suspend|ban|self-drop/i.test(name.leagueStatus)) advisories.push({ id: 'discipline', text: `Restore current-season Player status despite ${name.leagueStatus}. The original sanction and any next-season penalty remain recorded and are not waived.` });
   const blockers = member ? [] : ['This player is absent from Discord. Ask them to rejoin, then request a fresh preview. Rat cannot safely save a roster return with roles still pending.'];
+  // Restore exactly what the exit removed, including a Niflheim membership (#200).
+  const layeredTeam = source.layeredTeamRoleId ? snapshot.teams.find(t => t.active && t.teamRoleId === source.layeredTeamRoleId) : undefined;
+  if (source.layeredTeamRoleId && !layeredTeam)
+    throw new LeagueMutationValidationError('The player’s Niflheim team no longer exists, so Rat cannot restore everything the original exit removed. Ask staff to review the Niflheim teams first.');
+  if (layeredTeam && (layeredRoster(snapshot.rosters, selection.playerId)
+    || member?.roleIds.some(id => id === layeredTeam.divisionRoleId || snapshot.teams.some(t => t.active && isLayeredDivision(t.division) && t.teamRoleId === id))))
+    throw new LeagueMutationValidationError('This player already has a Niflheim team or role. Reconcile the current assignment first.');
+  if (layeredTeam && teamAreaUsesName(snapshot, layeredTeam.teamRoleId, name.currentLeagueName))
+    throw new LeagueMutationValidationError('Another player already uses this name in the Niflheim roster. Resolve the identity conflict first.');
   const nextRow = Math.max(5, ...snapshot.rosters.map(row => row.sheetRow)) + 1;
-  return { kind: 'reinstatement', rosters: [...snapshot.rosters.map(row => ({ ...row })), {
-    sheetRow: nextRow, division: team.division, franchise: team.franchise, teamRoleId: team.teamRoleId,
-    team: team.teamRole, discordId: selection.playerId, player: name.currentLeagueName, rosterStatus: 'Player',
-  }], nameUpdates: snapshot.names.map(row => row.sheetRow === name.sheetRow ? { ...row, franchise: team.franchise, leagueStatus: 'Player' } : { ...row }),
+  const returned = (entry: LeagueTeam, sheetRow: number): LeagueRosterRow => ({
+    sheetRow, division: entry.division, franchise: entry.franchise, teamRoleId: entry.teamRoleId,
+    team: entry.teamRole, discordId: selection.playerId, player: name.currentLeagueName, rosterStatus: 'Player',
+  });
+  return { kind: 'reinstatement', rosters: [...snapshot.rosters.map(row => ({ ...row })), returned(team, nextRow),
+    ...(layeredTeam ? [returned(layeredTeam, nextRow + 1)] : [])],
+    nameUpdates: snapshot.names.map(row => row.sheetRow === name.sheetRow ? { ...row, franchise: team.franchise, leagueStatus: 'Player' } : { ...row }),
     publicChanges: [
       ...(name.leagueStatus === 'Free Agent' ? [{ division: name.division, area: 'free-agent' as const, group: 'Free Agents', from: name.currentLeagueName, to: '' }] : []),
       { division: team.division, area: 'team', group: team.franchise, from: '', to: name.currentLeagueName },
+      ...(layeredTeam ? [{ division: layeredTeam.division, area: 'team' as const, group: layeredTeam.franchise, from: '', to: name.currentLeagueName }] : []),
     ], discordRoleChanges: member ? [{ discordId: selection.playerId,
       remove: before.filter(id => id !== team.teamRoleId && id !== team.divisionRoleId),
-      add: [team.teamRoleId, team.divisionRoleId].filter(id => !before.includes(id)) }] : [],
+      add: [team.teamRoleId, team.divisionRoleId].filter(id => !before.includes(id))
+        .concat(layeredTeam ? [layeredTeam.teamRoleId, layeredTeam.divisionRoleId] : []) }] : [],
     ...(nicknameChange ? { discordNicknameChange: nicknameChange } : {}),
-    teams: [team], players: [name.currentLeagueName], playerIds: [selection.playerId],
+    teams: [team, ...(layeredTeam ? [layeredTeam] : [])], players: [name.currentLeagueName], playerIds: [selection.playerId],
     reinstatement: { selection, source, currentStatus: name.leagueStatus, advisories, blockers, beforeManagedRoleIds: before,
       ...(nicknameChange ? { nicknameRestore: { currentDisplayName: nicknameChange.beforeDisplayName, restoredName: recordedName } } : {}) },
   };
