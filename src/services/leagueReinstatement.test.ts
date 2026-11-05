@@ -808,5 +808,10 @@ test('an exit that ended a Niflheim membership is found from its primary history
   const row = (division: string) => ['YSL-TRX-Q', 'self-drop', '2026-11-01', division, 'Little Monsters', 'Suspended - Self-Drop (Current + Next Season)', 'qronch', 'Qronch', 'fuego', '', 'Completed', 'Fuego'];
   const sources = await reinstatementSources(db, 'g', { readTransactionHistory: async () => [row('Svartalfheim'), row('Niflheim')] } as never);
   assert.deepEqual(sources.map((source) => [source.teamRoleId, source.layeredTeamRoleId]), [['lm-sd', 'lm-nd']]);
+  // With division:Niflheim the exit lists the Niflheim team first; it still ended both memberships.
+  plan.teams.reverse();
+  db.prepare('UPDATE league_transactions SET payload_json=? WHERE reference=?').run(JSON.stringify({ plan, record: {} }), 'YSL-TRX-Q');
+  const reordered = await reinstatementSources(db, 'g', { readTransactionHistory: async () => [row('Niflheim'), row('Svartalfheim')] } as never);
+  assert.deepEqual(reordered.map((source) => [source.teamRoleId, source.layeredTeamRoleId]), [['lm-sd', 'lm-nd']]);
   db.close();
 });

@@ -41,18 +41,20 @@ export async function reinstatementSources(db: Database.Database, guildId: strin
     if (transaction.status !== 'completed' || !['drop', 'departure', 'self-drop'].includes(transaction.kind)) return [];
     const payload = transaction.payload as { plan?: LeagueMutationPlan; record?: LeagueTransactionRecord };
     const plan = payload?.plan;
-    // A Niflheim-only drop changes no league status, so there is nothing to reinstate (#200).
-    if (!plan || plan.kind !== transaction.kind || !plan.playerIds[0] || !plan.teams[0] || isLayeredDivision(plan.teams[0].division)) return [];
+    // A Niflheim drop changes no league status, so there is nothing to reinstate. A league
+    // exit names its targeted team first, so find the primary team by division (#200).
+    const primary = plan?.teams.find(team => !isLayeredDivision(team.division));
+    if (!plan || plan.kind !== transaction.kind || !plan.playerIds[0] || !primary || (plan.kind === 'drop' && primary !== plan.teams[0])) return [];
     // An exit that ended two memberships has one history row per team; verify the primary one.
     const matches = rows.filter(row => String(row[0]) === transaction.reference && String(row[6]) === plan.playerIds[0]
-      && String(row[3]) === plan.teams[0]!.division);
-    const layeredTeam = plan.teams.slice(1).find(team => isLayeredDivision(team.division));
+      && String(row[3]) === primary.division);
+    const layeredTeam = plan.teams.find(team => isLayeredDivision(team.division));
     if (matches.length !== 1) return [];
     const row = matches[0]!;
     const date = String(row[2] ?? '').trim();
     const expectedStatus = transaction.kind === 'drop' ? 'Free Agent' : transaction.kind === 'departure' ? 'Inactive' : 'Suspended - Self-Drop (Current + Next Season)';
-    if (String(row[1]) !== transaction.kind || String(row[3]) !== plan.teams[0].division
-      || String(row[4]) !== plan.teams[0].franchise || String(row[5]) !== (transaction.kind === 'drop' ? 'Free Agents' : expectedStatus)
+    if (String(row[1]) !== transaction.kind || String(row[3]) !== primary.division
+      || String(row[4]) !== primary.franchise || String(row[5]) !== (transaction.kind === 'drop' ? 'Free Agents' : expectedStatus)
       || String(row[8]) !== transaction.actorUserId || String(row[10]) !== 'Completed'
       || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/.test(date)
       || !Number.isFinite(Date.parse(date))
@@ -60,8 +62,8 @@ export async function reinstatementSources(db: Database.Database, guildId: strin
     const job = getLeagueJob(db, transaction.reference);
     return [{ reference: transaction.reference, playerId: plan.playerIds[0], playerName: String(row[7] ?? plan.players[0]), kind: transaction.kind as ReinstatementSource['kind'],
       effectiveDate: date, processedBy: String(row[11] ?? payload.record?.processedBy ?? transaction.actorUserId),
-      processedById: transaction.actorUserId, teamRoleId: plan.teams[0].teamRoleId,
-      franchise: plan.teams[0].franchise, division: plan.teams[0].division, resultingStatus: expectedStatus,
+      processedById: transaction.actorUserId, teamRoleId: primary.teamRoleId,
+      franchise: primary.franchise, division: primary.division, resultingStatus: expectedStatus,
       ...(layeredTeam ? { layeredTeamRoleId: layeredTeam.teamRoleId } : {}),
       ...(job?.status === 'COMPLETED' && job.completedAt ? { completedAt: job.completedAt } : {}),
       ...(transaction.announcementId ? { announcementId: transaction.announcementId } : {}),
