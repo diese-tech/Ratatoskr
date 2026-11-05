@@ -121,7 +121,7 @@ test('a recovery preview reports fresh Discord-name drift and rejects cross-guil
   try {
     f.snapshot.discordMembers[0]!.displayName = 'Changed';
     const preview = await previewLeagueRepairRecovery(f.input, 'old-repair');
-    assert.ok(preview.findings.some((finding) => finding.includes('Discord name now:')));
+    assert.ok(preview.findings.some((finding) => finding.includes('Discord says: “Changed”')));
     await assert.rejects(
       reconcileLeagueRepairRecord({
         ...f.input,

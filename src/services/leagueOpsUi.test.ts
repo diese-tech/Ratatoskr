@@ -123,12 +123,11 @@ test('Close panel dismisses a resolved history view without approving another ac
 test('cancelled previews release the panel for another issue and old modals cannot approve it', async () => {
   const h = await harness();
   try {
-    await h.setIssues([{ key: 'first', finding: 'One — Discord division: none; expected: Vanaheim. Make the division role match.' },
-      { key: 'second', finding: 'Two — Discord division: none; expected: Vanaheim. Make the division role match.' }]);
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }, { key: 'second', finding: divisionCard('Two') }]);
     await h.click('View problem');
-    await h.click('Set Discord roles from roster sheets');
+    await h.click(FIX);
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
-    await h.click('Set Discord roles from roster sheets');
+    await h.click(FIX);
     const oldModal = h.modals.at(-1)!.custom_id;
     await h.click('Roster problems');
     // Pick the second issue using its separately rendered control.
@@ -141,14 +140,99 @@ test('cancelled previews release the panel for another issue and old modals cann
     };
     visit(h.edits.at(-1));
     await h.dispatch(ids[1]!);
-    await h.click('Set Discord roles from roster sheets');
+    await h.click(FIX);
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for second'));
-    await h.click('Set Discord roles from roster sheets');
+    await h.click(FIX);
     await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.deepEqual(h.repairConfirmations, []);
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     await until(() => h.repairConfirmations.length === 1);
     assert.deepEqual(h.repairConfirmations, ['second']);
+  } finally { h.release(); h.close(); }
+});
+
+const FIX = 'The roster is right — fix Discord';
+const divisionCard = (name: string) => `${name}’s division doesn’t match\nDiscord says: no division\nOur roster says: Vanaheim`;
+// Every disabled button in a payload, so a test can require a visible reason next to it.
+function disabledLabels(payload: unknown): string[] {
+  const labels: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== 'object') return;
+    const record = value as Record<string, unknown>;
+    if (record.disabled === true && typeof record.label === 'string') labels.push(record.label);
+    Object.values(record).forEach(visit);
+  };
+  visit(payload);
+  return labels;
+}
+
+test('a panel that already sent a fix says so on every screen and points to Review problems (#206)', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }, { key: 'second', finding: divisionCard('Two') }]);
+    await h.click('View problem');
+    const card = JSON.stringify(h.edits.at(-1));
+    assert.match(card, /One’s division doesn’t match/);
+    assert.match(card, /Nothing changes until you press Confirm/);
+    await h.click(FIX);
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
+    await h.click(FIX);
+    await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => h.repairConfirmations.length === 1);
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('You already sent a fix from this panel (saved-repair)'));
+    const locked = /You already sent a fix from this panel \(saved-repair\)[^"]*don’t send it again\.\\nTo fix another problem, press Review problems on the League Status card\./;
+    // Fix → open another problem: the lock and the way forward stay visible.
+    for (const screen of ['Roster problems', 'Saved actions', 'Check details']) {
+      await h.click(screen);
+      assert.match(JSON.stringify(h.edits.at(-1)), locked, screen);
+    }
+    await h.click('Roster problems');
+    const ids: string[] = [];
+    const visit = (value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      const record = value as Record<string, unknown>;
+      if (record.label === 'View problem') ids.push(String(record.custom_id));
+      Object.values(record).forEach(visit);
+    };
+    visit(h.edits.at(-1));
+    await h.dispatch(ids[1]!);
+    const other = h.edits.at(-1);
+    assert.match(JSON.stringify(other), /Two’s division doesn’t match/);
+    assert.match(JSON.stringify(other), locked);
+    assert.deepEqual(disabledLabels(other), [FIX]);
+    await h.click(FIX);
+    assert.deepEqual(h.repairConfirmations, ['first']);
+  } finally { h.release(); h.close(); }
+});
+
+test('Skip for now moves to the next problem and changes nothing', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }, { key: 'second', finding: divisionCard('Two') }]);
+    await h.click('View problem');
+    await h.click('Skip for now');
+    assert.match(JSON.stringify(h.edits.at(-1)), /Two’s division doesn’t match/);
+    assert.match(JSON.stringify(h.edits.at(-1)), /Skipped\. Nothing was changed\./);
+    await h.click('Skip for now');
+    assert.match(JSON.stringify(h.edits.at(-1)), /That was the last problem\. Nothing was changed\./);
+    assert.deepEqual(h.repairConfirmations, []);
+  } finally { h.release(); h.close(); }
+});
+
+test('a fresh panel shows no greyed-out buttons on its problem, saved action and detail screens', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'manual', finding: 'Vanaheim has more than one division role\nEvery Vanaheim team should use the same division role.\nAn admin needs to fix this in the league spreadsheet. Rat can’t pick the right answer by itself.' }]);
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
+    await h.click('View problem');
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
+    assert.match(JSON.stringify(h.edits.at(-1)), /Ask an admin to fix it in the league spreadsheet/);
+    await h.click('Saved actions');
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
+    await h.click('View action');
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
+    await h.click('Check details');
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
   } finally { h.release(); h.close(); }
 });
 

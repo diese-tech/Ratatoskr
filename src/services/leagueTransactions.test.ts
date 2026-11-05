@@ -262,7 +262,7 @@ test('rename exemption does not bypass unrelated league drift', async () => {
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
-  }), /multiple team roles/i);
+  }), /’s team doesn’t match\nDiscord says: .* and /);
 
   assert.equal(f.events.includes('sheet-apply'), false);
   f.db.close();
@@ -277,7 +277,7 @@ test('rename exemption does not overwrite a different manual Current Rosters nam
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
-  }), /Discord name now:[\s\S]*Current Rosters sheet: “Manual Third Name”[\s\S]*Player Name History sheet: “One”/i);
+  }), /Manual Third Name’s name doesn’t match Discord\nDiscord says: “[^”]*”\nOur roster says: “Manual Third Name”\nOur name list says: “One”/);
 
   assert.equal(f.events.includes('sheet-apply'), false);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
@@ -578,7 +578,7 @@ test('targeted role preflight validates complete role integrity even for a renam
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
-  }), /multiple team roles/i);
+  }), /’s team doesn’t match\nDiscord says: .* and /);
   assert.deepEqual(f.events, []);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
@@ -649,7 +649,7 @@ test('targeted preflight rejects stale current-name assignment metadata after th
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
-  }), /Player Name History.*Current Rosters.*make the assignments match/i);
+  }), /’s league records disagree\nOur name list says: .*\nOur roster says: /);
   assert.deepEqual(f.events, []);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();

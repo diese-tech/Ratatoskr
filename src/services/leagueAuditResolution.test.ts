@@ -266,7 +266,7 @@ test('a late role preflight change records a safe failure without opening reconc
     teamRoleId: 'wrong-team', divisionRoleId: 'division-a', active: true,
   });
   const finding = humanizeLeagueAuditIssues(current, auditLeagueRoster(current))
-    .find((issue) => issue.includes('Discord team'))!;
+    .find((issue) => issue.includes('’s team doesn’t match'))!;
   const db = openDatabase(':memory:');
   try {
     await assert.rejects(() => executeLeagueAuditRepair({

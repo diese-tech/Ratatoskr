@@ -327,7 +327,7 @@ test('an unclaimed queue intent cannot bypass the canonical worker through the e
 test('original blocked repair jobs remain actionable evidence after successful replacement and clean audits', async () => {
   const f = fixture();
   try {
-    const finding = 'One — Discord team: Dream Walkers VD; Current Rosters team: none. Make them match.';
+    const finding = 'One’s team doesn’t match\nDiscord says: Dream Walkers (Vanaheim)\nOur roster says: no team';
     const originals = [0, 1, 2].map((index) => {
       const job = enqueueLeagueJob(f.db, { guildId: 'g', type: 'repair', dedupeKey: `original:${index}`,
         payload: { action: 'repair-roles', expectedFinding: finding } });

@@ -166,7 +166,7 @@ test('a recurring repaired role finding receives fresh work while its old approv
     const correctRoles = [...f.members.get('two')!.roleIds];
     f.members.get('two')!.roleIds = ['division'];
     await f.recheck();
-    const issue = (await f.service.snapshot('admin')).issues.find(item => item.finding.includes('Two') && item.finding.includes('team role'))!;
+    const issue = (await f.service.snapshot('admin')).issues.find(item => item.finding.startsWith('Two’s team doesn’t match'))!;
     assert.ok(issue);
     const first = await f.service.previewRepair('admin', issue.key);
     const original = await f.service.confirmRepair('admin', first);
@@ -227,7 +227,7 @@ test('previously hidden role findings can be previewed, confirmed and repaired w
       f.members.get('two')!.roleIds = [...roles];
       await f.recheck();
       const issue = (await f.service.snapshot('admin')).issues.find(item =>
-        item.finding.includes('Two has multiple team roles') || item.finding.includes('Two is rostered on'))!;
+        item.finding.startsWith('Two’s team doesn’t match') || item.finding.startsWith('Two’s Free Agent role doesn’t match'))!;
       assert.ok(issue);
       const preview = await f.service.previewRepair('admin', issue.key);
       assert.equal(preview.action, 'repair-roles');

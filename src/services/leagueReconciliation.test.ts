@@ -380,7 +380,7 @@ for (const status of [429, 503]) {
       assert.equal(state.result, 'error');
       assert.equal(state.lastFullAt, verifiedAt);
       assert.equal(state.findings.length, 1);
-      assert.match(state.findings[0]!, /Discord name now/);
+      assert.match(state.findings[0]!, /name doesn’t match Discord\nDiscord says: /);
       assert.match(cards.sent[0]!.card.description, /latest check could not finish/);
       assert.match(cards.sent[0]!.card.description, /Previous results may have changed/);
       assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review problems');

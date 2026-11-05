@@ -885,7 +885,7 @@ test('audit wording and public-roster repair recognize Niflheim findings (#197)'
   const { snapshot } = await f.service.load(members, 'free-agent');
   const finding = 'Niflheim Dream Walkers public roster does not match Current Rosters.';
   assert.deepEqual(humanizeLeagueAuditIssues(snapshot, [finding]), [
-    'Niflheim / Dream Walkers — Current Rosters: none; public roster: Nif. Make the player lists match.']);
+    'The Niflheim Dream Walkers roster page doesn’t match\nOur roster says: nobody\nThe roster page says: Nif']);
   const plan = buildLeagueAuditSheetRepair(snapshot, finding, 'sync-public-roster');
   assert.deepEqual(plan.publicChanges.map(({ division, area, from, to }) => ({ division, area, from, to })),
     [{ division: 'Niflheim', area: 'team', from: 'Nif', to: '' }]);
