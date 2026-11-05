@@ -29,7 +29,6 @@ import {
   markLeagueAuditRepairReconciliationRequired,
 } from '../db/repositories/leagueAuditRepairs.js';
 import { createOrGetLeagueReconciliationTicket } from '../db/repositories/leagueOperations.js';
-import { leagueActionLabel } from './leaguePresentation.js';
 
 export type LeagueAuditRepairAction = 'use-discord-name' | 'use-league-name' | 'use-roster-name' | 'sync-public-roster' | 'mark-inactive';
 export type LeagueAuditResolutionAction = LeagueAuditRepairAction | 'repair-roles';
@@ -48,11 +47,19 @@ export function previewLeagueAuditResolution(loaded: LoadedLeagueSnapshot, findi
     .map(member => ({ ...member, roleIds: [...member.roleIds].sort() })) };
   const roleName = (id: string) => id === loaded.snapshot.freeAgentRoleId ? 'Free Agent'
     : loaded.snapshot.teams.find(team => team.teamRoleId === id)?.teamRole
-      ?? loaded.snapshot.teams.find(team => team.divisionRoleId === id)?.division ?? `Unknown league role (${id})`;
-  const playerName = 'discordId' in plan ? loaded.snapshot.discordMembers.find(member => member.discordId === plan.discordId)?.displayName ?? 'Player' : '';
+      ?? loaded.snapshot.teams.find(team => team.divisionRoleId === id)?.division ?? 'a league role Rat doesn’t recognize';
+  const playerName = 'discordId' in plan ? loaded.snapshot.discordMembers.find(member => member.discordId === plan.discordId)?.displayName ?? 'this player' : '';
+  // One line per change, in names staff know (#206).
+  const pageChange = (c: { division: string; group: string; from: string; to: string }) => {
+    const page = `the ${c.division} ${c.group} roster page`;
+    return c.from && c.to ? `On ${page}, change “${c.from}” to “${c.to}”.` : c.to ? `Add “${c.to}” to ${page}.` : `Remove “${c.from}” from ${page}.`;
+  };
   return { fingerprint: createHash('sha256').update(JSON.stringify({ finding, action, plan, sources: loaded.sources, snapshot })).digest('hex'),
-    description: 'playerIds' in plan ? `${leagueActionLabel(action)}: ${plan.players.join(' / ')}\n${plan.publicChanges.map(c => `${c.division} / ${c.group}: ${c.from || 'empty'} → ${c.to || 'empty'}`).join('\n')}`
-      : `${playerName}:\nAdd Discord roles: ${plan.add.map(roleName).join(', ') || 'none'}.\nRemove Discord roles: ${plan.remove.map(roleName).join(', ') || 'none'}.\nThe roster sheets stay the same.` };
+    description: 'playerIds' in plan
+      ? [...(action === 'mark-inactive' ? [`Mark ${plan.players.join(' and ')} inactive.`]
+        : action === 'sync-public-roster' ? [] : plan.players.length ? [`Use “${plan.players.at(-1)}” as the league name in our records. The old name is kept as a past name.`] : []),
+        ...plan.publicChanges.map(pageChange)].join('\n') || 'Nothing on the roster page needs to change.'
+      : [...plan.remove.map(id => `Remove ${roleName(id)} from ${playerName}.`), ...plan.add.map(id => `Give ${playerName} ${roleName(id)}.`), 'The roster stays the same.'].join('\n') };
 }
 
 export class LeagueAuditRepairStaleError extends LeagueAuditRepairNoWriteError {

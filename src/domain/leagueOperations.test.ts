@@ -473,6 +473,7 @@ test('rename rejects a canonical name already used in the same managed roster ar
 test('layered findings get plain-English wording, route to role repair, and repairs keep valid Niflheim roles', async () => {
   const { humanizeLeagueAuditIssues } = await import('../services/leagueAuditPresentation.js');
   const { buildLeagueAuditReviewView } = await import('../services/leagueAuditReviewView.js');
+  const { leagueFindingKind } = await import('../services/leagueAuditPresentation.js');
   const { buildManagedRoleRepair } = await import('../services/leagueAuditResolution.js');
   const current = layeredSnapshot();
   member(current, 'faye').roleIds.push('team-n-lm');
@@ -481,8 +482,10 @@ test('layered findings get plain-English wording, route to role repair, and repa
   const issues = auditLeagueRoster(current);
   const human = humanizeLeagueAuditIssues(current, issues);
   assert.ok(human.every((line) => !line.startsWith('Ratatoskr found a roster rule mismatch')), human.join('\n'));
-  assert.ok(human.includes('Faye — Discord Niflheim roles: Something Spicy ND, Little Monsters ND; Current Rosters Niflheim team: Something Spicy ND. Make the Niflheim team role match.'));
-  for (const line of human) assert.equal(buildLeagueAuditReviewView([line], 0, 'r').title, 'Roster problems — Discord roles', line);
+  // #206: the card from the issue, in team names people know.
+  assert.ok(human.includes('Faye’s Niflheim team doesn’t match\nDiscord says: Something Spicy (Niflheim) and Little Monsters (Niflheim)\nOur roster says: Something Spicy (Niflheim)'), human.join('\n\n'));
+  for (const line of human) assert.deepEqual(buildLeagueAuditReviewView([line], 0, 'r').actions[0]?.disabled, false, line);
+  for (const line of human) assert.equal(leagueFindingKind(line), 'roles', line);
   assert.deepEqual(buildManagedRoleRepair(current, 'faye'), { discordId: 'faye', remove: ['team-n-lm'], add: [] });
   assert.deepEqual(buildManagedRoleRepair(current, 'free'), { discordId: 'free', remove: ['division-n'], add: [] });
   assert.deepEqual(buildManagedRoleRepair(current, 'qronch'), { discordId: 'qronch', remove: [], add: ['team-n-ss'] });
@@ -499,7 +502,7 @@ test('a primary-record problem under a Niflheim row is explained in plain Englis
   current.names.at(-1)!.leagueStatus = 'Inactive';
   const finding = 'Niflheim roster member faye is not a current Svartalfheim player or free agent.';
   assert.ok(humanizeLeagueAuditIssues(current, [finding])[0]!
-    .startsWith('Faye is on a Niflheim team, but Player Name History lists them in Svartalfheim inactive.'));
+    .startsWith('Faye can’t be on a Niflheim team right now\nThey’re on a Niflheim team, but our records show them as inactive in Svartalfheim.'));
   current.names.at(-1)!.leagueStatus = SELF_DROP_LEAGUE_STATUS;
   const selfDrop = humanizeLeagueAuditIssues(current, [finding])[0]!;
   assert.match(selfDrop, /suspended after a self-drop \(this season and next season\)/);

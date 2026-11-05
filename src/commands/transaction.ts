@@ -155,7 +155,7 @@ function preview(plan: LeagueMutationPlan): string {
         `${sender!.franchise} roster: ${sendingAfter + 1} → ${sendingAfter}`,
         `${receiver!.franchise} roster: ${receivingAfter - 1} → ${receivingAfter}`,
         ...(receivingAfter > 7 ? ['The receiving roster would exceed seven players. Confirm only if staff approve the exception.'] : []),
-        'Only this player’s team role, Current Rosters assignment, Player Name History franchise and public roster placement will change. One trade history row will be added.',
+        'Only this player’s team role, their team in our records and their spot on the roster page will change. One line is added to the trade history.',
         '',
         'No changes were made. Re-run with the same options and `confirm:True` after reviewing.',
       ].join('\n');

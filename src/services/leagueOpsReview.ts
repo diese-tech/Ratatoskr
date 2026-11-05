@@ -166,10 +166,10 @@ export class LeagueOpsReviewService {
     const draft = resources.find(entry => entry.resourceKey === DRAFT_PICK_FEATURE);
     const format = (value: string) => value.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, timestamp => leagueEasternTime(timestamp));
     return { checkDetails: [
-      'Open league tools lets you review existing problems and confirm fixes. Check again only reads Discord and the roster sheets; it makes no roster changes.',
+      'This panel lets you look at problems and confirm fixes. Check again only reads Discord and our records; it never changes the roster.',
       ...resources.filter(entry => entry.resourceKey === 'connection').flatMap(entry => entry.findings.map(format)),
       ...listOpenLeagueReconciliationTickets(db, guildId).map(ticket => `Roster problem: ${ticket.summary}`),
-      ...listLeagueMutationProblems(db, guildId).map(reference => `Unfinished action: ${reference}. Check Discord, roster sheets and history; do not run the player change again.`),
+      ...listLeagueMutationProblems(db, guildId).map(reference => `Unfinished action: ${reference}. Some changes may already have happened. Open it in Saved actions; don’t run the player change again.`),
       `Panel reference: ${audit?.runReference ?? 'Not available'}`,
       `Last full roster check: ${leagueEasternTime(audit?.lastFullAt)}`, `Last player check: ${leagueEasternTime(audit?.lastTargetedAt)}`,
       ...(draft?.findings.map(format) ?? ['Draft records have not been checked yet.']),

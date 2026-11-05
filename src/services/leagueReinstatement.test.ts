@@ -383,8 +383,8 @@ test('private previews translate unrelated member and role-configuration drift w
       const blockers = view.payload.plan.reinstatement!.blockers.join(' ');
       assert.ok(blockers.length);
       assert.doesNotMatch(blockers, /Discord member two|Role b is configured|Division role b|Team role b/);
-      if (drift === 'member') assert.match(blockers, /Two is listed on The Sewer VD.*missing that team role.*Restore the role/);
-      else assert.match(blockers, /The Sewer VD is used as both a team role and a division role in League Teams.*Give each purpose/);
+      if (drift === 'member') assert.match(blockers, /Two’s team doesn’t match\nDiscord says: no team\nOur roster says: The Sewer \(Vanaheim\)/);
+      else assert.match(blockers, /The “The Sewer VD” role is used for two things\n.*both a team role and a division role[\s\S]*An admin needs to fix this/);
       const message = reinstatementReviewMessage(view);
       const text = message.embeds[0]!.toJSON().description!;
       assert.ok(text.includes(blockers.split(' ').slice(0, 8).join(' ')));

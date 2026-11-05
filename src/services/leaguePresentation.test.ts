@@ -14,7 +14,7 @@ test('stored actions and uncertain writes have readable display names and safe u
 });
 
 test('saved failures retain the historical name-record cause without showing raw diagnostics', () => {
-  assert.match(savedLeagueErrorMessage('This player does not have exactly one current name record. Resolve Player Name History first.'), /Player Name History needs exactly one current name/);
+  assert.match(savedLeagueErrorMessage('This player does not have exactly one current name record. Resolve Player Name History first.'), /exactly one current name in our records\. An admin needs to fix that in the league spreadsheet/);
   assert.match(savedLeagueErrorMessage('Interrupted external write; outcome unknown.'), /Some changes may already have happened.*do not run it again/);
   const unknown = savedLeagueErrorMessage('SQLITE_CONSTRAINT token=private-value stack trace');
   assert.ok(!unknown.includes('SQLITE'));
@@ -45,7 +45,7 @@ test('known no-write repair failures explain fresh-preview recovery without sugg
   ]) {
     const guidance = leagueRepairNoWriteMessage(message);
     assert.match(guidance, /No changes were made/);
-    assert.match(guidance, /fresh preview before approving/);
+    assert.match(guidance, /Press Review problems on the League Status card to see the latest problems, then choose a fix again/);
     assert.doesNotMatch(guidance, /may already|do not repeat|SQLITE|private-value/);
   }
 });
@@ -84,18 +84,19 @@ test('supported command validation keeps specific correctable reasons', () => {
   assert.match(leagueValidationMessage('The new league name must exactly match the player’s current Discord display name: One.'), /Copy that name from Discord/);
 });
 
-test('no-write manual repair failures name the sheet to correct instead of sending staff back to a preview', () => {
-  for (const [message, sheet] of [
-    ['This player does not have exactly one current name record. Resolve Player Name History first.', 'Player Name History'],
-    ['This player has more than one current roster assignment. Resolve Current Rosters first.', 'Current Rosters'],
-    ['This player roster points to an ambiguous or inactive team role. Resolve League Teams first.', 'League Teams'],
-    ['The expected division role is not configured unambiguously. Resolve League Teams first.', 'League Teams'],
+test('no-write manual repair failures send staff to an admin instead of back to a preview', () => {
+  // #206: sheet names never appear; say who can fix it instead.
+  for (const message of [
+    'This player does not have exactly one current name record. Resolve Player Name History first.',
+    'This player has more than one current roster assignment. Resolve Current Rosters first.',
+    'This player roster points to an ambiguous or inactive team role. Resolve League Teams first.',
+    'The expected division role is not configured unambiguously. Resolve League Teams first.',
   ]) {
-    const text = leagueRepairNoWriteMessage(message!);
-    assert.ok(text.includes(sheet!));
+    const text = leagueRepairNoWriteMessage(message);
+    assert.doesNotMatch(text, /Player Name History|Current Rosters|League Teams/);
+    assert.match(text, /An admin needs to (?:fix|check)/);
     assert.match(text, /No changes were made/);
-    assert.match(text, /Correct the named sheet/);
-    assert.doesNotMatch(text, /fresh preview|may already/);
+    assert.doesNotMatch(text, /fresh preview|choose a fix again|may already/);
   }
 });
 

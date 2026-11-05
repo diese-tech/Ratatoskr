@@ -43,7 +43,9 @@ test('role repair previews identify the player and role names before approval', 
   const preview = previewLeagueAuditResolution(loaded, finding, 'repair-roles');
   assert.match(preview.description, /Two/);
   assert.ok(preview.description.includes(loaded.snapshot.teams.find(team => team.teamRoleId === 'b')!.teamRole));
-  assert.match(preview.description, /Remove Discord roles: .*Free Agent/);
-  assert.match(preview.description, /roster sheets stay the same/);
+  // One line per change, naming the role and the player (#206).
+  assert.match(preview.description, /^Remove Free Agent from Two\.$/m);
+  assert.match(preview.description, /^The roster stays the same\.$/m);
+  assert.doesNotMatch(preview.description, /\b\d{16,20}\b|Current Rosters|Player Name History/);
   assert.equal(sources.gateway.writes.length, 0);
 });

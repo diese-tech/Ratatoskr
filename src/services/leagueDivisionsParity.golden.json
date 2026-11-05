@@ -66,10 +66,10 @@
     "Alfheim public free-agent list does not match Player Name History."
   ],
   "humanized": [
-    "Vee Two is rostered on The Sewer VD but still has the Free Agent role. Remove the Free Agent role.",
-    "Alf One — Discord division: none; expected: Alfheim. Make the division role match.",
-    "Svartalfheim / Dream Walkers — Current Rosters: none; public roster: Stray. Make the player lists match.",
-    "Alfheim free agents — Player Name History: Alf Free; public roster: none. Make the player lists match."
+    "Vee Two’s Free Agent role doesn’t match\nDiscord says: they’re a free agent\nOur roster says: they’re on The Sewer (Vanaheim)",
+    "Alf One’s division doesn’t match\nDiscord says: no division\nOur roster says: Alfheim",
+    "The Svartalfheim Dream Walkers roster page doesn’t match\nOur roster says: nobody\nThe roster page says: Stray",
+    "The Alfheim free agent page doesn’t match\nOur roster says: Alf Free\nThe roster page says: nobody"
   ],
   "fingerprints": {
     "trade": "c5bf9fb698f9b4c9b91994f440e33a1a1373e0bb9b65088f331cc65d6f5d919c",
