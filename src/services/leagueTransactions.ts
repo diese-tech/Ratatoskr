@@ -347,20 +347,26 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
     };
   }
   const team = plan.teams[0]!;
+  // Departure and self-drop can end a Svartalfheim and a Niflheim membership together (#200).
+  const allTeams = plan.teams.map((entry) => mention(entry.teamRoleId)).join(' and ');
   const replacement = plan.playerIds[1]
     ? ` ${mention(team.teamRoleId)} picks up ${player(1)} in their place.`
     : '';
   let line: string;
   if (plan.kind === 'reinstatement') line = `${player(0)} returns to ${mention(team.teamRoleId)}.\n\nOfficial league date: ${effectiveDate ?? plan.reinstatement!.selection.effectiveDate}.`;
-  else if (plan.kind === 'departure') line = `${player(0)} leaves ${mention(team.teamRoleId)} and the YSL server.${replacement}`;
-  else if (plan.kind === 'self-drop') line = `${player(0)} self-drops from ${mention(team.teamRoleId)}.${replacement}`;
+  else if (plan.kind === 'departure') line = `${player(0)} leaves ${allTeams} and the YSL server.${replacement}`;
+  else if (plan.kind === 'self-drop') line = `${player(0)} self-drops from ${allTeams}.${replacement}`;
+  else if (plan.kind === 'drop' && isLayeredDivision(team.division)) line = `${player(0)} leaves ${mention(team.teamRoleId)}.${replacement}`;
   else if (plan.kind === 'drop' && plan.playerIds[1]) {
     line = `${mention(team.teamRoleId)} drops ${player(0)} into free agency and picks up ${player(1)}.`;
   } else if (plan.kind === 'drop') line = `${player(0)} leaves ${mention(team.teamRoleId)} and enters free agency.`;
+  // A Niflheim pickup comes from the Svartalfheim pool and the player stays a free agent there.
+  else if (isLayeredDivision(team.division)) line = `${player(0)} joins ${mention(team.teamRoleId)}.`;
   else line = `${player(0)} leaves free agency to join ${mention(team.teamRoleId)}.`;
+  const teamRoleIds = plan.teams.map((entry) => entry.teamRoleId);
   return {
-    content: content([team.teamRoleId]),
-    allowedRoleIds: [team.teamRoleId],
+    content: content(teamRoleIds),
+    allowedRoleIds: teamRoleIds,
     title: 'Word Travels the Branches',
     description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${line}`,
     footer: `Posted by ${actorName}`,
@@ -484,7 +490,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
     ]));
-    if (isOneWayTrade(plan)) {
+    // Primary transfers pin the exact managed roles; a layered transfer's roles are checked by `layered`.
+    if (isOneWayTrade(plan) && !isLayeredDivision(plan.teams[0]!.division)) {
       const change = plan.discordRoleChanges[0]!;
       const before = beforeByPlayer.get(change.discordId)!;
       const after = afterByPlayer.get(change.discordId)!;

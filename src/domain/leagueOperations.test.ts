@@ -5,6 +5,7 @@ import {
   buildDeparturePlan,
   buildDiscordRenamePlan,
   buildDropPlan,
+  buildOneWayTradePlan,
   buildPickupPlan,
   buildRenamePlan,
   buildSelfDropPlan,
@@ -120,12 +121,14 @@ test('layered Niflheim rule violations are reported', () => {
 test('Svartalfheim moves for a layered player leave the Niflheim row untouched', () => {
   const current = layeredSnapshot();
   const niflheim = (plan: { rosters: LeagueSnapshot['rosters'] }) => plan.rosters.filter((row) => row.division === 'Niflheim');
-  const drop = buildDropPlan(current, 'qronch');
+  // Qronch is on both rosters, so a drop must say which (#200).
+  assert.throws(() => buildDropPlan(current, 'qronch'), /plays in Svartalfheim and Niflheim\. Choose the division option/);
+  const drop = buildDropPlan(current, 'qronch', undefined, 'Svartalfheim');
   assert.deepEqual(niflheim(drop), niflheim(current));
   assert.deepEqual(drop.discordRoleChanges, [{ discordId: 'qronch', remove: ['team-s-lm'], add: ['free-agent'] }]);
   const pickup = buildPickupPlan(current, 'faye', 'team-s-lm');
   assert.deepEqual(niflheim(pickup), niflheim(current));
-  assert.throws(() => buildPickupPlan(current, 'faye', 'team-n-lm'), /Cross-division pickups are not supported/);
+  assert.throws(() => buildPickupPlan(current, 'faye', 'team-n-lm'), /already on a Niflheim team/);
   const rename = buildRenamePlan(current, 'faye', 'Faye Prime');
   assert.deepEqual(rename.rosters.filter((row) => row.discordId === 'faye').map((row) => row.player), ['Faye Prime']);
   assert.deepEqual(rename.publicChanges.map((change) => [change.division, change.area, change.group]),
@@ -502,4 +505,119 @@ test('a primary-record problem under a Niflheim row is explained in plain Englis
   assert.ok(!selfDrop.includes(SELF_DROP_LEAGUE_STATUS));
   current.names.at(-1)!.leagueStatus = 'Mystery';
   assert.ok(!humanizeLeagueAuditIssues(current, [finding])[0]!.includes('Mystery'));
+});
+
+// #200: Niflheim roster moves. Sven is a Svartalfheim free agent with no Niflheim team;
+// Mia is a Svartalfheim free agent on Little Monsters (Niflheim).
+function niflheimSnapshot(): LeagueSnapshot {
+  const current = layeredSnapshot();
+  current.rosters.push({ sheetRow: 11, division: 'Niflheim', franchise: 'Little Monsters', teamRoleId: 'team-n-lm', team: 'Little Monsters ND', discordId: 'mia', player: 'Mia', rosterStatus: 'Player' });
+  current.names.push(
+    { sheetRow: 11, discordId: 'sven', currentLeagueName: 'Sven', knownName: 'Sven', nameStatus: 'Current Discord Name', division: 'Svartalfheim', franchise: '', leagueStatus: 'Free Agent' },
+    { sheetRow: 12, discordId: 'mia', currentLeagueName: 'Mia', knownName: 'Mia', nameStatus: 'Current Discord Name', division: 'Svartalfheim', franchise: '', leagueStatus: 'Free Agent' },
+  );
+  current.discordMembers.push(
+    { discordId: 'sven', displayName: 'Sven', roleIds: ['free-agent', 'division-s'] },
+    { discordId: 'mia', displayName: 'Mia', roleIds: ['free-agent', 'division-s', 'team-n-lm', 'division-n'] },
+  );
+  current.publicRosters.Svartalfheim!.freeAgents.push('Sven', 'Mia');
+  current.publicRosters.Niflheim!.teams['Little Monsters'] = ['Mia'];
+  return current;
+}
+
+// What the sheets and Discord look like once a plan is applied.
+function applyPlan(current: LeagueSnapshot, plan: ReturnType<typeof buildDropPlan>): LeagueSnapshot {
+  const after = structuredClone(current);
+  after.rosters = structuredClone(plan.rosters);
+  after.names = structuredClone(plan.nameUpdates);
+  for (const change of plan.publicChanges) {
+    const list = change.area === 'team' ? after.publicRosters[change.division]!.teams[change.group]! : after.publicRosters[change.division]!.freeAgents;
+    if (change.from === '') list.push(change.to);
+    else if (change.to === '') list.splice(list.indexOf(change.from), 1);
+    else list[list.indexOf(change.from)] = change.to;
+  }
+  for (const change of plan.discordRoleChanges) {
+    const entry = member(after, change.discordId);
+    entry.roleIds = entry.roleIds.filter((id) => !change.remove.includes(id)).concat(change.add);
+  }
+  return after;
+}
+
+const niflheimRows = (rows: LeagueSnapshot['rosters']) => rows.filter((row) => row.division === 'Niflheim').map((row) => `${row.discordId}:${row.franchise}`);
+
+test('a Niflheim trade and 1-for-0 transfer change only Niflheim rows and ND roles', () => {
+  const current = niflheimSnapshot();
+  // Qronch is on two teams; Niflheim is the only division Mia shares with him.
+  const swap = buildTradePlan(current, 'qronch', 'mia');
+  assert.deepEqual(niflheimRows(swap.rosters), ['qronch:Little Monsters', 'faye:Something Spicy', 'mia:Something Spicy']);
+  assert.deepEqual(swap.nameUpdates, current.names);
+  assert.deepEqual(swap.discordRoleChanges, [
+    { discordId: 'qronch', remove: ['team-n-ss'], add: ['team-n-lm'] },
+    { discordId: 'mia', remove: ['team-n-lm'], add: ['team-n-ss'] }]);
+  assert.deepEqual(auditLeagueRoster(applyPlan(current, swap)), []);
+
+  const transfer = buildOneWayTradePlan(current, 'faye', 'team-n-lm');
+  assert.deepEqual(transfer.nameUpdates, current.names);
+  assert.deepEqual(transfer.publicChanges.map((change) => change.division), ['Niflheim', 'Niflheim']);
+  assert.deepEqual(transfer.discordRoleChanges, [{ discordId: 'faye', remove: ['team-n-ss'], add: ['team-n-lm'] }]);
+  assert.deepEqual(auditLeagueRoster(applyPlan(current, transfer)), []);
+});
+
+test('trades between Niflheim and another division are refused in plain words', () => {
+  const current = niflheimSnapshot();
+  assert.throws(() => buildOneWayTradePlan(current, 'faye', 'team-s-lm'), /Cross-division trades aren't allowed\. Niflheim and Svartalfheim are separate rosters/);
+  assert.throws(() => buildTradePlan(current, 'faye', 'one'), /Cross-division trades aren't allowed\. Niflheim and Vanaheim are separate rosters/);
+  assert.throws(() => buildTradePlan(current, 'mia', 'qronch', 'Svartalfheim'), /<@mia> is not on a Svartalfheim team\./);
+});
+
+test('a Niflheim drop removes only the ND and Niflheim roles; the Svartalfheim status is untouched', () => {
+  const current = niflheimSnapshot();
+  for (const [id, division] of [['faye', undefined], ['qronch', 'Niflheim']] as const) {
+    const plan = buildDropPlan(current, id, undefined, division);
+    assert.deepEqual(plan.discordRoleChanges, [{ discordId: id, remove: ['team-n-ss', 'division-n'], add: [] }]);
+    assert.ok(!plan.discordRoleChanges[0]!.remove.some((role) => ['free-agent', 'division-s', 'team-s-lm'].includes(role)));
+    assert.deepEqual(plan.nameUpdates, current.names);
+    assert.deepEqual(plan.publicChanges, [{ division: 'Niflheim', area: 'team', group: 'Something Spicy', from: id === 'faye' ? 'Faye' : 'Qronch', to: '' }]);
+    assert.deepEqual(auditLeagueRoster(applyPlan(current, plan)), []);
+  }
+  // A Niflheim replacement comes from the Svartalfheim pool and stays a free agent there.
+  const replaced = buildDropPlan(current, 'faye', 'sven');
+  assert.deepEqual(replaced.discordRoleChanges.at(-1), { discordId: 'sven', remove: [], add: ['team-n-ss', 'division-n'] });
+  assert.deepEqual(auditLeagueRoster(applyPlan(current, replaced)), []);
+});
+
+test('a Niflheim pickup takes a Svartalfheim free agent with no Niflheim team and keeps them a free agent', () => {
+  const current = niflheimSnapshot();
+  const plan = buildPickupPlan(current, 'sven', 'team-n-lm');
+  assert.deepEqual(plan.discordRoleChanges, [{ discordId: 'sven', remove: [], add: ['team-n-lm', 'division-n'] }]);
+  assert.deepEqual(plan.nameUpdates, current.names);
+  assert.deepEqual(plan.publicChanges, [{ division: 'Niflheim', area: 'team', group: 'Little Monsters', from: '', to: 'Sven' }]);
+  assert.deepEqual(auditLeagueRoster(applyPlan(current, plan)), []);
+
+  assert.throws(() => buildPickupPlan(current, 'free', 'team-n-lm'), /Niflheim players come from the Svartalfheim free-agent pool\. <@free> plays in Vanaheim\./);
+  assert.throws(() => buildPickupPlan(current, 'mia', 'team-n-ss'), /<@mia> is already on a Niflheim team\./);
+  current.rosters = current.rosters.filter((row) => !(row.discordId === 'qronch' && row.division === 'Niflheim'));
+  assert.throws(() => buildPickupPlan(current, 'qronch', 'team-n-lm'), /Only Svartalfheim free agents can join a Niflheim team\./);
+});
+
+test('departure and self-drop end both memberships in one plan', () => {
+  const current = niflheimSnapshot();
+  const selfDrop = buildSelfDropPlan(current, 'qronch');
+  assert.deepEqual(selfDrop.teams.map((team) => team.teamRoleId), ['team-s-lm', 'team-n-ss']);
+  assert.deepEqual(selfDrop.rosters.filter((row) => row.discordId === 'qronch'), []);
+  assert.deepEqual(selfDrop.discordRoleChanges, [{ discordId: 'qronch', remove: ['team-s-lm', 'team-n-ss', 'division-n'], add: [] }]);
+  assert.deepEqual(auditLeagueRoster(applyPlan(current, selfDrop)), []);
+
+  // A Svartalfheim free agent on a Niflheim team also leaves the free-agent list.
+  const freeAgent = buildSelfDropPlan(current, 'faye');
+  assert.deepEqual(freeAgent.discordRoleChanges, [{ discordId: 'faye', remove: ['team-n-ss', 'division-n', 'free-agent'], add: [] }]);
+  assert.deepEqual(freeAgent.publicChanges.map((change) => `${change.division}:${change.area}`), ['Niflheim:team', 'Svartalfheim:free-agent']);
+  assert.deepEqual(auditLeagueRoster(applyPlan(current, freeAgent)), []);
+
+  current.discordMembers = current.discordMembers.filter((entry) => entry.discordId !== 'qronch');
+  const departure = buildDeparturePlan(current, 'qronch');
+  assert.deepEqual(departure.discordRoleChanges, []);
+  assert.deepEqual(departure.publicChanges.map((change) => `${change.division}:${change.group}`), ['Svartalfheim:Little Monsters', 'Niflheim:Something Spicy']);
+  assert.equal(departure.nameUpdates.find((row) => row.discordId === 'qronch')!.leagueStatus, 'Inactive');
+  assert.deepEqual(auditLeagueRoster(applyPlan(current, departure), { allowAbsentRosterMemberId: 'qronch' }), []);
 });

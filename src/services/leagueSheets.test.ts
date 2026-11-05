@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DRAFT_PICK_HEADERS } from './draftPicks.js';
-import { buildDeparturePlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDropPlan, buildPickupPlan, buildRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan } from '../domain/leagueOperations.js';
 import {
   createLeagueSheetsReadSchedule,
   createGoogleLeagueSheetsGateway,
@@ -889,4 +889,43 @@ test('audit wording and public-roster repair recognize Niflheim findings (#197)'
   const plan = buildLeagueAuditSheetRepair(snapshot, finding, 'sync-public-roster');
   assert.deepEqual(plan.publicChanges.map(({ division, area, from, to }) => ({ division, area, from, to })),
     [{ division: 'Niflheim', area: 'team', from: 'Nif', to: '' }]);
+});
+
+// #200: Sven is a Svartalfheim free agent and a top-4 Svartalfheim pick.
+function niflheimServiceFixture() {
+  const fixture = serviceFixture();
+  const data = fixture.gateway.data;
+  data.get(fixture.gateway.key('admin', "'League Teams'!A5:L100"))!.push(
+    ['Svartalfheim|Dream Walkers', 'Dream Walkers', 'Svartalfheim', 'team-s-dw', 'Dream Walkers SD', '', '', 'division-s', 'Svartalfheim', '', '', 'Yes'],
+    ['Niflheim|Little Monsters', 'Little Monsters', 'Niflheim', 'team-n-lm', 'Little Monsters ND', '', '', 'division-n', 'Niflheim', '', '', 'Yes'],
+  );
+  data.get(fixture.gateway.key('admin', "'Player Name History'!A5:K"))!.push(
+    ['sven', 'Sven', 'Sven', 'Current Discord Name', 'Svartalfheim', '', 'Free Agent', '', '', '', '']);
+  data.get(fixture.gateway.key('public', "'Svartalfheim Roster'!A1:O99"))![24]![6] = 'Sven';
+  data.set(fixture.gateway.key('public', "'Niflheim Roster'!A1:O99"), emptyPublic());
+  data.set(fixture.gateway.key('admin', "'Draft Picks'!A6:J"), [
+    ['Svartalfheim', 'Dream Walkers', '1', '2', 'Sven', 'sven', 'Sven', 'Member Directory', 'On drafted team']]);
+  return fixture;
+}
+
+test('a Niflheim pickup and drop write only Niflheim cells and never move a Svartalfheim draft pick (#200)', async () => {
+  const { gateway, service } = niflheimServiceFixture();
+  const sven = { discordId: 'sven', displayName: 'Sven', roleIds: ['free-agent', 'division-s'] };
+  const record = { reference: 'YSL-TRX-NIF-1', effectiveDate: '2026-11-05', processedById: 'admin', processedBy: 'Admin' };
+  const loaded = await service.load([...members, sven], 'free-agent');
+  const pickup = buildPickupPlan(loaded.snapshot, 'sven', 'team-n-lm');
+  await service.apply(loaded, pickup, record, service.prepare(loaded, pickup));
+  // Sven stays on the Svartalfheim free-agent list and his name record is untouched.
+  assert.deepEqual(gateway.writes.flatMap((write) => write.updates.map((update) => update.range)), ["'Current Rosters'!A8:J8", "'Niflheim Roster'!G5"]);
+  await service.appendTransactionHistory(pickup, record);
+  assert.deepEqual(gateway.appends[0]!.values, [[
+    'YSL-TRX-NIF-1', 'pickup', '2026-11-05', 'Niflheim', 'Free Agents', 'Little Monsters', 'sven', 'Sven', 'admin', '', 'Completed', 'Admin', '']]);
+
+  const joined = await service.load([...members, { ...sven, roleIds: [...sven.roleIds, 'team-n-lm', 'division-n'] }], 'free-agent');
+  const drop = buildDropPlan(joined.snapshot, 'sven');
+  await service.appendTransactionHistory(drop, { ...record, reference: 'YSL-TRX-NIF-2' });
+  assert.deepEqual(gateway.appends[1]!.values[0]!.slice(3, 6), ['Niflheim', 'Little Monsters', 'Released (Svartalfheim status unchanged)']);
+  assert.equal(gateway.appends[1]!.values[0]![12], '');
+  assert.equal(gateway.draftHighlights.length, 0);
+  assert.ok(!gateway.writes.some((write) => write.updates.some((update) => update.range.startsWith("'Draft Picks'"))));
 });

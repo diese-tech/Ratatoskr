@@ -17,7 +17,7 @@ import {
   SELF_DROP_LEAGUE_STATUS,
   isOneWayTrade,
 } from '../domain/leagueOperations.js';
-import { LEAGUE_DIVISIONS, LEAGUE_DIVISION_METADATA, parseLeagueDivision } from '../domain/leagueDivisions.js';
+import { LEAGUE_DIVISIONS, LEAGUE_DIVISION_METADATA, isLeagueDivision, parseLeagueDivision } from '../domain/leagueDivisions.js';
 
 type Cell = string | number | boolean | null;
 type CellRows = Cell[][];
@@ -991,11 +991,14 @@ export class LeagueSheetsService {
       record.processedById, record.announcementId ?? '', 'Completed',
       `${record.processedBy}; reinstates ${plan.reinstatement.source.reference}; approved advisories: ${plan.reinstatement.selection.overrides.join(', ')}; future sanction preserved${plan.reinstatement.selection.reason ? `; reason: ${plan.reinstatement.selection.reason}` : ''}`,
     ]] : exitDestination ? [
-      [
-        record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
-        plan.teams[0]!.franchise, exitDestination, plan.playerIds[0]!, plan.players[0]!,
+      // One row per team left: departure and self-drop can end a Niflheim membership too (#200).
+      ...plan.teams.map((team) => [
+        record.reference, plan.kind, record.effectiveDate, team.division,
+        team.franchise, plan.kind === 'drop' && LEAGUE_DIVISION_METADATA[team.division].layeredOn
+          ? `Released (${LEAGUE_DIVISION_METADATA[team.division].layeredOn} status unchanged)` : exitDestination,
+        plan.playerIds[0]!, plan.players[0]!,
         record.processedById, record.announcementId ?? '', 'Completed', record.processedBy,
-      ],
+      ]),
       ...(plan.playerIds[1] ? [[
         record.reference, plan.kind, record.effectiveDate, plan.teams[0]!.division,
         'Free Agents', plan.teams[0]!.franchise, plan.playerIds[1], plan.players[1]!,
@@ -1029,11 +1032,13 @@ export class LeagueSheetsService {
     const picks = tracking?.picks ?? new Map<string, DraftPickMove>();
     const moved = new Map<string, DraftPickMove>();
     for (const row of transactionRows) {
-      const pick = picks.get(String(row[6] ?? ''));
+      // Draft Picks tracks the primary draft; a Niflheim move never moves that pick.
+      const layeredRow = isLeagueDivision(String(row[3] ?? '')) && LEAGUE_DIVISION_METADATA[String(row[3]) as LeagueDivision].layeredOn;
+      const pick = layeredRow ? undefined : picks.get(String(row[6] ?? ''));
       // The transaction row carries the current name; Draft Picks may predate a rename.
       if (pick) moved.set(pick.discordId, { ...pick, player: String(row[7] ?? '') || pick.player });
       // Column M drives the Transaction History yellow conditional-format rule.
-      row.push(pick ? draftPickLabel(pick) : !tracking || tracking.health.status === 'ready' ? ''
+      row.push(pick ? draftPickLabel(pick) : layeredRow || !tracking || tracking.health.status === 'ready' ? ''
         : tracking.health.status === 'missing-tab' ? 'Not verified: Draft Picks tab missing'
           : tracking.health.status === 'empty-tab' ? 'Not verified: Draft Picks empty' : 'Not verified: Draft Picks incomplete');
     }

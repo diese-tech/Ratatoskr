@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenamePlan, buildStaffRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildPickupPlan, buildRenamePlan, buildStaffRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
 import { buildLeagueIntentPlan } from './leagueTransactionIntent.js';
 import { openDatabase } from '../db/client.js';
 import {
@@ -22,6 +22,7 @@ import {
   LeagueReconciliationTicketError,
   LeagueTransactionPreviewChangedError,
   reconcilePendingLeagueTransactions,
+  type LeagueRoleState,
 } from './leagueTransactions.js';
 
 function snapshot(): LeagueSnapshot {
@@ -875,4 +876,64 @@ test('one-way execution is idempotent and uncertain role or Sheet writes never r
       }
     } finally { f.db.close(); }
   }
+});
+
+// #200: Faye is a Svartalfheim free agent on Niflheim team N1.
+function addNiflheim(current: LeagueSnapshot): void {
+  current.teams.push(
+    { teamKey: 'Svartalfheim|S', franchise: 'S', division: 'Svartalfheim', teamRoleId: 'team-s', teamRole: 'S SD', divisionRoleId: 'division-s', active: true },
+    { teamKey: 'Niflheim|N1', franchise: 'N1', division: 'Niflheim', teamRoleId: 'team-n1', teamRole: 'N1 ND', divisionRoleId: 'division-n', active: true },
+    { teamKey: 'Niflheim|N2', franchise: 'N2', division: 'Niflheim', teamRoleId: 'team-n2', teamRole: 'N2 ND', divisionRoleId: 'division-n', active: true },
+  );
+  current.rosters.push({ sheetRow: 8, division: 'Niflheim', franchise: 'N1', teamRoleId: 'team-n1', team: 'N1 ND', discordId: 'faye', player: 'Faye', rosterStatus: 'Player' });
+  current.names.push({ sheetRow: 9, discordId: 'faye', currentLeagueName: 'Faye', knownName: 'Faye', nameStatus: 'Current Discord Name', division: 'Svartalfheim', franchise: '', leagueStatus: 'Free Agent' });
+  current.discordMembers.push({ discordId: 'faye', displayName: 'Faye', roleIds: ['free-agent', 'division-s', 'team-n1', 'division-n'] });
+  current.publicRosters.Svartalfheim = { teams: { S: [] }, freeAgents: ['Faye'] };
+  current.publicRosters.Niflheim = { teams: { N1: ['Faye'], N2: [] }, freeAgents: [] };
+}
+
+test('Niflheim moves run through the worker with layered role states and keep the Free Agent role (#200)', async () => {
+  for (const [label, build, add] of [
+    ['drop', (current: LeagueSnapshot) => buildDropPlan(current, 'faye'), null],
+    ['transfer', (current: LeagueSnapshot) => buildOneWayTradePlan(current, 'faye', 'team-n2'), 'team-n2'],
+  ] as const) {
+    const f = fixture();
+    addNiflheim(f.current);
+    const seen: unknown[] = [];
+    const discord = {
+      ...f.discord,
+      validateOneWayTradeRoles: async () => {},
+      applyRoleChange: async (change: { discordId: string; remove: string[]; add: string[] }, before: LeagueRoleState, after: LeagueRoleState) => {
+        seen.push({ change, before: before.layered?.expectedTeamRoleId, after: after.layered?.expectedTeamRoleId,
+          freeAgent: [before.expectsFreeAgent, after.expectsFreeAgent], pinned: before.observedManagedRoleIds });
+      },
+    };
+    const sheets = { ...f.sheets, assertOneWayTradeDestination: async () => {} };
+    const result = await executeLeagueTransaction({
+      db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+      freeAgentRoleId: 'free-agent', now: new Date('2026-11-05T17:00:00-05:00'), sheets, discord,
+      buildPlan: build, expectedPlanFingerprint: leagueTransactionPlanFingerprint(build(f.current)),
+    });
+    assert.deepEqual(seen, [{
+      change: { discordId: 'faye', remove: add ? ['team-n1'] : ['team-n1', 'division-n'], add: add ? [add] : [] },
+      before: 'team-n1', after: add, freeAgent: [true, true], pinned: undefined,
+    }], label);
+    assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed', label);
+    f.db.close();
+  }
+});
+
+test('a Niflheim drop announcement says the player leaves the team, not that they enter free agency (#200)', () => {
+  const current = snapshot();
+  addNiflheim(current);
+  assert.match(buildLeagueAnnouncement(buildDropPlan(current, 'faye'), 'Admin')!.description, /\*\*Faye\*\* \(<@faye>\) leaves <@&team-n1>\.$/);
+  assert.match(buildLeagueAnnouncement(buildPickupPlan(current, 'free', 'team-a'), 'Admin')!.description, /leaves free agency to join/);
+});
+
+test('a chosen division is saved as an optional fourth intent element; older intents are unchanged (#200)', () => {
+  const current = snapshot();
+  addNiflheim(current);
+  assert.deepEqual(buildLeagueIntentPlan('["drop","faye",null,"Niflheim"]', current), buildDropPlan(current, 'faye', undefined, 'Niflheim'));
+  assert.deepEqual(buildLeagueIntentPlan('["drop","one",null]', current), buildDropPlan(current, 'one'));
+  assert.throws(() => buildLeagueIntentPlan('["drop","faye",null,"Midgard"]', current), /Unsupported league division/);
 });

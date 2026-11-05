@@ -37,7 +37,7 @@ test('Valkyrie-only staff can confirm a saved transaction preview into the canon
     saveLeagueTransactionPreview(db, { guildId: 'g', actorUserId: 'valk-admin', intentKey: '["trade","one","two"]', planFingerprint: 'reviewed' });
     await handleTransactionCommand({ guild: { id: 'g', members: { fetch: async () => ({ displayName: 'Staff',
       roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } }) } }, user: { id: 'valk-admin' },
-      options: { getSubcommand: () => 'trade', getBoolean: () => true, getRole: () => null,
+      options: { getSubcommand: () => 'trade', getString: () => null, getBoolean: () => true, getRole: () => null,
         getUser: (name: string) => ({ id: name === 'player_one' ? 'one' : 'two' }) },
       deferReply: async () => {}, editReply: async (reply: string) => { replies.push(reply); } } as never, db, db);
     assert.equal(replies.length, 1);
@@ -210,7 +210,7 @@ test('a Discord cooldown while building a /transaction preview is a private no-c
     for (const confirm of [false, true]) {
       const replies: string[] = [];
       await handleTransactionCommand({ guild, user: { id: 'valk-admin' },
-        options: { getSubcommand: () => 'trade', getBoolean: () => confirm, getRole: () => null,
+        options: { getSubcommand: () => 'trade', getString: () => null, getBoolean: () => confirm, getRole: () => null,
           getUser: (name: string) => ({ id: name === 'player_one' ? 'one' : 'two' }) },
         deferReply: async () => {}, editReply: async (reply: string) => { replies.push(reply); } } as never, db, db);
       assert.equal(replies.length, 1);
@@ -238,7 +238,7 @@ test('trade offers an optional counterpart and a receiving team role, and reject
       await handleTransactionCommand({
         guild: { id: 'g', members: { fetch: async () => ({ roles: { cache: new Map([[LEGACY_YSL_VALKYRIE_ROLE_ID, {}]]) } }) } },
         user: { id: 'staff' },
-        options: { getSubcommand: () => 'trade', getBoolean: () => true,
+        options: { getSubcommand: () => 'trade', getString: () => null, getBoolean: () => true,
           getUser: (name: string) => name === 'player_one' ? { id: 'one' } : supplied ? { id: 'two' } : null,
           getRole: () => supplied ? { id: 'team-b' } : null },
         deferReply: async (reply: { flags: number }) => assert.equal(reply.flags, 64),
@@ -329,7 +329,7 @@ test(`one-way trade uses the shared member reader through preview and rapid conf
     await handleTransactionCommand({
       guild,
       user: { id: 'staff' },
-      options: { getSubcommand: () => 'trade', getBoolean: () => confirm,
+      options: { getSubcommand: () => 'trade', getString: () => null, getBoolean: () => confirm,
         getUser: (name: string) => name === 'player_one' ? { id: 'one' } : null, getRole: () => ({ id: 'B' }) },
       deferReply: async (reply: { flags: number }) => assert.equal(reply.flags, 64),
       editReply: async (reply: string) => { replies.push(reply); },
