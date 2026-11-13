@@ -357,6 +357,24 @@ export function layeredRoster(rows: readonly LeagueRosterRow[], discordId: strin
   return rows.find((row) => row.discordId === discordId && isLayeredDivision(row.division));
 }
 
+// Read-only action eligibility from persisted observations; never execution authority.
+// A primary free agent may also have a layered team, without a primary roster row.
+export function currentLeagueMembership(snapshot: Pick<LeagueSnapshot, 'rosters' | 'names'>, discordId: string) {
+  const rows = snapshot.rosters.filter(row => row.discordId === discordId);
+  const names = snapshot.names.filter(row => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
+  if (names.length !== 1 || rows.filter(row => !isLayeredDivision(row.division)).length > 1
+    || rows.filter(row => isLayeredDivision(row.division)).length > 1) return;
+  const name = names[0]!;
+  const primary = primaryRoster(rows, discordId);
+  const layered = layeredRoster(rows, discordId);
+  if (primary ? name.division !== primary.division || name.franchise !== primary.franchise
+    || name.leagueStatus !== primary.rosterStatus || name.currentLeagueName !== primary.player
+    : name.leagueStatus !== 'Free Agent' || !!name.franchise || isLayeredDivision(name.division)) return;
+  if (layered && (LEAGUE_DIVISION_METADATA[layered.division].layeredOn !== name.division
+    || layered.player !== name.currentLeagueName)) return;
+  return { name, primary, layered };
+}
+
 // The roster row a change targets (#200). A layered player can hold a primary row and
 // a Niflheim row; `division` picks one, and without it the player must have only one.
 function targetRoster(snapshot: LeagueSnapshot, discordId: string, division?: LeagueDivision): LeagueRosterRow {

@@ -1,3 +1,4 @@
+import { leagueFindingKind } from './leagueAuditPresentation.js';
 import { parseReinstatementSelection } from './leagueTransactionIntent.js';
 import { listLeagueMutationProblems, listOpenLeagueReconciliationTickets } from '../db/repositories/leagueOperations.js';
 import { leagueEasternTime } from './leaguePresentation.js';
@@ -11,7 +12,7 @@ import { getLeagueAuditRepair, getLeagueRepairResolution, listIncompleteLeagueAu
 import { getAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
 import { getVerifiedLeagueMember, listLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
 import { DRAFT_PICK_FEATURE } from './draftPickTracking.js';
-import { LeagueMutationValidationError, type LeagueMutationPlan } from '../domain/leagueOperations.js';
+import { currentLeagueMembership, LeagueMutationValidationError, type LeagueMutationPlan } from '../domain/leagueOperations.js';
 import type { LeagueAccountReplacementService, AccountReplacementPreview } from './leagueAccountReplacement.js';
 import { leagueTransactionPlanFingerprint } from './leagueTransactions.js';
 import type { LeagueJobWorker } from './leagueJobWorker.js';
@@ -30,7 +31,7 @@ export function leagueOpsRepairAction(finding: string): LeagueAuditResolutionAct
   return control?.id.split(':').at(-1) as LeagueAuditResolutionAction | undefined;
 }
 export type ReviewAccountReplacementPreview = AccountReplacementPreview & { roleLabels?: Record<string, string> };
-export type LeagueOpsIssue = { key: string; finding: string; oldDiscordId?: string };
+export type LeagueOpsIssue = { key: string; finding: string; oldDiscordId?: string; requiresManualReview?: boolean };
 export type LeagueOpsOperation = { reference: string; type: string; status: string; action: string; targets: string[];
   actor: string; createdAt: string; attempts: number; error: string; next: string; canRepreview: boolean; canRecover: boolean; historyDetails?: string[]; linkedReferences?: string[] };
 export type LeagueOpsSnapshot = { issues: LeagueOpsIssue[]; operations: LeagueOpsOperation[]; checkDetails?: string[]; draftNeedsAttention?: boolean };
@@ -176,8 +177,10 @@ export class LeagueOpsReviewService {
     ], draftNeedsAttention: draftSnapshotStatus(draft?.findings) !== 'ready', issues: resources.filter(entry => entry.resourceKey !== DRAFT_PICK_FEATURE).flatMap(entry => entry.findings.map((finding, index) => {
       const id = entry.resourceKey.startsWith('member:') ? entry.resourceKey.slice(7) : undefined;
       const state = id ? getVerifiedLeagueMember(db, guildId, id) : undefined;
+      const membership = id && state ? currentLeagueMembership(state, id) : undefined;
       return { key: `${entry.resourceKey}:${index}`, finding,
-        ...(id && state?.rosters.length === 1 && !state.member ? { oldDiscordId: id } : {}) };
+        ...(id && state && !state.member && membership?.primary && leagueFindingKind(finding) === 'departed' ? { oldDiscordId: id } : {}),
+        ...(id && (!state || (!state.member && !membership)) ? { requiresManualReview: true } : {}) };
     })), operations };
   }
   async previewReplacement(actor: string, issueKey: string, oldId: string, newId: string): Promise<ReviewAccountReplacementPreview> {
@@ -222,7 +225,7 @@ export class LeagueOpsReviewService {
     const current = await this.snapshot(actor);
     const issue = current.issues.find(item => item.key === key);
     const action = issue && leagueOpsRepairAction(issue.finding);
-    if (!issue || !action || issue.oldDiscordId) throw new LeagueMutationValidationError('This issue requires an account/departure decision or manual source review.');
+    if (!issue || !action || issue.oldDiscordId || issue.requiresManualReview) throw new LeagueMutationValidationError('This issue requires an account/departure decision or manual source review.');
     const preview = await this.input.previewRepair(issue.finding, action);
     await this.authorize(actor);
     return { ...preview, approvalReference: randomUUID(), issueKey: key, finding: issue.finding, action };
