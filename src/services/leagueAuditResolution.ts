@@ -407,6 +407,7 @@ export async function executeLeagueAuditRepair(input: {
   freeAgentRoleId: string;
   jobReference?: string;
   onApplying?(): void;
+  authorizeBeforeWrite?(): Promise<void>;
   members: { getMembers(): Promise<DiscordLeagueMember[]> };
   sheets: RepairSheets;
   discord: RepairDiscord;
@@ -431,6 +432,7 @@ export async function executeLeagueAuditRepair(input: {
       const member = loaded.snapshot.discordMembers.find((entry) => entry.discordId === discordId)!;
       const managed = managedRoleIds(expected);
       const observedManagedRoleIds = member.roleIds.filter((roleId) => managed.has(roleId));
+      await input.authorizeBeforeWrite?.();
       input.onApplying?.();
       await applyDurableRepair({
         ...input,
@@ -448,6 +450,11 @@ export async function executeLeagueAuditRepair(input: {
       apply: async () => {
         if (input.action === 'use-discord-name') {
           await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+        }
+        try { await input.authorizeBeforeWrite?.(); }
+        catch (error) {
+          // No external write has started; retain a safely failed repair record.
+          throw new LeagueAuditRepairNoWriteError(error instanceof Error ? error.message : String(error));
         }
         await input.sheets.apply(loaded, plan, {
           reference,

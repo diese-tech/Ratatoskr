@@ -815,3 +815,20 @@ test('an exit that ended a Niflheim membership is found from its primary history
   assert.deepEqual(reordered.map((source) => [source.teamRoleId, source.layeredTeamRoleId]), [['lm-sd', 'lm-nd']]);
   db.close();
 });
+
+test('reinstatement reauthorizes after its last asynchronous display-name check', async () => {
+  const f = await fixture();
+  let release!: () => void; let entered!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  try {
+    const review = await f.approve();
+    const job = await f.service.confirm('staff', review.token);
+    f.discord.validateDisplayName = async () => { entered(); await barrier; };
+    const execution = f.execute(job);
+    await waiting; f.deny(); release();
+    await assert.rejects(execution, /permission revoked/);
+    assert.equal(getLeagueTransaction(f.db, job.reference), undefined);
+    assert.equal(f.gateway.writes.length, 0); assert.equal(f.roleCalls, 0);
+  } finally { release(); f.close(); }
+});

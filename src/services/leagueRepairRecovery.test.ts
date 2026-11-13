@@ -167,3 +167,15 @@ test('legacy UUID cleanup only selects old bot-owned league repair/review alerts
     false,
   );
 });
+
+test('recovery closure reauthorizes after fresh inspection and preserves the interrupted record on denial', async () => {
+  const f = fixture();
+  try {
+    const preview = await previewLeagueRepairRecovery(f.input, 'old-repair');
+    await assert.rejects(() => reconcileLeagueRepairRecord({ ...f.input, reference: 'old-repair', expectedFingerprint: preview.fingerprint,
+      actorUserId: 'admin', authorizeBeforeWrite: async () => { assert.equal(f.reads(), 2); throw Error('Access revoked'); } }), /Access revoked/);
+    assert.equal(getLeagueAuditRepair(f.db, 'old-repair')?.status, 'reconciliation_required');
+    assert.equal(getLeagueReconciliationTicket(f.db, 'old-repair')?.status, 'open');
+    assert.equal((f.db.prepare('SELECT count(*) n FROM league_repair_resolutions').get() as { n: number }).n, 0);
+  } finally { f.db.close(); }
+});
