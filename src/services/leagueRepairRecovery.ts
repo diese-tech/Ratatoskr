@@ -67,6 +67,7 @@ export async function reconcileLeagueRepairRecord(
     reference: string;
     expectedFingerprint: string;
     actorUserId: string;
+    authorizeBeforeWrite?(): Promise<void>;
   },
 ): Promise<void> {
   const release = await acquireLeagueTransaction(input.operationScope, input.guildId);
@@ -78,6 +79,7 @@ export async function reconcileLeagueRepairRecord(
         'BLOCKED_REVIEW',
         'League state changed or still has findings. Review a fresh recovery preview and resolve the current issues first.',
       );
+    await input.authorizeBeforeWrite?.();
     input.db.transaction(() => {
       // This is an administrator's reconciliation acknowledgement, not a claim
       // that the interrupted write or its historical outcome succeeded.

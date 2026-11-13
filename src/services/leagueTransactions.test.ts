@@ -956,3 +956,82 @@ test('a departed Svartalfheim free agent on a Niflheim team leaves both lists th
   assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
   f.db.close();
 });
+
+for (const variant of ['trade', 'one-way', 'drop', 'self-drop', 'absent-self-drop', 'departure', 'pickup', 'rename', 'nickname'] as const) {
+  for (const revoked of [false, true]) test(`final authorization after suspended preflight: ${variant}, revoked=${revoked}`, async () => {
+    const f = fixture();
+    let release!: () => void;
+    let entered!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    let allowed = true;
+    let authorizations = 0;
+    let memberReads = 0;
+    const current = f.current;
+    if (variant === 'departure' || variant === 'absent-self-drop')
+      current.discordMembers = current.discordMembers.filter(member => member.discordId !== 'one');
+    current.discordMembers.forEach(member => { member.nickname = null; });
+    if (variant === 'rename') current.discordMembers[0]!.displayName = 'One Prime';
+    const plan = variant === 'trade' ? buildTradePlan(current, 'one', 'two')
+      : variant === 'one-way' ? buildOneWayTradePlan(current, 'one', 'team-b')
+      : variant === 'drop' ? buildDropPlan(current, 'one', 'free')
+      : variant === 'self-drop' || variant === 'absent-self-drop' ? buildSelfDropPlan(current, 'one', 'free')
+      : variant === 'departure' ? buildDeparturePlan(current, 'one')
+      : variant === 'pickup' ? buildPickupPlan(current, 'free', 'team-a')
+      : variant === 'nickname' ? buildStaffRenamePlan(current, 'one', 'One Prime')
+      : buildRenamePlan(current, 'one', 'One Prime');
+    const suspend = async () => { entered(); await barrier; };
+    const discord = { ...f.discord,
+      getMembers: async () => { memberReads++; return current.discordMembers; },
+      validateOneWayTradeRoles: async () => {},
+      validateRoleState: suspend,
+      validateDisplayName: suspend,
+      validateNicknameChange: suspend,
+      validateMemberAbsent: suspend,
+      applyNicknameChange: async () => { f.events.push('nickname-write'); },
+      verifyNicknameChange: async () => {}, rollbackNicknameChange: async () => {},
+    };
+    try {
+      const result = executeLeagueTransaction({ db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'staff', actorName: 'Staff',
+        freeAgentRoleId: 'free-agent', now: new Date(), sheets: { ...f.sheets, assertOneWayTradeDestination: async () => {} }, discord, buildPlan: () => plan,
+        jobReference: 'final-auth', expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan),
+        authorizeBeforeWrite: async () => { authorizations++; if (!allowed) throw new LeagueMutationValidationError('Access revoked'); } });
+      await waiting;
+      if (revoked) allowed = false;
+      release();
+      if (revoked) {
+        await assert.rejects(result, /Access revoked/);
+        assert.equal(getLeagueTransaction(f.db, 'final-auth'), undefined);
+        assert.equal(f.events.some(event => /^(discord:|sheet-apply|nickname-write|announce|history)/.test(event)), false);
+      } else {
+        await result;
+        assert.equal(getLeagueTransaction(f.db, 'final-auth')?.status, 'completed');
+      }
+      assert.equal(authorizations, 1);
+      assert.equal(memberReads, 1);
+    } finally { release(); f.db.close(); }
+  });
+}
+
+test('permission failure after a role write retains ambiguous transaction evidence and never replays it', async () => {
+  const f = fixture();
+  let allowed = true;
+  const discord = { ...f.discord, applyRoleChange: async (change: { discordId: string }) => {
+    if (!allowed) throw Object.assign(Error('Permission lost after the first role write'), { reconciliationRequired: true });
+    await f.discord.applyRoleChange(change);
+    allowed = false;
+  } };
+  try {
+    await assert.rejects(() => executeLeagueTransaction({ db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'staff', actorName: 'Staff',
+      freeAgentRoleId: 'free-agent', now: new Date(), sheets: f.sheets, discord,
+      buildPlan: current => buildTradePlan(current, 'one', 'two'), jobReference: 'partial-auth',
+      authorizeBeforeWrite: async () => { assert.equal(allowed, true); } }));
+    assert.equal(getLeagueTransaction(f.db, 'partial-auth')?.status, 'reconciliation_required');
+    assert.ok(f.events.includes('discord:one'));
+    assert.equal(f.events.some(event => event.startsWith('rollback:')), false);
+    const writes = [...f.events];
+    await reconcilePendingLeagueTransactions({ db: f.db, sheets: f.sheets, discord: f.discord });
+    assert.equal(getLeagueTransaction(f.db, 'partial-auth')?.status, 'reconciliation_required');
+    assert.deepEqual(f.events, writes);
+  } finally { f.db.close(); }
+});

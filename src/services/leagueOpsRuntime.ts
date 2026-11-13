@@ -214,7 +214,8 @@ export function createLeagueOpsRuntime(input: {
           phase('VALIDATING');
           if (intent.reconcileReference) {
             await reconcileLeagueRepairRecord({ db, operationScope, guildId, sheets, members: discord, freeAgentRoleId,
-              reference: intent.reconcileReference, expectedFingerprint: intent.expectedRecoveryFingerprint ?? '', actorUserId: intent.actorUserId });
+              reference: intent.reconcileReference, expectedFingerprint: intent.expectedRecoveryFingerprint ?? '', actorUserId: intent.actorUserId,
+              authorizeBeforeWrite: () => authorize(intent.actorUserId) });
             await audit('scheduled');
             return { reference: intent.reconcileReference, manuallyReconciled: true };
           }
@@ -230,6 +231,7 @@ export function createLeagueOpsRuntime(input: {
             discord,
             jobReference: job.reference,
             onApplying: () => phase('APPLYING'),
+            authorizeBeforeWrite: () => authorize(intent.actorUserId),
           });
           phase('VERIFYING');
           await audit('scheduled');

@@ -432,3 +432,34 @@ test('startup requeues applying repair intent only when no durable mutation reco
     assert.equal(f.writes, 0);
   } finally { f.runtime.stop(); f.db.close(); }
 });
+
+for (const kind of ['transaction', 'repair'] as const) test(`runtime reauthorizes ${kind} after suspended source loading with OPERATIONS policy`, async () => {
+  const f = await fixture(LEGACY_YSL_VALKYRIE_ROLE_ID);
+  let release!: () => void;
+  let entered!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  let externalWrites = 0;
+  let memberReads = 0;
+  f.discord.getMembers = async () => { memberReads++; return structuredClone(f.snapshot.discordMembers); };
+  f.discord.applyRoleChange = async () => { externalWrites++; };
+  f.discord.reconcileManagedRoles = async () => { externalWrites++; };
+  const originalLoad = f.sheets.load;
+  let first = true;
+  f.sheets.load = async () => {
+    if (first) { first = false; entered(); await barrier; }
+    return originalLoad();
+  };
+  try {
+    if (kind === 'repair') f.snapshot.discordMembers[0]!.roleIds = [];
+    const finding = humanizeLeagueAuditIssues(f.snapshot, auditLeagueRoster(f.snapshot))[0]!;
+    const payload = kind === 'transaction' ? f.intent() : { actorUserId: 'admin', actorName: 'Admin', auditReference: 'audit', expectedFinding: finding, action: 'repair-roles' };
+    const job = f.runtime.worker.enqueue(kind, payload, 'suspended-auth');
+    f.runtime.worker.start();
+    await waiting;
+    f.deny(); release();
+    assert.equal((await settled(f, job.reference)).status, 'BLOCKED_REVIEW');
+    assert.equal(externalWrites, 0); assert.equal(f.writes, 0);
+    assert.equal(memberReads, 1);
+  } finally { release(); f.runtime.stop(); await new Promise(resolve => setImmediate(resolve)); f.db.close(); }
+});

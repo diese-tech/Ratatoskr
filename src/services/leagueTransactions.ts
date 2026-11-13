@@ -520,7 +520,6 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       await input.discord.validateReinstatementRoles(plan, loaded.snapshot);
       // A planned nickname restore is checked against the exact approved before-state below.
       if (!plan.discordNicknameChange) await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
-      await input.authorizeBeforeWrite?.();
       const freshPlan = await input.buildPlan(loaded.snapshot, loaded);
       if (leagueTransactionPlanFingerprint(freshPlan) !== leagueTransactionPlanFingerprint(plan))
         throw new LeagueTransactionPreviewChangedError(freshPlan);
@@ -529,7 +528,6 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       if (!input.discord.validateOneWayTradeRoles) throw new LeagueMutationValidationError('Discord role verification is unavailable.');
       await input.discord.validateOneWayTradeRoles(plan);
       await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
-      await input.authorizeBeforeWrite?.();
     }
     const nickname = plan.discordNicknameChange;
     if (nickname) {
@@ -547,6 +545,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       );
     }
 
+    // All variants share this guard after asynchronous preflight, before any mutation.
+    await input.authorizeBeforeWrite?.();
     const reference = input.jobReference ?? `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const record: LeagueTransactionRecord = {
       reference, effectiveDate: plan.reinstatement?.selection.effectiveDate ?? auditDate, processedById: input.actorUserId, processedBy: input.actorName,
