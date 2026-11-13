@@ -219,7 +219,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
   });
   const issue = screen<LeagueOpsPanelData>()((data, kit) => {
     const finding = data.selectedIssue?.finding;
-    const fix = leagueOpsRepairAction(finding ?? '');
+    const fix = data.selectedIssue?.requiresManualReview ? undefined : leagueOpsRepairAction(finding ?? '');
     const departed = !!data.selectedIssue?.oldDiscordId;
     return view({}, container({ color: 0x2f6844 },
       text({ title: leagueOpsText(finding ? leagueFindingTitle(finding) : 'League tools · Roster problem', 200) },
