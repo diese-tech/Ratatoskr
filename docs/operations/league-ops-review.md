@@ -26,6 +26,8 @@ Entry, every delivered action and canonical execution check fresh authorization 
 
 Preview reads run as finite background tasks, releasing the interaction queue. The UI never polls or auto-redraws unattended, and slow external mutations run only in the canonical worker. Sessions expire after ten minutes, with Discord's ephemeral webhook ceiling also enforced. They do not rehydrate after restart; reopen the current status card for a new read-only view. Old modals, replaced cards and duplicate submits cannot authorize another operation.
 
+Unconfirmed previews in these Fluxcord sessions are temporary. Their approval identity becomes durable when confirmation creates a canonical job or durable alias, before external mutation is eligible. That commit establishes acceptance even if the Discord acknowledgement is lost. Closing, expiring or reopening a panel cannot cancel, renew or erase accepted work; a new session must not inherit an old approval. Inspect Saved actions after an uncertain acknowledgement. Confirmation checks fresh actor access, reviewed intent and workflow validity; authoritative source validation remains in the worker. This does not change persisted ordinary transaction previews or reinstatement reviews and their stronger confirmation-time validation. See the [approved ADR amendments](../adr/0001-authoritative-league-roster-mutations.md#amendment-preview-lifetime-and-durable-acceptance-2026-11-13).
+
 Legacy issue/recovery views remain available as **read-only** fallback. Their old confirm controls cannot enqueue a mutation. A UI initialization failure leaves existing commands and canonical work available.
 
 ## Integration and release evidence
