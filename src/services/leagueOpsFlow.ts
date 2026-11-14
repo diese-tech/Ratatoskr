@@ -60,9 +60,9 @@ export function leagueOpsPreviewText(data: DeepReadonly<Pick<LeagueOpsPanelData,
     `Earlier action needing review: ${data.transaction!.originalReference}.`, 'This shows a new preview. Rat will not run the earlier action again.'].join('\n') : 'No approved preview is available.';
 }
 export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id: string) => void = () => {}) {
-  const run = (event: ActionEvent<LeagueOpsPanelData>, work: () => Promise<Partial<LeagueOpsPanelData>>, readOnly = false) => {
+  const run = (event: ActionEvent<LeagueOpsPanelData>, work: () => Promise<Partial<LeagueOpsPanelData>>, readOnly = false, loading = 'Checking the latest league records…') => {
     if (event.session.data.busy || (event.session.data.queued && !readOnly)) return;
-    event.mutate(data => { data.busy = true; data.notice = 'Checking the latest league records…'; });
+    event.mutate(data => { data.busy = true; data.notice = loading; });
     event.launch(async job => {
       try { const changes = await work(); job.mutate(data => { Object.assign(data, changes); }); }
       catch (error) {
@@ -75,14 +75,35 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     });
   };
   const refresh = action<LeagueOpsPanelData>()(event => {
-    const reference = event.session.data.selectedOperation?.reference;
+    if (event.session.data.busy) return;
+    const previousIssue = event.session.data.selectedIssue;
+    const previousOperation = event.session.data.selectedOperation;
+    const hadPreview = !!(event.session.data.replacement || event.session.data.transaction || event.session.data.repair || event.session.data.recovery);
+    event.mutate(data => { Object.assign(data, clearedPreview); });
+    // Fluxcord 0.2.2 keeps modal nonces on ordinary redraws and same-screen go.
+    // Two navigation transitions invalidate pending modals without a new session.
+    const screen = hadPreview ? previousIssue ? 'issue' : 'operation' : event.session.screen;
+    event.ui.go(screen === 'issues' ? 'operations' : 'issues');
+    event.ui.go(screen);
     run(event, async () => {
       const snapshot = await service.snapshot(event.actorId);
-      const selectedOperation = reference ? await service.operationDetail(event.actorId, reference) : undefined;
-      // This is a finite read, never an unattended polling/redraw loop.
-      return { snapshot, ...(selectedOperation ? { selectedOperation } : {}), notice: 'Latest records loaded.' };
-    }, true);
+      const selectedIssue = previousIssue ? snapshot.issues.find(issue => issue.key === previousIssue.key
+        && issue.finding === previousIssue.finding && issue.oldDiscordId === previousIssue.oldDiscordId
+        && issue.requiresManualReview === previousIssue.requiresManualReview) : undefined;
+      let selectedOperation: LeagueOpsOperation | undefined;
+      if (previousOperation) {
+        try { selectedOperation = await service.operationDetail(event.actorId, previousOperation.reference, true); }
+        catch (error) { if (!(error instanceof LeagueMutationValidationError)) throw error; }
+      }
+      return { snapshot, selectedIssue, selectedOperation,
+        notice: 'Saved status reloaded. No new Discord or Sheets check was run.'
+          + (previousIssue && !selectedIssue ? ' This problem changed or is no longer listed. Choose a problem again.' : '')
+          + (previousOperation && !selectedOperation ? ' This saved action is no longer available.' : '')
+          + (event.session.data.queued ? ' Accepted work is unchanged. Check Saved actions for its result.'
+            : hadPreview ? ' The unconfirmed preview was cleared. Request a new preview before approving.' : '') };
+    }, true, 'Reloading saved status…');
   });
+
   const findOperation = action<LeagueOpsPanelData>()(async event => {
     if (event.session.data.busy) return;
     if (event.kind !== EventKind.ModalSubmit) {
@@ -170,7 +191,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     kit.Button({ label: 'Roster problems', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; Object.assign(d, clearedPreview); d.notice = ''; }); event.ui.go('issues'); } }),
     kit.Button({ label: 'Saved actions', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; Object.assign(d, clearedPreview); d.notice = ''; }); event.ui.go('operations'); } }),
     kit.Button({ label: 'Check details', secondary: true, onClick: event => { if (!event.session.data.busy) { event.mutate(d => { d.page = 0; }); event.ui.go('checks'); } } }),
-    kit.Button({ label: 'Refresh', secondary: true, onClick: refresh }),
+    kit.Button({ label: 'Reload saved status', secondary: true, onClick: refresh }),
     kit.Button({ label: 'Close panel', secondary: true, onClick: event => event.ui.exit() }));
   // Paging buttons appear only when there is somewhere to go, so none sit greyed out without a reason.
   const pager = (kit: ScreenKit<LeagueOpsPanelData>, page: number, total: number) => {
@@ -246,7 +267,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
       ...statusLines(data), navigation(kit)));
   });
   const checks = screen<LeagueOpsPanelData>()((data, kit) => {
-    const pages = leagueCheckDetailPages(data.snapshot.checkDetails ?? ['Refresh to load the latest check details.']);
+    const pages = leagueCheckDetailPages(data.snapshot.checkDetails ?? ['Reload saved status to load saved check details.']);
     const page = Math.min(data.page, pages.length - 1);
     const buttons = [
       ...(page > 0 ? [kit.Button({ label: 'Previous details', secondary: true, onClick: event => event.mutate(d => { d.page = Math.max(0, page - 1); }) })] : []),
@@ -254,7 +275,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     ];
     return view({}, container({ color: 0x2f6844 },
       text({ title: `League tools · Check details · ${page + 1} of ${pages.length}` }, 'Checks only read records. They never change the roster.'),
-      text(leagueOpsText(pages[page]!, 3000)), ...(data.queued ? [text(leagueOpsLockedText(data.queued))] : []),
+      text(leagueOpsText(pages[page]!, 3000)), text(data.notice || 'These are saved check results.'), ...(data.queued ? [text(leagueOpsLockedText(data.queued))] : []),
       ...(buttons.length ? [row({}, ...buttons)] : []), navigation(kit)));
   });
   const approvalLabel = (data: DeepReadonly<LeagueOpsPanelData>) => data.recovery ? 'Close checked action' : data.replacement ? 'Change Discord account' : data.repair ? leagueFixLabel(data.repair.action) : 'Approve player change';

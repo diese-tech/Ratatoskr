@@ -1,3 +1,4 @@
+import { LeagueMutationValidationError } from '../domain/leagueOperations.js';
 import { buildLeagueAccountReplacementPlan } from '../domain/leagueAccountReplacement.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -86,7 +87,7 @@ async function harness() {
     release(); await until(() => JSON.stringify(edits.at(-1)).includes('Review these player changes'));
     await click('Approve player change');
   };
-  return { snapshot, setData: async (change: (data: LeagueOpsPanelData) => void) => handle.redraw(change), recoveries: () => recoveries, runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
+  return { service, snapshot, setData: async (change: (data: LeagueOpsPanelData) => void) => handle.redraw(change), recoveries: () => recoveries, runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
     setIssues: async (issues: LeagueOpsSnapshot['issues']) => { snapshot.issues = issues; await handle.redraw(data => { data.snapshot = snapshot; }); },
     repairConfirmations,
     expire: () => { now += 11 * 60_000; }, count: () => confirmations, close: () => runtime.stopSweeper() };
@@ -242,7 +243,7 @@ test('submitted panels can refresh and inspect saved progress without submitting
     await h.preview();
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     await until(() => JSON.stringify(h.edits.at(-1)).includes('new-durable-job'));
-    await h.click('Saved actions'); await h.click('View action'); await h.click('Refresh');
+    await h.click('Saved actions'); await h.click('View action'); await h.click('Reload saved status');
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Finished'));
     assert.equal(h.count(), 1);
   } finally { h.release(); h.close(); }
@@ -362,4 +363,59 @@ test('private pagination redacts complete credentials before splitting across a 
     assert.doesNotMatch(rendered.join(''), /synthetic|boundary-secret/);
     assert.match(rendered.join(''), /visible next step/);
   } finally { h.release(); h.close(); if (old === undefined) delete process.env[key]; else process.env[key] = old; }
+});
+
+for (const change of ['unchanged', 'modified', 'removed'] as const) test(`reload reconciles selected issue and invalidates old approval: ${change}`, async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }]);
+    await h.click('View problem'); await h.click(FIX);
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
+    await h.click(FIX);
+    const oldModal = h.modals.at(-1)!.custom_id;
+    if (change === 'modified') h.snapshot.issues = [{ key: 'first', finding: divisionCard('Two') }];
+    if (change === 'removed') h.snapshot.issues = [];
+    await h.click('Reload saved status');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
+    const copy = JSON.stringify(h.edits.at(-1));
+    assert.match(copy, /No new Discord or Sheets check was run/);
+    assert.match(copy, /unconfirmed preview was cleared/);
+    assert.equal(copy.includes('One’s division'), change === 'unchanged');
+    if (change !== 'unchanged') assert.match(copy, /changed or is no longer listed/);
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    assert.deepEqual(h.repairConfirmations, []);
+    if (change === 'unchanged') {
+      await h.click(FIX); await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
+      await h.click(FIX);
+      await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+      assert.deepEqual(h.repairConfirmations, []);
+      await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+      await until(() => h.repairConfirmations.length === 1);
+    }
+  } finally { h.release(); h.close(); }
+});
+
+test('reload on a list preserves saved findings and never calls mutation previews', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }]);
+    await h.click('Reload saved status');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
+    assert.match(JSON.stringify(h.edits.at(-1)), /One’s division/);
+    assert.equal(h.count(), 0); assert.deepEqual(h.repairConfirmations, []);
+  } finally { h.release(); h.close(); }
+});
+
+for (const missing of [false, true]) test(`reload revalidates selected saved operation and drops its preview: missing=${missing}`, async () => {
+  const h = await harness();
+  try {
+    await h.preview();
+    const oldModal = h.modals.at(-1)!.custom_id;
+    if (missing) h.service.operationDetail = async () => { throw new LeagueMutationValidationError('Not found'); };
+    await h.click('Reload saved status');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
+    assert.match(JSON.stringify(h.edits.at(-1)), missing ? /no longer available/ : /Finished/);
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    assert.equal(h.count(), 0);
+  } finally { h.release(); h.close(); }
 });
