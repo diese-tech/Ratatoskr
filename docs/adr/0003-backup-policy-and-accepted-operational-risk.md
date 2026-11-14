@@ -21,5 +21,5 @@ Revisit this decision when material circumstances change, including higher usage
 ## Related records
 
 - [Authoritative mutations and durable acceptance](0001-authoritative-league-roster-mutations.md)
-- [Release activation and acceptance](../operations/production-release.md)
+- [Merge-to-deploy and acceptance](../operations/production-release.md)
 - [League transaction operations](../operations/league-transactions.md)

@@ -4,7 +4,7 @@
 
 Follow [ADR 0003](docs/adr/0003-backup-policy-and-accepted-operational-risk.md): the owner accepts operating without a verified current production recovery backup. Managed cloud backups are deferred; missing backups alone do not block source review, approved release or read-only acceptance. Do not repeatedly reopen this decision or add backup infrastructure/schedules without authorization. Missing/corrupt production storage, unsafe migrations and weakened durable/reconciliation safeguards remain defects. Historical copies are not presumed current.
 
-Merging must be separated from production deployment. The [manual release activation sequence](docs/operations/production-release.md) requires separate owner authorization for environment/credential setup and disabling native Railway autodeploy. Preparing the workflow does not activate it. No production deployment, restart, mutation or settings change is implied by implementation or read-only acceptance.
+The owner uses [merge-to-deploy](docs/operations/production-release.md): Railway native autodeploy stays enabled for main. Require full local validation, final-head Windows/Ubuntu CI, both CodeQL analyses and independent source/Codex review with no unresolved blocking findings before an authorized merge. The merge intentionally triggers normal Railway deployment; verify the exact deployed revision and health afterward. Do not disable/disconnect autodeploy, add a manual release pipeline, alter production settings or manually deploy/restart without separate authorization. Read-only acceptance never authorizes roster transactions or repair.
 
 ## Human-facing wording
 

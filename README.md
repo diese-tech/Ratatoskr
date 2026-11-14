@@ -157,7 +157,7 @@ Before deploying a runtime or migration change:
 
 Do not start a second production bot replica against the same Discord workflow/database state merely for verification unless the architecture has explicitly been changed to support multiple writers.
 
-Production releases require successful exact-SHA CI/CodeQL and separate approval. Follow the [manual release activation and read-only smoke checklist](docs/operations/production-release.md); adding the workflow does not disable Railway autodeploy or authorize deployment.
+Production uses merge-to-deploy: run local validation, require successful final-head CI/CodeQL and independent review, then merge only when authorized. Railway native autodeploy remains enabled for main. Follow the [release and read-only smoke checklist](docs/operations/production-release.md) to verify the merged revision and health; no separate manual deployment pipeline or infrastructure change is required.
 
 Operational rollout and recovery guidance lives under [`docs/operations/`](docs/operations/).
 
