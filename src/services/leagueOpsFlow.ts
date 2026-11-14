@@ -7,6 +7,7 @@ import { leagueOpsText, type LeagueOpsIssue, type LeagueOpsOperation, type Leagu
   leagueOpsRepairAction, type LeagueOpsSnapshot, type ReviewAccountReplacementPreview, type ReviewTransactionPreview, type ReviewRepairPreview, type ReviewRecoveryPreview } from './leagueOpsReview.js';
 import { LeagueAuditRepairNoWriteError } from './leagueAuditResolution.js';
 import { draftPickVerificationText } from './draftPickTracking.js';
+import { leagueFindingBody, leagueFindingTitle } from './leagueAuditPresentation.js';
 import { leagueActionLabel, leagueStatusLabel, savedLeagueErrorMessage, leagueValidationMessage, leagueRepairNoWriteMessage, leagueEasternTime, leagueFixLabel, leagueFixExplanation } from './leaguePresentation.js';
 
 export type LeagueOpsPanelData = { snapshot: LeagueOpsSnapshot; page: number; selectedIssue?: LeagueOpsIssue;
@@ -15,6 +16,14 @@ export type LeagueOpsPanelData = { snapshot: LeagueOpsSnapshot; page: number; se
   recovery?: ReviewRecoveryPreview;
   samePlayerConfirmed?: boolean; busy: boolean; notice: string; queued?: string };
 const PAGE_SIZE = 5;
+const NOTHING_YET = 'Nothing changes until you press Confirm.';
+/** Each panel sends one fix; after that its change buttons stay off on purpose (#206 rule 7). */
+export function leagueOpsLockedText(reference: string): string {
+  return `You already sent a fix from this panel (${reference}). It’s saved; check Saved actions for the result, and don’t send it again.
+To fix another problem, press Review problems on the League Status card.`;
+}
+const statusLines = (data: DeepReadonly<LeagueOpsPanelData>, fallback = NOTHING_YET) =>
+  [...(data.queued ? [text(leagueOpsLockedText(data.queued))] : []), text(data.notice || (data.queued ? 'Closing this panel does not cancel accepted work.' : fallback))];
 export function leagueCheckDetailPages(details: readonly string[]): string[] {
   const pages: string[] = [];
   let remaining = redactOperationalText(details.join('\n\n')) || 'No check details available yet.';
@@ -34,6 +43,7 @@ export function leagueOpsPreviewText(data: DeepReadonly<Pick<LeagueOpsPanelData,
     const p = replacement.plan;
     return [`Move ${p.rosterBefore.player} to their new Discord account.`, `Old account: ${p.oldDiscordId}; new account: ${p.newDiscordId}.`, `Roster name: ${p.rosterBefore.player} → ${p.rosterAfter.player}`,
       `Keep their team and position: ${p.rosterAfter.franchise}, ${p.rosterAfter.division}, ${p.rosterAfter.rosterStatus}.`,
+      ...(p.layeredAfter ? [`Keep their ${p.layeredAfter.division} team too: ${p.layeredAfter.franchise}, ${p.layeredAfter.rosterStatus}.`] : []),
       'Keep the old account and names in history. Add one current name for the new account. Past transactions keep their original account IDs.',
       `Name History row ${p.oldNameAfter.sheetRow}: ${p.oldNameBefore.currentLeagueName} / ${p.oldNameBefore.knownName} → Previous / Alternate.`,
       `New current name in row ${p.newName.sheetRow}: ${p.newName.currentLeagueName}; preserve ${p.preservedHistory.nameRows.length} past-name rows.`,
@@ -43,35 +53,72 @@ export function leagueOpsPreviewText(data: DeepReadonly<Pick<LeagueOpsPanelData,
       `Earlier saved fixes: ${replacement.preservedJobReferences.join(', ') || 'none linked'}.`].join('\n');
   }
   if (data.recovery) return `Close the checked action: ${data.recovery.reference}\n${data.recovery.description}\nCheck the saved names and history first. This closes the unfinished action after checking today’s records. It does not run the old change again or say the old attempt succeeded.`;
-  if (data.repair) return `Problem: ${data.repair.finding}\n\nWhat will change: ${data.repair.description}\nRat will check the same records again when you confirm. No changes were made.`;
+  if (data.repair) return [leagueFindingTitle(data.repair.finding), '', 'What will change:', ...data.repair.description.split('\n').map(line => `- ${line}`), '',
+    'Rat checks everything again when you confirm. Nothing has changed yet.'].join('\n');
   const plan = data.transaction?.plan;
+  const roleName = (id: string) => plan?.teams.find(team => team.teamRoleId === id)?.teamRole
+    ?? plan?.teams.find(team => team.divisionRoleId === id)?.division ?? 'Free Agent';
   return plan ? [`${leagueActionLabel(plan.kind)}: ${plan.players.join(' / ')}`, ...plan.publicChanges.map(c => `${c.division} / ${c.group}: ${c.from || 'empty'} → ${c.to || 'empty'}`),
-    `Earlier action needing review: ${data.transaction!.originalReference}.`, 'This shows a new preview. Rat will not run the earlier action again.'].join('\n') : 'No approved preview is available.';
+    ...(data.transaction!.exit ? [plan.kind === 'self-drop' ? 'Mark the player suspended for this season and next season. They do not become a Free Agent.' : 'Mark the player inactive. They do not become a Free Agent.', 'End all listed memberships. Preserve identity, name history and original draft attribution.', ...(plan.players[1] ? [`Replacement: ${plan.players[1]} joins ${plan.teams[0]!.franchise} (${plan.teams[0]!.division}).`] : []), ...plan.discordRoleChanges.map(change => `Discord roles for ${plan.players[plan.playerIds.indexOf(change.discordId)]}: add ${change.add.map(roleName).join(', ') || 'none'}; remove ${change.remove.map(roleName).join(', ') || 'none'}.`), 'Record one approved transaction and its public notice/history.'] : [`Earlier action needing review: ${data.transaction!.originalReference}.`, 'This shows a new preview. Rat will not run the earlier action again.'])].join('\n') : 'No approved preview is available.';
 }
 export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id: string) => void = () => {}) {
-  const run = (event: ActionEvent<LeagueOpsPanelData>, work: () => Promise<Partial<LeagueOpsPanelData>>, readOnly = false) => {
+  const run = (event: ActionEvent<LeagueOpsPanelData>, work: () => Promise<Partial<LeagueOpsPanelData>>, readOnly = false, loading = 'Checking the latest league records…') => {
     if (event.session.data.busy || (event.session.data.queued && !readOnly)) return;
-    event.mutate(data => { data.busy = true; data.notice = 'Checking the latest league records…'; });
+    event.mutate(data => { data.busy = true; data.notice = loading; });
     event.launch(async job => {
       try { const changes = await work(); job.mutate(data => { Object.assign(data, changes); }); }
       catch (error) {
         const message = error instanceof LeagueMutationValidationError ? leagueValidationMessage(error.message)
           : error instanceof LeagueAuditRepairNoWriteError ? leagueRepairNoWriteMessage(error.message)
           : error instanceof LeagueJobBlockedError ? savedLeagueErrorMessage(error.message)
-          : 'Rat could not finish this review. Choose Open league tools on the latest League Status message and ask staff to check Saved actions. If you already confirmed, do not repeat the action.';
+          : 'Rat couldn’t finish this step. Press Review problems on the League Status card to start again. If you already confirmed a fix, check Saved actions instead of sending it again.';
         job.mutate(data => { data.notice = leagueOpsText(message); });
       } finally { job.mutate(data => { data.busy = false; }); }
     });
   };
-  const refresh = action<LeagueOpsPanelData>()(event => {
-    const reference = event.session.data.selectedOperation?.reference;
-    run(event, async () => {
+  const refresh = action<LeagueOpsPanelData>()(async event => {
+    if (event.session.data.busy) return;
+    const previousIssue = event.session.data.selectedIssue;
+    const previousOperation = event.session.data.selectedOperation;
+    const hadPreview = !!(event.session.data.replacement || event.session.data.transaction || event.session.data.repair || event.session.data.recovery);
+
+    // Fluxcord 0.2.2 keeps modal nonces on ordinary redraws and same-screen go.
+    // Two navigation transitions invalidate pending modals without a new session.
+    const activeScreen = event.session.screen;
+    const previewScreen = activeScreen === 'preview' || activeScreen === 'confirmation';
+    const screen = previewScreen
+      ? event.session.data.replacement || event.session.data.repair || event.session.data.transaction?.exit ? 'issue' : 'operation'
+      : activeScreen;
+    event.mutate(data => { Object.assign(data, clearedPreview); data.busy = true; data.notice = 'Reloading saved status…'; });
+    event.ui.go(screen === 'issues' ? 'operations' : 'issues');
+    event.ui.go(screen);
+    // Saved reads stay in this interaction so navigation uses their reconciled result.
+    try {
       const snapshot = await service.snapshot(event.actorId);
-      const selectedOperation = reference ? await service.operationDetail(event.actorId, reference) : undefined;
-      // This is a finite read, never an unattended polling/redraw loop.
-      return { snapshot, ...(selectedOperation ? { selectedOperation } : {}), notice: 'Latest records loaded.' };
-    }, true);
+      const selectedIssue = previousIssue ? snapshot.issues.find(issue => issue.key === previousIssue.key
+        && issue.finding === previousIssue.finding && issue.oldDiscordId === previousIssue.oldDiscordId
+        && issue.requiresManualReview === previousIssue.requiresManualReview) : undefined;
+      let selectedOperation: LeagueOpsOperation | undefined;
+      if (previousOperation) {
+        try { selectedOperation = await service.operationDetail(event.actorId, previousOperation.reference, true); }
+        catch (error) { if (!(error instanceof LeagueMutationValidationError)) throw error; }
+      }
+      event.mutate(data => { Object.assign(data, { snapshot, selectedIssue, selectedOperation,
+        notice: 'Saved status reloaded. No new Discord or Sheets check was run.'
+          + (previousIssue && !selectedIssue ? ' This problem changed or is no longer listed. Choose a problem again.' : '')
+          + (previousOperation && !selectedOperation ? ' This saved action is no longer available.' : '')
+          + (event.session.data.queued ? ' Accepted work is unchanged. Check Saved actions for its result.'
+            : hadPreview ? ' The unconfirmed preview was cleared. Request a new preview before approving.' : '') }); });
+      const destination = screen === 'issue' && !selectedIssue ? 'issues'
+        : screen === 'operation' && !selectedOperation ? 'operations' : screen;
+      event.ui.go(destination);
+    } catch {
+      event.mutate(data => { data.selectedIssue = undefined; data.selectedOperation = undefined;
+        data.notice = 'Saved status could not be loaded. Unconfirmed previews were cleared. Accepted work is unchanged; check Saved actions.'; });
+      event.ui.go(screen === 'issue' ? 'issues' : screen === 'operation' ? 'operations' : screen);
+    } finally { event.mutate(data => { data.busy = false; }); }
   });
+
   const findOperation = action<LeagueOpsPanelData>()(async event => {
     if (event.session.data.busy) return;
     if (event.kind !== EventKind.ModalSubmit) {
@@ -107,6 +154,23 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
         notice: 'Review the account change. Check any captain or staff roles listed below before confirming.' };
     });
   });
+  const exitPreview = (kind: 'departure' | 'self-drop') => action<LeagueOpsPanelData>()(async event => {
+    if (event.session.data.busy || event.session.data.queued) return;
+    const issue = event.session.data.selectedIssue;
+    if (!issue?.oldDiscordId) return;
+    if (event.kind !== EventKind.ModalSubmit) {
+      await event.ui.showModal(modal({ title: kind === 'departure' ? 'Player left the league' : 'Player self-dropped' },
+        text(`Player: ${leagueFindingTitle(issue.finding)}. Leave replacement blank for none. Nothing changes until you review and confirm.`),
+        input({ id: 'replacement', label: 'Replacement Discord ID (optional)', required: false, maxLength: 20 })));
+      return;
+    }
+    const replacementId = String(event.inputs?.replacement ?? '').trim();
+    event.ui.go('preview');
+    run(event, async () => ({ ...clearedPreview, transaction: await service.previewExit(event.actorId, issue, kind, replacementId || undefined),
+      notice: 'Review every change below. Nothing has changed yet.' }));
+  });
+  const departure = exitPreview('departure');
+  const selfDrop = exitPreview('self-drop');
   const repreview = action<LeagueOpsPanelData>()(event => {
     const operation = event.session.data.selectedOperation;
     if (!operation?.canRepreview || event.session.data.replacement || event.session.data.transaction) return;
@@ -120,7 +184,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     const issue = event.session.data.selectedIssue;
     if (!issue || event.session.data.replacement || event.session.data.transaction || event.session.data.repair) return;
     event.ui.go('preview');
-    run(event, async () => ({ ...clearedPreview, repair: await service.previewRepair(event.actorId, issue.key), notice: 'Review this fix, then confirm if it is correct.' }));
+    run(event, async () => ({ ...clearedPreview, repair: await service.previewRepair(event.actorId, issue.key), notice: `Check the changes below. ${NOTHING_YET}` }));
   });
   const recoveryPreview = action<LeagueOpsPanelData>()(event => {
     const operation = event.session.data.selectedOperation;
@@ -152,45 +216,83 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
         : reviewedReplacement ? await service.confirmReplacement(event.actorId, reviewedReplacement, samePlayerConfirmed)
         : reviewedRepair ? await service.confirmRepair(event.actorId, reviewedRepair) : await service.confirmTransaction(event.actorId, reviewedTransaction!);
       return { queued: job.reference,
-        notice: `${leagueStatusLabel(job.status)}. Reference: ${job.reference}. Open Saved actions to check its progress. Do not submit it again.` };
+        notice: `Accepted: ${job.reference}. Status at acceptance: ${leagueStatusLabel(job.status)}. Acceptance does not mean execution has completed. Inspect the saved action or reload its status. Closing this panel does not cancel accepted work.` };
     });
+  });
+  const submittedAction = action<LeagueOpsPanelData>()(event => {
+    const reference = event.session.data.queued;
+    if (!reference || event.session.data.busy) return;
+    event.ui.go('operation');
+    run(event, async () => ({ selectedOperation: await service.operationDetail(event.actorId, reference, true),
+      notice: 'Saved action loaded. Closing this panel does not cancel accepted work.' }), true);
   });
   const navigation = (kit: ScreenKit<LeagueOpsPanelData>) => row({},
     kit.Button({ label: 'Roster problems', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; Object.assign(d, clearedPreview); d.notice = ''; }); event.ui.go('issues'); } }),
     kit.Button({ label: 'Saved actions', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; Object.assign(d, clearedPreview); d.notice = ''; }); event.ui.go('operations'); } }),
     kit.Button({ label: 'Check details', secondary: true, onClick: event => { if (!event.session.data.busy) { event.mutate(d => { d.page = 0; }); event.ui.go('checks'); } } }),
-    kit.Button({ label: 'Refresh', secondary: true, onClick: refresh }),
+    kit.Button({ label: 'Reload saved status', secondary: true, onClick: refresh }),
     kit.Button({ label: 'Close panel', secondary: true, onClick: event => event.ui.exit() }));
+  // Paging buttons appear only when there is somewhere to go, so none sit greyed out without a reason.
+  const pager = (kit: ScreenKit<LeagueOpsPanelData>, page: number, total: number) => {
+    const buttons = [
+      ...(page > 0 ? [kit.Button({ label: 'Previous', secondary: true, onClick: e => e.mutate(d => { d.page = Math.max(0, d.page - 1); }) })] : []),
+      ...((page + 1) * PAGE_SIZE < total ? [kit.Button({ label: 'Next', secondary: true, onClick: e => e.mutate(d => { d.page++; }) })] : []),
+    ];
+    return buttons.length ? [row({}, ...buttons)] : [];
+  };
   const issueScreen = screen<LeagueOpsPanelData>()((data, kit) => {
     const page = Math.min(data.page, Math.max(0, Math.ceil(data.snapshot.issues.length / PAGE_SIZE) - 1));
     const issues = data.snapshot.issues.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    const count = data.snapshot.issues.length;
     return view({}, container({ color: 0x2f6844 }, text({ title: 'League tools · Roster problems' },
-      data.snapshot.issues.length ? `${data.snapshot.issues.length} roster problems. Choose one to review.` : 'No roster problems found.'),
-      ...(data.snapshot.draftNeedsAttention ? [text('Draft records need checking. Open Check details for the reason and next step.')] : []),
-      text('For a new trade, drop or pickup, use /transaction. These tools fix disagreements in existing records and check saved actions.'),
-      ...issues.flatMap(issue => [text(leagueOpsText(issue.finding, 450)), row({}, kit.Button({ label: 'View problem', disabled: data.busy, onClick: event => {
+      count ? `${count} roster problem${count === 1 ? '' : 's'}. Pick one to look at.` : 'No roster problems found. Nothing needs doing.'),
+      ...(data.snapshot.draftNeedsAttention ? [text('Draft records need checking. Open Check details to see why and what to do.')] : []),
+      text('For a new trade, drop or pickup, use /transaction. This panel fixes records that disagree and shows saved actions.'),
+      ...issues.flatMap(issue => [text(leagueOpsText(leagueFindingTitle(issue.finding), 200)), row({}, kit.Button({ label: 'View problem', disabled: data.busy, onClick: event => {
         event.mutate(d => { d.selectedIssue = issue; d.notice = ''; }); event.ui.go('issue');
       } }))]),
-      text(data.notice || 'Nothing changes until you confirm.'), row({}, kit.Button({ label: 'Previous', secondary: true, disabled: page === 0, onClick: e => e.mutate(d => { d.page = Math.max(0, d.page - 1); }) }),
-        kit.Button({ label: 'Next', secondary: true, disabled: (page + 1) * PAGE_SIZE >= data.snapshot.issues.length, onClick: e => e.mutate(d => { d.page++; }) })), navigation(kit)));
+      ...statusLines(data), ...pager(kit, page, count), navigation(kit)));
   });
   const operations = screen<LeagueOpsPanelData>()((data, kit) => {
     const page = Math.min(data.page, Math.max(0, Math.ceil(data.snapshot.operations.length / PAGE_SIZE) - 1));
     const items = data.snapshot.operations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-    return view({}, container({ color: 0x2f6844 }, text({ title: 'League tools · Saved actions' }, `${data.snapshot.operations.length} unfinished actions. Open one to check progress or review a problem.`),
+    const count = data.snapshot.operations.length;
+    return view({}, container({ color: 0x2f6844 }, text({ title: 'League tools · Saved actions' },
+      count ? `${count} unfinished action${count === 1 ? '' : 's'}. Open one to see how it’s going.` : 'No unfinished actions. Nothing needs doing.'),
       ...items.flatMap(operation => [text(`${operation.reference} · ${leagueActionLabel(operation.type)} · ${leagueStatusLabel(operation.status)}`), row({}, kit.Button({ label: 'View action', disabled: data.busy, onClick: e => {
         e.mutate(d => { d.selectedOperation = { ...operation, targets: [...operation.targets], historyDetails: operation.historyDetails ? [...operation.historyDetails] : undefined, linkedReferences: operation.linkedReferences ? [...operation.linkedReferences] : undefined }; d.notice = ''; }); e.ui.go('operation');
-      } }))]), text(data.notice || 'Nothing changes until you confirm.'), row({}, kit.Button({ label: 'Previous', secondary: true, disabled: page === 0, onClick: e => e.mutate(d => { d.page = Math.max(0, d.page - 1); }) }),
-        kit.Button({ label: 'Next', secondary: true, disabled: (page + 1) * PAGE_SIZE >= data.snapshot.operations.length, onClick: e => e.mutate(d => { d.page++; }) })),
+      } }))]), ...statusLines(data), ...pager(kit, page, count),
       row({}, kit.Button({ label: 'Find by reference', disabled: data.busy, secondary: true, onClick: findOperation })), navigation(kit)));
   });
-  const issue = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
-    text({ title: 'League tools · Roster problem' }, leagueOpsText(data.selectedIssue?.finding ?? 'Choose a current roster problem.')),
-    text(data.selectedIssue?.oldDiscordId ? 'Choose what happened. If this is the same player on a new Discord account, use Player changed Discord account. For someone who left or self-dropped, use the commands below.' : leagueFixExplanation(leagueOpsRepairAction(data.selectedIssue?.finding ?? ''))),
-    row({}, kit.Button({ label: 'Player changed Discord account', disabled: !!data.queued || !data.selectedIssue?.oldDiscordId, onClick: replacement })),
-    row({}, kit.Button({ label: leagueFixLabel(leagueOpsRepairAction(data.selectedIssue?.finding ?? '')), disabled: !!data.queued || !!data.selectedIssue?.oldDiscordId || !leagueOpsRepairAction(data.selectedIssue?.finding ?? ''), onClick: repairPreview })),
-    ...(data.selectedIssue?.oldDiscordId ? [text('Left league: /transaction departure. Self-dropped: /transaction self-drop. Both show the changes for you to confirm.')] : []),
-    text('The action button opens a preview. Nothing changes until you type CONFIRM in the final form.'), text(data.notice || 'Nothing changes until you confirm.'), navigation(kit))));
+  // Moves to the next problem without changing anything.
+  const skip = action<LeagueOpsPanelData>()(event => {
+    if (event.session.data.busy) return;
+    const issues = event.session.data.snapshot.issues;
+    const index = issues.findIndex(item => item.key === event.session.data.selectedIssue?.key);
+    const next = index >= 0 ? issues[index + 1] : undefined;
+    event.mutate(d => {
+      Object.assign(d, clearedPreview);
+      if (next) { d.selectedIssue = { ...next }; d.notice = 'Skipped. Nothing was changed.'; }
+      else { d.page = 0; d.notice = 'That was the last problem. Nothing was changed.'; }
+    });
+    if (!next) event.ui.go('issues');
+  });
+  const issue = screen<LeagueOpsPanelData>()((data, kit) => {
+    const finding = data.selectedIssue?.finding;
+    const fix = data.selectedIssue?.requiresManualReview ? undefined : leagueOpsRepairAction(finding ?? '');
+    const departed = !!data.selectedIssue?.oldDiscordId;
+    return view({}, container({ color: 0x2f6844 },
+      text({ title: leagueOpsText(finding ? leagueFindingTitle(finding) : 'League tools · Roster problem', 200) },
+        leagueOpsText(finding ? leagueFindingBody(finding) : 'Choose a current roster problem.')),
+      text(departed ? 'What happened?\n- Same player, new Discord account: press Player changed Discord account.\n- They left the league: press Player left the league.\n- They dropped themselves: press Player self-dropped.\nEach one shows you the changes before anything happens.'
+        : leagueFixExplanation(fix)),
+      ...(departed ? [row({}, kit.Button({ label: 'Player changed Discord account', disabled: !!data.queued, onClick: replacement }),
+        kit.Button({ label: 'Player left the league', disabled: !!data.queued, onClick: departure }),
+        kit.Button({ label: 'Player self-dropped', disabled: !!data.queued, onClick: selfDrop }))] : []),
+      ...(!departed && fix ? [row({}, kit.Button({ label: leagueFixLabel(fix), disabled: !!data.queued, onClick: repairPreview }))] : []),
+      row({}, kit.Button({ label: 'Skip for now', secondary: true, disabled: data.busy, onClick: skip })),
+      ...statusLines(data), navigation(kit)));
+  });
   const operation = screen<LeagueOpsPanelData>()((data, kit) => {
     const op = data.selectedOperation;
     return view({}, container({ color: 0x2f6844 }, text({ title: 'League tools · Saved action' }, op ?
@@ -200,29 +302,39 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
       ...(op?.linkedReferences ?? []).map(reference => row({}, kit.Button({ label: 'View linked action', secondary: true, disabled: data.busy, onClick: event => {
         run(event, async () => ({ selectedOperation: await service.operationDetail(event.actorId, reference), notice: 'Linked history loaded.' }), true);
       } }))),
-      row({}, kit.Button({ label: 'Preview player change', disabled: !!data.queued || !op?.canRepreview, onClick: repreview }),
-        kit.Button({ label: 'Check unfinished changes', disabled: !!data.queued || !op?.canRecover, secondary: true, onClick: recoveryPreview })), text(data.notice || 'Nothing changes until you confirm.'), navigation(kit)));
+      ...(op?.canRepreview || op?.canRecover ? [row({},
+        ...(op.canRepreview ? [kit.Button({ label: 'Preview player change', disabled: !!data.queued, onClick: repreview })] : []),
+        ...(op.canRecover ? [kit.Button({ label: 'Check unfinished changes', disabled: !!data.queued, secondary: true, onClick: recoveryPreview })] : []))] : []),
+      ...statusLines(data), navigation(kit)));
   });
   const checks = screen<LeagueOpsPanelData>()((data, kit) => {
-    const pages = leagueCheckDetailPages(data.snapshot.checkDetails ?? ['Refresh to load the latest check details.']);
+    const pages = leagueCheckDetailPages(data.snapshot.checkDetails ?? ['Reload saved status to load saved check details.']);
     const page = Math.min(data.page, pages.length - 1);
+    const buttons = [
+      ...(page > 0 ? [kit.Button({ label: 'Previous details', secondary: true, onClick: event => event.mutate(d => { d.page = Math.max(0, page - 1); }) })] : []),
+      ...(page < pages.length - 1 ? [kit.Button({ label: 'Next details', secondary: true, onClick: event => event.mutate(d => { d.page = page + 1; }) })] : []),
+    ];
     return view({}, container({ color: 0x2f6844 },
-      text({ title: `League tools · Check details · ${page + 1} of ${pages.length}` }, 'Checks only read records. No roster changes are made.'),
-      text(leagueOpsText(pages[page]!, 3000)), row({},
-        kit.Button({ label: 'Previous details', secondary: true, disabled: page === 0, onClick: event => event.mutate(d => { d.page = Math.max(0, page - 1); }) }),
-        kit.Button({ label: 'Next details', secondary: true, disabled: page === pages.length - 1, onClick: event => event.mutate(d => { d.page = page + 1; }) })), navigation(kit)));
+      text({ title: `League tools · Check details · ${page + 1} of ${pages.length}` }, 'Checks only read records. They never change the roster.'),
+      text(leagueOpsText(pages[page]!, 3000)), text(data.notice || 'These are saved check results.'), ...(data.queued ? [text(leagueOpsLockedText(data.queued))] : []),
+      ...(buttons.length ? [row({}, ...buttons)] : []), navigation(kit)));
   });
   const approvalLabel = (data: DeepReadonly<LeagueOpsPanelData>) => data.recovery ? 'Close checked action' : data.replacement ? 'Change Discord account' : data.repair ? leagueFixLabel(data.repair.action) : 'Approve player change';
-  const preview = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
-    text({ title: 'League tools · Review changes' }, leagueOpsText(leagueOpsPreviewText(data), 3400)), text(data.notice || 'No changes made. The button below opens the final confirmation form.'),
+  const preview = screen<LeagueOpsPanelData>()((data, kit) => data.queued ? view({}, container({ color: 0x2f6844 },
+    text({ title: 'League tools · Action accepted' }, data.notice || `Accepted saved action: ${data.queued}. Inspect it for the current status.`),
+    text(leagueOpsLockedText(data.queued)), text('Closing this panel does not cancel accepted work. Use the main button on the latest League Status card for another independent review.'),
+    row({}, kit.Button({ label: 'View submitted action', secondary: true, onClick: submittedAction })), navigation(kit))) : view({}, container({ color: 0x2f6844 },
+    text({ title: 'League tools · Review changes' }, leagueOpsText(leagueOpsPreviewText(data), 3400)),
+    ...statusLines(data, `${NOTHING_YET} The button below opens the final check.`),
+    ...(data.recovery && !data.recovery.canConfirm ? [text('Fix the problems listed above first. This action can be closed once Discord and our records agree.')] : []),
     row({}, kit.Button({ label: approvalLabel(data), disabled: data.busy || !!data.queued || (data.recovery && !data.recovery.canConfirm) || (!data.replacement && !data.transaction && !data.repair && !data.recovery), onClick: confirm }),
       kit.Button({ label: 'Cancel and close', secondary: true, onClick: e => e.ui.exit() })), navigation(kit))));
   const confirmation = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
     text({ title: 'League tools · Confirm changes' }, leagueOpsText(leagueOpsPreviewText(data), 3400)),
-    text(data.notice || 'Nothing changes until you confirm.'), row({}, kit.Button({ label: 'Confirm changes', success: true, disabled: data.busy || !!data.queued, onClick: confirm }),
+    ...statusLines(data), row({}, kit.Button({ label: 'Confirm changes', success: true, disabled: data.busy || !!data.queued, onClick: confirm }),
       kit.Button({ label: 'Close panel', secondary: true, onClick: e => e.ui.exit() })), navigation(kit))));
   return flow<LeagueOpsPanelData>('review', { screens: { issues: issueScreen, operations, issue, operation, preview, confirmation, checks },
-    first: 'issues', initialData: { snapshot: { issues: [], operations: [] }, page: 0, busy: false, notice: 'Choose Roster problems or Saved actions. Nothing changes until you confirm.' }, ttlMs: 10 * 60_000,
+    first: 'issues', initialData: { snapshot: { issues: [], operations: [] }, page: 0, busy: false, notice: `Choose Roster problems or Saved actions. ${NOTHING_YET}` }, ttlMs: 10 * 60_000,
     parting: { note: 'Use the main button on the latest League Status message in staff-ops. Start a new review; expired confirmations are not used again.' } },
     { policy: policy.all(policy.owner(), policy.privilege('OPERATIONS')), onSessionEnd: event => ended(event.sessionId) });
 }

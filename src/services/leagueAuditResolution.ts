@@ -11,8 +11,8 @@ import {
   type LeagueSnapshot,
   type PublicRosterChange,
 } from '../domain/leagueOperations.js';
-import type { LeagueRoleState } from './leagueTransactions.js';
-import type { DiscordLeagueMember } from '../domain/leagueOperations.js';
+import { layeredRoleState, managedRoleIds, type LeagueRoleState } from './leagueTransactions.js';
+import { isLayeredDivision, layeredRoster, primaryRoster, type DiscordLeagueMember } from '../domain/leagueOperations.js';
 import {
   LeagueSheetDriftError,
   type LoadedLeagueSnapshot,
@@ -20,6 +20,7 @@ import {
   type PreparedLeagueSheetMutation,
 } from './leagueSheets.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
+import { divisionAlternation } from '../domain/leagueDivisions.js';
 import { acquireLeagueTransaction } from './leagueOperationCoordinator.js';
 import {
   completeLeagueAuditRepair,
@@ -28,10 +29,11 @@ import {
   markLeagueAuditRepairReconciliationRequired,
 } from '../db/repositories/leagueAuditRepairs.js';
 import { createOrGetLeagueReconciliationTicket } from '../db/repositories/leagueOperations.js';
-import { leagueActionLabel } from './leaguePresentation.js';
 
 export type LeagueAuditRepairAction = 'use-discord-name' | 'use-league-name' | 'use-roster-name' | 'sync-public-roster' | 'mark-inactive';
 export type LeagueAuditResolutionAction = LeagueAuditRepairAction | 'repair-roles';
+
+const D = divisionAlternation();
 
 export class LeagueAuditRepairNoWriteError extends Error {}
 
@@ -45,11 +47,19 @@ export function previewLeagueAuditResolution(loaded: LoadedLeagueSnapshot, findi
     .map(member => ({ ...member, roleIds: [...member.roleIds].sort() })) };
   const roleName = (id: string) => id === loaded.snapshot.freeAgentRoleId ? 'Free Agent'
     : loaded.snapshot.teams.find(team => team.teamRoleId === id)?.teamRole
-      ?? loaded.snapshot.teams.find(team => team.divisionRoleId === id)?.division ?? `Unknown league role (${id})`;
-  const playerName = 'discordId' in plan ? loaded.snapshot.discordMembers.find(member => member.discordId === plan.discordId)?.displayName ?? 'Player' : '';
+      ?? loaded.snapshot.teams.find(team => team.divisionRoleId === id)?.division ?? 'a league role Rat doesn’t recognize';
+  const playerName = 'discordId' in plan ? loaded.snapshot.discordMembers.find(member => member.discordId === plan.discordId)?.displayName ?? 'this player' : '';
+  // One line per change, in names staff know (#206).
+  const pageChange = (c: { division: string; group: string; from: string; to: string }) => {
+    const page = `the ${c.division} ${c.group} roster page`;
+    return c.from && c.to ? `On ${page}, change “${c.from}” to “${c.to}”.` : c.to ? `Add “${c.to}” to ${page}.` : `Remove “${c.from}” from ${page}.`;
+  };
   return { fingerprint: createHash('sha256').update(JSON.stringify({ finding, action, plan, sources: loaded.sources, snapshot })).digest('hex'),
-    description: 'playerIds' in plan ? `${leagueActionLabel(action)}: ${plan.players.join(' / ')}\n${plan.publicChanges.map(c => `${c.division} / ${c.group}: ${c.from || 'empty'} → ${c.to || 'empty'}`).join('\n')}`
-      : `${playerName}:\nAdd Discord roles: ${plan.add.map(roleName).join(', ') || 'none'}.\nRemove Discord roles: ${plan.remove.map(roleName).join(', ') || 'none'}.\nThe roster sheets stay the same.` };
+    description: 'playerIds' in plan
+      ? [...(action === 'mark-inactive' ? [`Mark ${plan.players.join(' and ')} inactive.`]
+        : action === 'sync-public-roster' ? [] : plan.players.length ? [`Use “${plan.players.at(-1)}” as the league name in our records. The old name is kept as a past name.`] : []),
+        ...plan.publicChanges.map(pageChange)].join('\n') || 'Nothing on the roster page needs to change.'
+      : [...plan.remove.map(id => `Remove ${roleName(id)} from ${playerName}.`), ...plan.add.map(id => `Give ${playerName} ${roleName(id)}.`), 'The roster stays the same.'].join('\n') };
 }
 
 export class LeagueAuditRepairStaleError extends LeagueAuditRepairNoWriteError {
@@ -106,7 +116,7 @@ export function buildLeagueAuditSheetRepair(
     const discordId = discordNameMatch[1]!;
     const member = snapshot.discordMembers.find((entry) => entry.discordId === discordId);
     const name = snapshot.names.find((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
-    const roster = snapshot.rosters.find((row) => row.discordId === discordId);
+    const roster = primaryRoster(snapshot.rosters, discordId);
     if (!member || !name) throw new LeagueAuditRepairNoWriteError('That player no longer has both a Discord account and one current name record.');
     const target = member.displayName.trim();
     if (!target) throw new LeagueAuditRepairNoWriteError('Discord does not currently provide a usable display name for that player.');
@@ -149,7 +159,7 @@ export function buildLeagueAuditSheetRepair(
   const nameMatch = diagnostic.match(/^Current Rosters player name for (\S+) does not match its Current League Name\.$/);
   if (nameMatch && (action === 'use-league-name' || action === 'use-roster-name')) {
     const discordId = nameMatch[1]!;
-    const roster = snapshot.rosters.find((row) => row.discordId === discordId);
+    const roster = primaryRoster(snapshot.rosters, discordId);
     const name = snapshot.names.find((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
     if (!roster || !name) throw new Error('That player no longer has both a roster row and a current name row.');
     if (action === 'use-roster-name') {
@@ -173,7 +183,7 @@ export function buildLeagueAuditSheetRepair(
     return plan;
   }
 
-  const teamMatch = diagnostic.match(/^(Vanaheim|Alfheim|Svartalfheim) (.+) public roster does not match Current Rosters\.$/);
+  const teamMatch = diagnostic.match(new RegExp(`^(${D}) (.+) public roster does not match Current Rosters\\.$`));
   if (teamMatch && action === 'sync-public-roster') {
     const division = teamMatch[1] as LeagueDivision;
     const franchise = teamMatch[2]!;
@@ -195,7 +205,7 @@ export function buildLeagueAuditSheetRepair(
     return plan;
   }
 
-  const freeAgentMatch = diagnostic.match(/^(Vanaheim|Alfheim|Svartalfheim) public free-agent list does not match Player Name History\.$/);
+  const freeAgentMatch = diagnostic.match(new RegExp(`^(${D}) public free-agent list does not match Player Name History\\.$`));
   if (freeAgentMatch && action === 'sync-public-roster') {
     const division = freeAgentMatch[1] as LeagueDivision;
     const expected = snapshot.names.filter((row) => row.nameStatus === 'Current Discord Name'
@@ -220,6 +230,14 @@ export function buildLeagueAuditSheetRepair(
         from: name.currentLeagueName, to: '',
       }];
     }
+    // The person leaves the league, so a Niflheim membership ends in the same repair (#200).
+    const layered = layeredRoster(snapshot.rosters, discordId);
+    if (layered) {
+      plan.rosters = plan.rosters.filter((row) => row.sheetRow !== layered.sheetRow);
+      if ((snapshot.publicRosters[layered.division]?.teams[layered.franchise] ?? []).includes(name.currentLeagueName)) {
+        plan.publicChanges.push({ division: layered.division, area: 'team', group: layered.franchise, from: name.currentLeagueName, to: '' });
+      }
+    }
     plan.players = [name.currentLeagueName];
     plan.playerIds = [discordId];
     return plan;
@@ -229,37 +247,44 @@ export function buildLeagueAuditSheetRepair(
 }
 
 export function buildManagedRoleRepair(snapshot: LeagueSnapshot, discordId: string): DiscordRoleChange {
-  const activeTeams = snapshot.teams.filter((team) => team.active);
   const member = snapshot.discordMembers.find((entry) => entry.discordId === discordId);
   const expected = buildManagedRoleState(snapshot, discordId);
   if (!member) throw new LeagueAuditRepairNoWriteError('That player is no longer available for a Discord role repair.');
   const expectedTeamRoleId = expected.expectedTeamRoleId ?? undefined;
   const expectedDivisionRoleId = expected.divisionRoleId;
   const expectsFreeAgent = expected.expectsFreeAgent;
-  const managedTeamRoleIds = new Set(activeTeams.map((entry) => entry.teamRoleId));
-  const managedDivisionRoleIds = new Set(activeTeams.map((entry) => entry.divisionRoleId));
+  const managedTeamRoleIds = new Set(expected.configuredTeamRoleIds);
+  const managedDivisionRoleIds = new Set(expected.configuredDivisionRoleIds);
+  // A layered (Niflheim) team role and its division role are kept exactly when the roster row exists.
+  const layered = expected.layered;
+  const keepLayered = new Set(layered?.expectedTeamRoleId ? [layered.expectedTeamRoleId, layered.divisionRoleId] : []);
+  const layeredManaged = new Set(layered ? [...layered.configuredTeamRoleIds, layered.divisionRoleId] : []);
   const remove = member.roleIds.filter((roleId) => (managedTeamRoleIds.has(roleId) && roleId !== expectedTeamRoleId)
     || (managedDivisionRoleIds.has(roleId) && roleId !== expectedDivisionRoleId)
-    || (roleId === snapshot.freeAgentRoleId && !expectsFreeAgent));
+    || (roleId === snapshot.freeAgentRoleId && !expectsFreeAgent)
+    || (layeredManaged.has(roleId) && !keepLayered.has(roleId)));
   const add = [
     ...(expectedTeamRoleId && !member.roleIds.includes(expectedTeamRoleId) ? [expectedTeamRoleId] : []),
     ...(!member.roleIds.includes(expectedDivisionRoleId) ? [expectedDivisionRoleId] : []),
     ...(expectsFreeAgent && !member.roleIds.includes(snapshot.freeAgentRoleId) ? [snapshot.freeAgentRoleId] : []),
+    ...[...keepLayered].filter((roleId) => !member.roleIds.includes(roleId)),
   ];
   return { discordId, remove, add };
 }
 
 export function buildManagedRoleState(snapshot: LeagueSnapshot, discordId: string): LeagueRoleState {
-  const activeTeams = snapshot.teams.filter((team) => team.active);
+  const allActive = snapshot.teams.filter((team) => team.active);
+  const activeTeams = allActive.filter((team) => !isLayeredDivision(team.division));
   const currentNames = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
   if (currentNames.length !== 1) {
     throw new LeagueAuditRepairNoWriteError('This player does not have exactly one current name record. Resolve Player Name History first.');
   }
   const currentName = currentNames[0]!;
-  const rosterRows = snapshot.rosters.filter((row) => row.discordId === discordId);
-  if (rosterRows.length > 1) {
+  const rosterRows = snapshot.rosters.filter((row) => row.discordId === discordId && !isLayeredDivision(row.division));
+  if (rosterRows.length > 1 || snapshot.rosters.filter((row) => row.discordId === discordId && isLayeredDivision(row.division)).length > 1) {
     throw new LeagueAuditRepairNoWriteError('This player has more than one current roster assignment. Resolve Current Rosters first.');
   }
+  const layered = layeredRoleState(allActive, snapshot.rosters, discordId);
   const roster = rosterRows[0];
   const teamMatches = roster ? activeTeams.filter((entry) => entry.teamRoleId === roster.teamRoleId) : [];
   if (roster && teamMatches.length !== 1) {
@@ -280,6 +305,7 @@ export function buildManagedRoleState(snapshot: LeagueSnapshot, discordId: strin
     freeAgentRoleId: snapshot.freeAgentRoleId,
     expectsFreeAgent: !roster && currentName.leagueStatus === 'Free Agent',
     divisionRoleId,
+    ...(layered ? { layered } : {}),
   };
 }
 
@@ -381,6 +407,7 @@ export async function executeLeagueAuditRepair(input: {
   freeAgentRoleId: string;
   jobReference?: string;
   onApplying?(): void;
+  authorizeBeforeWrite?(): Promise<void>;
   members: { getMembers(): Promise<DiscordLeagueMember[]> };
   sheets: RepairSheets;
   discord: RepairDiscord;
@@ -403,12 +430,9 @@ export async function executeLeagueAuditRepair(input: {
       const change = buildManagedRoleRepair(loaded.snapshot, discordId);
       const expected = buildManagedRoleState(loaded.snapshot, discordId);
       const member = loaded.snapshot.discordMembers.find((entry) => entry.discordId === discordId)!;
-      const managedRoleIds = new Set([
-        ...expected.configuredTeamRoleIds,
-        ...expected.configuredDivisionRoleIds,
-        expected.freeAgentRoleId,
-      ]);
-      const observedManagedRoleIds = member.roleIds.filter((roleId) => managedRoleIds.has(roleId));
+      const managed = managedRoleIds(expected);
+      const observedManagedRoleIds = member.roleIds.filter((roleId) => managed.has(roleId));
+      await input.authorizeBeforeWrite?.();
       input.onApplying?.();
       await applyDurableRepair({
         ...input,
@@ -426,6 +450,11 @@ export async function executeLeagueAuditRepair(input: {
       apply: async () => {
         if (input.action === 'use-discord-name') {
           await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+        }
+        try { await input.authorizeBeforeWrite?.(); }
+        catch (error) {
+          // No external write has started; retain a safely failed repair record.
+          throw new LeagueAuditRepairNoWriteError(error instanceof Error ? error.message : String(error));
         }
         await input.sheets.apply(loaded, plan, {
           reference,

@@ -103,6 +103,23 @@ test('an absent free agent can be marked inactive and removed from only their di
   assert.deepEqual(plan.publicChanges, [{ division: 'Vanaheim', area: 'free-agent', group: 'Free Agents', from: 'Current Name', to: '' }]);
 });
 
+test('marking an absent Svartalfheim free agent inactive also ends their Niflheim membership (#200)', () => {
+  const current = snapshot();
+  current.teams.push({ teamKey: 'n_ss', division: 'Niflheim', franchise: 'Something Spicy', teamRole: 'Something Spicy ND', teamRoleId: 'team-n', divisionRoleId: 'division-n', active: true });
+  current.rosters = [{ sheetRow: 7, division: 'Niflheim', franchise: 'Something Spicy', teamRoleId: 'team-n', team: 'Something Spicy ND', discordId: playerId, player: 'Current Name', rosterStatus: 'Player' }];
+  Object.assign(current.names[0]!, { division: 'Svartalfheim', franchise: '', leagueStatus: 'Free Agent' });
+  current.discordMembers = [];
+  current.publicRosters = { Svartalfheim: { teams: {}, freeAgents: ['Current Name'] }, Niflheim: { teams: { 'Something Spicy': ['Current Name'] }, freeAgents: [] } };
+
+  const plan = buildLeagueAuditSheetRepair(current, `Current free agent ${playerId} is not in the Discord member snapshot.`, 'mark-inactive');
+
+  assert.deepEqual(plan.rosters, []);
+  assert.deepEqual(plan.publicChanges, [
+    { division: 'Svartalfheim', area: 'free-agent', group: 'Free Agents', from: 'Current Name', to: '' },
+    { division: 'Niflheim', area: 'team', group: 'Something Spicy', from: 'Current Name', to: '' },
+  ]);
+});
+
 test('managed-role repair removes every conflicting league role and adds only the sheet-backed assignment', () => {
   const current = snapshot();
   current.teams.push({ teamKey: 'b_ad', division: 'Alfheim', franchise: 'B', teamRole: 'B AD', teamRoleId: 'wrong-team', divisionRoleId: 'division-a', active: true });
@@ -249,7 +266,7 @@ test('a late role preflight change records a safe failure without opening reconc
     teamRoleId: 'wrong-team', divisionRoleId: 'division-a', active: true,
   });
   const finding = humanizeLeagueAuditIssues(current, auditLeagueRoster(current))
-    .find((issue) => issue.includes('Discord team'))!;
+    .find((issue) => issue.includes('’s team doesn’t match'))!;
   const db = openDatabase(':memory:');
   try {
     await assert.rejects(() => executeLeagueAuditRepair({
@@ -273,3 +290,31 @@ test('a late role preflight change records a safe failure without opening reconc
     assert.equal(getLeagueReconciliationTicket(db, repair.reference), undefined);
   } finally { db.close(); }
 });
+
+for (const action of ['repair-roles', 'use-discord-name'] as const) {
+  for (const revoked of [false, true]) test(`repair final authorization after validation: ${action}, revoked=${revoked}`, async () => {
+    const current = snapshot();
+    const diagnostic = auditLeagueRoster(current).find(issue => action === 'repair-roles' ? issue.startsWith('Discord member') : issue.startsWith('Managed player names'))!;
+    const finding = humanizeLeagueAuditIssues(current, [diagnostic])[0]!;
+    const db = openDatabase(':memory:');
+    let release!: () => void; let entered!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    let allowed = true; let writes = 0; let reads = 0; let authorizations = 0;
+    const suspend = async () => { entered(); await barrier; };
+    try {
+      const result = executeLeagueAuditRepair({ db, operationScope: db, guildId: 'g', actorUserId: 'staff', actorName: 'Staff',
+        auditReference: 'audit', now: new Date(), expectedFinding: finding, action, freeAgentRoleId: 'free-agent', jobReference: 'repair-auth',
+        authorizeBeforeWrite: async () => { authorizations++; if (!allowed) throw new LeagueMutationValidationError('Access revoked'); },
+        members: { getMembers: async () => { reads++; return current.discordMembers; } },
+        sheets: { load: async () => { if (action === 'repair-roles') await suspend(); return { snapshot: current, sources: {} as never }; },
+          prepare: () => ({ publicUpdates: [] }), apply: async () => { writes++; } },
+        discord: { validateDisplayName: suspend, reconcileManagedRoles: async () => { writes++; } } });
+      await waiting; if (revoked) allowed = false; release();
+      if (revoked) { await assert.rejects(result, /Access revoked/); assert.equal(writes, 0); }
+      else { await result; assert.equal(writes, 1); assert.equal(getLeagueAuditRepair(db, 'repair-auth')?.status, 'completed'); }
+      assert.equal(reads, 1); assert.equal(authorizations, 1);
+      if (revoked) assert.notEqual(getLeagueAuditRepair(db, 'repair-auth')?.status, 'reconciliation_required');
+    } finally { release(); db.close(); }
+  });
+}

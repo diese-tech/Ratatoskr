@@ -1,3 +1,4 @@
+import { LeagueMutationValidationError } from '../domain/leagueOperations.js';
 import { buildLeagueAccountReplacementPlan } from '../domain/leagueAccountReplacement.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -63,11 +64,14 @@ async function harness() {
     };
     visit(payload);
   };
+  let loseAcceptedRender = false;
   const copies: string[] = [];
   const modals: V2ModalPayload[] = [];
   let now = 1_000_000;
   const runtime = createUiRuntime({ flows: buildFlowCatalog([{ module: 'league-ops', flow }]), sweeper: false, now: () => now,
-    platform: { editMessage: async (_ref, payload) => { validatePayload(payload); edits.push(payload); }, replyToActor: async value => { copies.push(value); },
+    platform: { editMessage: async (_ref, payload) => {
+      if (loseAcceptedRender && JSON.stringify(payload).includes('Action accepted')) { loseAcceptedRender = false; throw Error('Acknowledgement delivery lost'); }
+      validatePayload(payload); edits.push(payload); }, replyToActor: async value => { copies.push(value); },
       showModal: async value => { modals.push(value); }, ack: async () => {} },
     sendToChannel: async () => assert.fail('Private League Ops must never post to a public channel'),
     policy: { authorize: async request => ({ allowed: await authorizeLeagueOpsUi(request, 'g', actor => service.authorize(actor)) }) } });
@@ -86,7 +90,7 @@ async function harness() {
     release(); await until(() => JSON.stringify(edits.at(-1)).includes('Review these player changes'));
     await click('Approve player change');
   };
-  return { snapshot, setData: async (change: (data: LeagueOpsPanelData) => void) => handle.redraw(change), recoveries: () => recoveries, runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
+  return { loseAcceptedRender: () => { loseAcceptedRender = true; }, service, snapshot, setData: async (change: (data: LeagueOpsPanelData) => void) => handle.redraw(change), recoveries: () => recoveries, runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
     setIssues: async (issues: LeagueOpsSnapshot['issues']) => { snapshot.issues = issues; await handle.redraw(data => { data.snapshot = snapshot; }); },
     repairConfirmations,
     expire: () => { now += 11 * 60_000; }, count: () => confirmations, close: () => runtime.stopSweeper() };
@@ -123,12 +127,11 @@ test('Close panel dismisses a resolved history view without approving another ac
 test('cancelled previews release the panel for another issue and old modals cannot approve it', async () => {
   const h = await harness();
   try {
-    await h.setIssues([{ key: 'first', finding: 'One — Discord division: none; expected: Vanaheim. Make the division role match.' },
-      { key: 'second', finding: 'Two — Discord division: none; expected: Vanaheim. Make the division role match.' }]);
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }, { key: 'second', finding: divisionCard('Two') }]);
     await h.click('View problem');
-    await h.click('Set Discord roles from roster sheets');
+    await h.click(FIX);
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
-    await h.click('Set Discord roles from roster sheets');
+    await h.click(FIX);
     const oldModal = h.modals.at(-1)!.custom_id;
     await h.click('Roster problems');
     // Pick the second issue using its separately rendered control.
@@ -141,14 +144,99 @@ test('cancelled previews release the panel for another issue and old modals cann
     };
     visit(h.edits.at(-1));
     await h.dispatch(ids[1]!);
-    await h.click('Set Discord roles from roster sheets');
+    await h.click(FIX);
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for second'));
-    await h.click('Set Discord roles from roster sheets');
+    await h.click(FIX);
     await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.deepEqual(h.repairConfirmations, []);
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     await until(() => h.repairConfirmations.length === 1);
     assert.deepEqual(h.repairConfirmations, ['second']);
+  } finally { h.release(); h.close(); }
+});
+
+const FIX = 'The roster is right — fix Discord';
+const divisionCard = (name: string) => `${name}’s division doesn’t match\nDiscord says: no division\nOur roster says: Vanaheim`;
+// Every disabled button in a payload, so a test can require a visible reason next to it.
+function disabledLabels(payload: unknown): string[] {
+  const labels: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== 'object') return;
+    const record = value as Record<string, unknown>;
+    if (record.disabled === true && typeof record.label === 'string') labels.push(record.label);
+    Object.values(record).forEach(visit);
+  };
+  visit(payload);
+  return labels;
+}
+
+test('a panel that already sent a fix says so on every screen and points to Review problems (#206)', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }, { key: 'second', finding: divisionCard('Two') }]);
+    await h.click('View problem');
+    const card = JSON.stringify(h.edits.at(-1));
+    assert.match(card, /One’s division doesn’t match/);
+    assert.match(card, /Nothing changes until you press Confirm/);
+    await h.click(FIX);
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
+    await h.click(FIX);
+    await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => h.repairConfirmations.length === 1);
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('You already sent a fix from this panel (saved-repair)'));
+    const locked = /You already sent a fix from this panel \(saved-repair\)[^"]*don’t send it again\.\\nTo fix another problem, press Review problems on the League Status card\./;
+    // Fix → open another problem: the lock and the way forward stay visible.
+    for (const screen of ['Roster problems', 'Saved actions', 'Check details']) {
+      await h.click(screen);
+      assert.match(JSON.stringify(h.edits.at(-1)), locked, screen);
+    }
+    await h.click('Roster problems');
+    const ids: string[] = [];
+    const visit = (value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      const record = value as Record<string, unknown>;
+      if (record.label === 'View problem') ids.push(String(record.custom_id));
+      Object.values(record).forEach(visit);
+    };
+    visit(h.edits.at(-1));
+    await h.dispatch(ids[1]!);
+    const other = h.edits.at(-1);
+    assert.match(JSON.stringify(other), /Two’s division doesn’t match/);
+    assert.match(JSON.stringify(other), locked);
+    assert.deepEqual(disabledLabels(other), [FIX]);
+    await h.click(FIX);
+    assert.deepEqual(h.repairConfirmations, ['first']);
+  } finally { h.release(); h.close(); }
+});
+
+test('Skip for now moves to the next problem and changes nothing', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }, { key: 'second', finding: divisionCard('Two') }]);
+    await h.click('View problem');
+    await h.click('Skip for now');
+    assert.match(JSON.stringify(h.edits.at(-1)), /Two’s division doesn’t match/);
+    assert.match(JSON.stringify(h.edits.at(-1)), /Skipped\. Nothing was changed\./);
+    await h.click('Skip for now');
+    assert.match(JSON.stringify(h.edits.at(-1)), /That was the last problem\. Nothing was changed\./);
+    assert.deepEqual(h.repairConfirmations, []);
+  } finally { h.release(); h.close(); }
+});
+
+test('a fresh panel shows no greyed-out buttons on its problem, saved action and detail screens', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'manual', finding: 'Vanaheim has more than one division role\nEvery Vanaheim team should use the same division role.\nAn admin needs to fix this in the league spreadsheet. Rat can’t pick the right answer by itself.' }]);
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
+    await h.click('View problem');
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
+    assert.match(JSON.stringify(h.edits.at(-1)), /Ask an admin to fix it in the league spreadsheet/);
+    await h.click('Saved actions');
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
+    await h.click('View action');
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
+    await h.click('Check details');
+    assert.deepEqual(disabledLabels(h.edits.at(-1)), []);
   } finally { h.release(); h.close(); }
 });
 
@@ -158,7 +246,7 @@ test('submitted panels can refresh and inspect saved progress without submitting
     await h.preview();
     await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     await until(() => JSON.stringify(h.edits.at(-1)).includes('new-durable-job'));
-    await h.click('Saved actions'); await h.click('View action'); await h.click('Refresh');
+    await h.click('Saved actions'); await h.click('View action'); await h.click('Reload saved status');
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Finished'));
     assert.equal(h.count(), 1);
   } finally { h.release(); h.close(); }
@@ -278,4 +366,165 @@ test('private pagination redacts complete credentials before splitting across a 
     assert.doesNotMatch(rendered.join(''), /synthetic|boundary-secret/);
     assert.match(rendered.join(''), /visible next step/);
   } finally { h.release(); h.close(); if (old === undefined) delete process.env[key]; else process.env[key] = old; }
+});
+
+for (const change of ['unchanged', 'modified', 'removed'] as const) test(`reload reconciles selected issue and invalidates old approval: ${change}`, async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }]);
+    await h.click('View problem'); await h.click(FIX);
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
+    await h.click(FIX);
+    const oldModal = h.modals.at(-1)!.custom_id;
+    if (change === 'modified') h.snapshot.issues = [{ key: 'first', finding: divisionCard('Two') }];
+    if (change === 'removed') h.snapshot.issues = [];
+    await h.click('Reload saved status');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
+    const copy = JSON.stringify(h.edits.at(-1));
+    assert.match(copy, /No new Discord or Sheets check was run/);
+    assert.match(copy, /unconfirmed preview was cleared/);
+    assert.equal(copy.includes('One’s division'), change === 'unchanged');
+    if (change !== 'unchanged') { assert.match(copy, /changed or is no longer listed/); assert.match(copy, /League tools · Roster problems/); }
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    assert.deepEqual(h.repairConfirmations, []);
+    if (change === 'unchanged') {
+      await h.click(FIX); await until(() => JSON.stringify(h.edits.at(-1)).includes('Fix for first'));
+      await h.click(FIX);
+      await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+      assert.deepEqual(h.repairConfirmations, []);
+      await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+      await until(() => h.repairConfirmations.length === 1);
+    }
+  } finally { h.release(); h.close(); }
+});
+
+test('reload on a list preserves saved findings and never calls mutation previews', async () => {
+  const h = await harness();
+  try {
+    await h.setIssues([{ key: 'first', finding: divisionCard('One') }]);
+    await h.click('Reload saved status');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
+    assert.match(JSON.stringify(h.edits.at(-1)), /One’s division/);
+    assert.equal(h.count(), 0); assert.deepEqual(h.repairConfirmations, []);
+  } finally { h.release(); h.close(); }
+});
+
+for (const missing of [false, true]) test(`reload revalidates selected saved operation and drops its preview: missing=${missing}`, async () => {
+  const h = await harness();
+  try {
+    await h.preview();
+    const oldModal = h.modals.at(-1)!.custom_id;
+    if (missing) h.service.operationDetail = async () => { throw new LeagueMutationValidationError('Not found'); };
+    await h.click('Reload saved status');
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
+    assert.match(JSON.stringify(h.edits.at(-1)), missing ? /no longer available/ : /Finished/);
+    if (missing) assert.match(JSON.stringify(h.edits.at(-1)), /League tools · Saved actions/);
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    assert.equal(h.count(), 0);
+  } finally { h.release(); h.close(); }
+});
+
+for (const kind of ['repair', 'transaction', 'recovery', 'replacement'] as const) {
+  for (const details of [false, true]) test(`reload routes by active screen and preview type: ${kind}, details=${details}`, async () => {
+    const h = await harness();
+    try {
+      const issue = { key: 'first', finding: divisionCard('One'), ...(kind === 'replacement' ? { oldDiscordId: 'one' } : {}) };
+      await h.setIssues([issue]); await h.click('View problem');
+      h.snapshot.operations[0]!.canRecover = true;
+      h.service.operationDetail = async (_actor, reference) => ({ ...h.snapshot.operations[0]!, reference });
+      const openPreview = async () => {
+        if (kind === 'repair') { await h.click(FIX); }
+        else if (kind === 'transaction') { await h.click('Preview player change'); h.release(); }
+        else if (kind === 'recovery') { await h.click('Check unfinished changes'); }
+        else {
+          await h.click('Player changed Discord account');
+          await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit,
+            { old: 'one', new: '123456789012345678', attestation: 'SAME PLAYER' });
+        }
+        await until(() => JSON.stringify(h.edits.at(-1)).includes('League tools · Review changes')
+          && !JSON.stringify(h.edits.at(-1)).includes('Checking the latest league records'));
+      };
+      if (kind === 'transaction' || kind === 'recovery') {
+        await h.click('Saved actions'); await h.click('View action');
+      }
+      if (kind === 'replacement') {
+        const f = accountReplacementSources();
+        const snapshot = (await f.sheets.load([...f.members.values()], 'fa')).snapshot;
+        const plan = buildLeagueAccountReplacementPlan({ guildId: 'g', snapshot, oldDiscordId: 'one', newDiscordId: 'new',
+          oldMember: null, newMember: f.members.get('new')!, newNameSheetRow: 20 });
+        h.service.previewReplacement = async () => ({ plan, fingerprint: 'proof', approvalReference: 'approval', preservedJobReferences: [], draftVerification: 'verified' });
+        h.service.confirmReplacement = async () => { assert.fail('Old replacement modal must not approve'); };
+      }
+      await openPreview();
+      const approve = kind === 'repair' ? FIX : kind === 'replacement' ? 'Change Discord account'
+        : kind === 'recovery' ? 'Close checked action' : 'Approve player change';
+      await h.click(approve);
+      const oldModal = h.modals.at(-1)!.custom_id;
+      if (details) await h.click('Check details');
+      await h.click('Reload saved status');
+      await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
+      const copy = JSON.stringify(h.edits.at(-1));
+      assert.match(copy, details ? /League tools · Check details/ : kind === 'repair' || kind === 'replacement'
+        ? /One’s division/ : /League tools · Saved action/);
+      await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: kind === 'recovery' ? 'HISTORY REVIEWED' : 'CONFIRM' });
+      assert.equal(h.count(), 0); assert.equal(h.recoveries(), 0); assert.deepEqual(h.repairConfirmations, []);
+      if (!details && kind === 'transaction') {
+        await openPreview(); await h.click(approve);
+        await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+        assert.equal(h.count(), 0);
+        await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+        await until(() => h.count() === 1);
+        await h.click('Reload saved status');
+        assert.match(JSON.stringify(h.edits.at(-1)), /Accepted work is unchanged/);
+        assert.match(JSON.stringify(h.edits.at(-1)), /already sent a fix/);
+        assert.equal(h.count(), 1);
+      }
+    } finally { h.release(); h.close(); }
+  });
+}
+
+for (const status of ['QUEUED', 'COMPLETED'] as const) test(`accepted ${status} action has direct inspection and close cannot cancel it`, async () => {
+  const h = await harness();
+  try {
+    h.service.confirmTransaction = async () => ({ reference: 'accepted-job', status } as never);
+    await h.preview();
+    const oldModal = h.modals.at(-1)!.custom_id;
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Action accepted'));
+    const copy = JSON.stringify(h.edits.at(-1));
+    assert.match(copy, /accepted-job/); assert.match(copy, status === 'COMPLETED' ? /Finished/ : /Waiting/);
+    assert.match(copy, /Acceptance does not mean execution has completed/);
+    assert.match(copy, /Closing this panel does not cancel/); assert.doesNotMatch(copy, /Cancel and close/);
+    await h.click('View submitted action'); await until(() => JSON.stringify(h.edits.at(-1)).includes('Reference: accepted-job'));
+    await h.click('Reload saved status'); assert.match(JSON.stringify(h.edits.at(-1)), /already sent a fix/);
+    await h.click('Close panel');
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    assert.equal(h.count(), 0);
+  } finally { h.release(); h.close(); }
+});
+
+test('an independent session inherits no accepted approval or attestation', async () => {
+  const first = await harness(); const second = await harness();
+  try {
+    await first.preview(); await first.dispatch(first.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => JSON.stringify(first.edits.at(-1)).includes('Action accepted'));
+    assert.doesNotMatch(JSON.stringify(second.edits.at(-1)), /already sent|new-durable-job|accepted-job/);
+    assert.equal(second.count(), 0); assert.equal(first.count(), 1);
+  } finally { first.release(); second.release(); first.close(); second.close(); }
+});
+
+test('lost acknowledgement rendering retains accepted state and cannot submit twice', async () => {
+  const h = await harness();
+  try {
+    await h.preview(); h.loseAcceptedRender();
+    const confirm = h.modals.at(-1)!.custom_id;
+    await h.dispatch(confirm, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => h.count() === 1);
+    await h.dispatch(confirm, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await h.click('Saved actions');
+    assert.match(JSON.stringify(h.edits.at(-1)), /already sent a fix/);
+    await h.click('Reload saved status');
+    assert.match(JSON.stringify(h.edits.at(-1)), /Accepted work is unchanged/);
+    assert.equal(h.count(), 1);
+  } finally { h.release(); h.close(); }
 });

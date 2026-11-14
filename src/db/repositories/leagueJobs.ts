@@ -143,7 +143,7 @@ export function completedLeagueTransactionSuccessor(db: Database.Database, job: 
   try { parsed = JSON.parse(selections); } catch { return; }
   if (!Array.isArray(parsed) || parsed.length < 2 || parsed.length > 3) return;
   const [kind, first, second] = parsed;
-  if (!['trade', 'drop', 'self-drop', 'pickup', 'rename', 'departure'].includes(kind)
+  if (!['trade', 'trade-one-way', 'drop', 'self-drop', 'pickup', 'rename', 'departure'].includes(kind)
     || typeof first !== 'string' || !first) return;
   const optionalReplacement = ['drop', 'self-drop', 'departure'].includes(kind);
   if (!(typeof second === 'string' && second) && !(optionalReplacement && (second === null || second === undefined))) return;
@@ -173,7 +173,7 @@ export function completedLeagueTransactionSuccessor(db: Database.Database, job: 
       AND json_extract(later.payload_json,'$.selections')=?
     JOIN league_transactions canonical ON canonical.reference=later.reference
       AND canonical.guild_id=original.guild_id AND canonical.status='completed' AND canonical.kind=?
-    ORDER BY later.sequence LIMIT 1`).get(job.guildId, selections, job.reference, selections, kind) as { reference: string } | undefined;
+    ORDER BY later.sequence LIMIT 1`).get(job.guildId, selections, job.reference, selections, kind === 'trade-one-way' ? 'trade' : kind) as { reference: string } | undefined;
   return row?.reference;
 }
 export function transitionLeagueJob(

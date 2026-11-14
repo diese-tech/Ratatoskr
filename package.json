@@ -12,7 +12,9 @@
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "guild:plan": "tsx scripts/bootstrap-guild.ts",
-    "guild:apply": "tsx scripts/bootstrap-guild.ts --apply"
+    "guild:apply": "tsx scripts/bootstrap-guild.ts --apply",
+    "division:inspect": "tsx scripts/inspect-league-division.ts",
+    "division:import": "tsx scripts/import-league-division.ts"
   },
   "engines": {
     "node": "24.x"

@@ -187,7 +187,7 @@ test('7/7 is a nonblocking policy advisory; the fixed public layout is a separat
     assert.ok(plan.reinstatement!.advisories.some(item => item.id === 'roster-count'));
     assert.deepEqual(plan.reinstatement!.blockers, []);
     f.sheets.prepare(loaded, plan); // Policy does not itself reject a representable plan.
-    for (let row = 5; row <= 11; row++) loaded.sources.publicByDivision.Vanaheim[row - 1]![2] = `Occupied ${row}`;
+    for (let row = 5; row <= 11; row++) loaded.sources.publicByDivision.Vanaheim![row - 1]![2] = `Occupied ${row}`;
     assert.throws(() => f.sheets.prepare(loaded, plan), /empty owned cell|fixed Sheet layout/);
     assert.equal(f.gateway.writes.length, 0);
   } finally { f.close(); }
@@ -383,8 +383,8 @@ test('private previews translate unrelated member and role-configuration drift w
       const blockers = view.payload.plan.reinstatement!.blockers.join(' ');
       assert.ok(blockers.length);
       assert.doesNotMatch(blockers, /Discord member two|Role b is configured|Division role b|Team role b/);
-      if (drift === 'member') assert.match(blockers, /Two is listed on The Sewer VD.*missing that team role.*Restore the role/);
-      else assert.match(blockers, /The Sewer VD is used as both a team role and a division role in League Teams.*Give each purpose/);
+      if (drift === 'member') assert.match(blockers, /Two’s team doesn’t match\nDiscord says: no team\nOur roster says: The Sewer \(Vanaheim\)/);
+      else assert.match(blockers, /The “The Sewer VD” role is used for two things\n.*both a team role and a division role[\s\S]*An admin needs to fix this/);
       const message = reinstatementReviewMessage(view);
       const text = message.embeds[0]!.toJSON().description!;
       assert.ok(text.includes(blockers.split(' ').slice(0, 8).join(' ')));
@@ -797,4 +797,38 @@ test('nickname failures roll back or reconcile, and a Sheet failure after the ni
       assert.equal(f.announceCalls, 0); assert.equal(f.gateway.appends, 0);
     } finally { f.close(); }
   }
+});
+
+test('an exit that ended a Niflheim membership is found from its primary history row and remembers the Niflheim team (#200)', async () => {
+  const db = openDatabase(':memory:');
+  const team = (division: 'Svartalfheim' | 'Niflheim', teamRoleId: string) => ({ teamKey: teamRoleId, franchise: 'Little Monsters', division, teamRoleId, teamRole: teamRoleId, divisionRoleId: `division-${division}`, active: true });
+  const plan = { kind: 'self-drop', rosters: [], nameUpdates: [], publicChanges: [], discordRoleChanges: [], teams: [team('Svartalfheim', 'lm-sd'), team('Niflheim', 'lm-nd')], players: ['Qronch'], playerIds: ['qronch'] };
+  createLeagueTransaction(db, { reference: 'YSL-TRX-Q', guildId: 'g', kind: 'self-drop', actorUserId: 'fuego', payload: { plan, record: {} } });
+  db.prepare("UPDATE league_transactions SET status='completed' WHERE reference='YSL-TRX-Q'").run();
+  const row = (division: string) => ['YSL-TRX-Q', 'self-drop', '2026-11-01', division, 'Little Monsters', 'Suspended - Self-Drop (Current + Next Season)', 'qronch', 'Qronch', 'fuego', '', 'Completed', 'Fuego'];
+  const sources = await reinstatementSources(db, 'g', { readTransactionHistory: async () => [row('Svartalfheim'), row('Niflheim')] } as never);
+  assert.deepEqual(sources.map((source) => [source.teamRoleId, source.layeredTeamRoleId]), [['lm-sd', 'lm-nd']]);
+  // With division:Niflheim the exit lists the Niflheim team first; it still ended both memberships.
+  plan.teams.reverse();
+  db.prepare('UPDATE league_transactions SET payload_json=? WHERE reference=?').run(JSON.stringify({ plan, record: {} }), 'YSL-TRX-Q');
+  const reordered = await reinstatementSources(db, 'g', { readTransactionHistory: async () => [row('Niflheim'), row('Svartalfheim')] } as never);
+  assert.deepEqual(reordered.map((source) => [source.teamRoleId, source.layeredTeamRoleId]), [['lm-sd', 'lm-nd']]);
+  db.close();
+});
+
+test('reinstatement reauthorizes after its last asynchronous display-name check', async () => {
+  const f = await fixture();
+  let release!: () => void; let entered!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  try {
+    const review = await f.approve();
+    const job = await f.service.confirm('staff', review.token);
+    f.discord.validateDisplayName = async () => { entered(); await barrier; };
+    const execution = f.execute(job);
+    await waiting; f.deny(); release();
+    await assert.rejects(execution, /permission revoked/);
+    assert.equal(getLeagueTransaction(f.db, job.reference), undefined);
+    assert.equal(f.gateway.writes.length, 0); assert.equal(f.roleCalls, 0);
+  } finally { release(); f.close(); }
 });

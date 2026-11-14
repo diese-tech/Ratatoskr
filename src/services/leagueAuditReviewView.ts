@@ -1,3 +1,5 @@
+import { leagueFindingBody, leagueFindingKind, leagueFindingTitle } from './leagueAuditPresentation.js';
+
 export type LeagueAuditReviewAction = { id: string; label: string; disabled: boolean };
 export type LeagueAuditReviewView = {
   title: string;
@@ -8,47 +10,40 @@ export type LeagueAuditReviewView = {
 
 export type LeagueAuditResolutionAction = 'use-discord-name' | 'use-league-name' | 'use-roster-name' | 'repair-roles' | 'sync-public-roster' | 'mark-inactive';
 
+export const NOTHING_CHANGES_YET = 'Nothing changes until you press Confirm on the next screen.';
+
 export function buildLeagueAuditRepairReply(
   result: { status: 'clean' | 'dirty' | 'error'; issues: string[] },
   reference: string,
 ): string {
   if (result.status === 'error') {
-    return `Repair completed, but Ratatoskr could not update the League Status message because Discord or a roster sheet was temporarily unavailable. The repair was saved, and Rat will check again automatically. Reference: ${reference}`;
+    return `Done. Rat made the fix, but couldn’t refresh the League Status card because Discord or Google Sheets was busy. Rat will check again by itself. Nothing else needs doing. Reference: ${reference}`;
   }
   if (result.status === 'clean') {
-    return `Repair completed. Ratatoskr updated the League Status message; no roster problems remain. Reference: ${reference}`;
+    return `Done. Rat made the fix and there are no roster problems left. Nothing else needs doing. Reference: ${reference}`;
   }
-  return `Repair completed. Ratatoskr updated the League Status message; ${result.issues.length} issue${result.issues.length === 1 ? '' : 's'} remain. Reference: ${reference}`;
-}
-
-function categoryFor(finding: string): string {
-  if (finding.includes('Discord name now:') && finding.includes('Current Rosters sheet:') && finding.includes('Player Name History sheet:')) return 'Player names';
-  if (finding.includes('Current Rosters:') && finding.includes('Player Name History:') && finding.includes('Make the names match.')) return 'Player names';
-  if (finding.includes('no longer in the Discord server')) return 'Departures and inactive players';
-  // Only route findings the managed-role repair actually supports. Mentions of
-  // Discord roles in League Teams configuration errors are not player repairs.
-  if (/ has multiple team roles in Discord \(| — Discord team:| is listed on .+ but is missing that team role in Discord\.| — Discord division:| is rostered on .+ but still has the Free Agent role\.| is listed as a free agent but is missing the Free Agent role in Discord\.| has the Free Agent role in Discord but is not listed as a current free agent\./.test(finding)) return 'Discord roles';
-  if (finding.includes('; public roster:') && finding.endsWith('Make the player lists match.')) return 'Public roster';
-  return 'Managed sheets';
+  const count = `${result.issues.length} roster problem${result.issues.length === 1 ? '' : 's'}`;
+  return `Done. Rat made the fix. ${count} still need${result.issues.length === 1 ? 's' : ''} a look: press Review problems on the League Status card. Reference: ${reference}`;
 }
 
 function canResolveInDiscord(finding: string): boolean {
-  return categoryFor(finding) !== 'Managed sheets';
+  return leagueFindingKind(finding) !== 'manual';
 }
 
 export function buildLeagueAuditReviewView(findings: string[], requestedPage: number, reference: string): LeagueAuditReviewView {
   const page = Math.max(0, Math.min(requestedPage, Math.max(0, findings.length - 1)));
-  const finding = findings[page] ?? 'This audit no longer has any open issues.';
-  const resolvable = canResolveInDiscord(finding);
-  const resolveAction = { id: `league-audit:resolve:${reference}:${page}`, label: 'Resolve this issue', disabled: !resolvable };
+  const finding = findings[page] ?? 'No roster problems left\nEverything matches. Nothing else needs doing.';
+  const resolvable = findings.length > 0 && canResolveInDiscord(finding);
+  // A manual finding's card already says why Rat can't fix it and who can.
+  const resolveAction = { id: `league-audit:resolve:${reference}:${page}`, label: 'Choose a fix', disabled: !resolvable };
   return {
-    title: `Roster problems — ${categoryFor(finding)}`,
-    description: `${finding}${resolvable ? '' : '\n\nThis needs a manual sheet review because Ratatoskr cannot safely choose the correct value.'}`,
-    footer: `Issue ${findings.length ? page + 1 : 0} of ${findings.length}`,
+    title: leagueFindingTitle(finding),
+    description: `${leagueFindingBody(finding)}${resolvable ? `\n\n${NOTHING_CHANGES_YET}` : ''}`,
+    footer: `Problem ${findings.length ? page + 1 : 0} of ${findings.length}`,
     actions: findings.length <= 1 ? [resolveAction] : [
       { id: `league-audit:page:${reference}:${Math.max(0, page - 1)}`, label: 'Previous', disabled: page === 0 },
       resolveAction,
-      { id: `league-audit:page:${reference}:${Math.min(findings.length - 1, page + 1)}`, label: 'Next', disabled: page >= findings.length - 1 },
+      { id: `league-audit:page:${reference}:${Math.min(findings.length - 1, page + 1)}`, label: 'Skip for now', disabled: page >= findings.length - 1 },
     ],
   };
 }
@@ -59,56 +54,24 @@ export function buildLeagueAuditResolutionView(
   reference: string,
 ): LeagueAuditReviewView {
   const back = { id: `league-audit:page:${reference}:${page}`, label: 'Back', disabled: false };
-  if (categoryFor(finding) === 'Player names') {
-    return {
-      title: 'Update player name',
-      description: `${finding}\n\nDiscord is the source for active player names. Preview the exact sheet update next. No changes have been made.`,
-      footer: `Issue ${page + 1}`,
-      actions: [
-        { id: `league-audit:choice:${reference}:${page}:use-discord-name`, label: 'Preview Discord name update', disabled: false },
-        back,
-      ],
-    };
+  const skip = { id: `league-audit:page:${reference}:${page + 1}`, label: 'Skip for now', disabled: false };
+  const view = (title: string, question: string, choice?: [LeagueAuditResolutionAction, string]): LeagueAuditReviewView => ({
+    title,
+    description: `${leagueFindingBody(finding)}\n\n${question}${choice ? `\n\n${NOTHING_CHANGES_YET}` : ''}`,
+    footer: `Problem ${page + 1}`,
+    actions: [...(choice ? [{ id: `league-audit:choice:${reference}:${page}:${choice[0]}`, label: choice[1], disabled: false }] : []), skip, back],
+  });
+  switch (leagueFindingKind(finding)) {
+    case 'name': return view(leagueFindingTitle(finding), 'Player names come from Discord. Which name is right?',
+      ['use-discord-name', 'Discord is right — update our records']);
+    case 'roles': return view(leagueFindingTitle(finding), 'Which one is right?', ['repair-roles', 'The roster is right — fix Discord']);
+    case 'public': return view(leagueFindingTitle(finding), 'Which one is right?', ['sync-public-roster', 'The roster is right — fix the roster page']);
+    case 'departed-free-agent': return view(leagueFindingTitle(finding), 'If they’ve left the league, mark them inactive. That takes them off the free agent list.',
+      ['mark-inactive', 'They left — mark them inactive']);
+    case 'departed': return view(leagueFindingTitle(finding),
+      'What happened?\n- They left the league: run `/transaction departure`.\n- They dropped themselves: run `/transaction self-drop`.\nBoth work for a player who already left the server, and let you pick an optional replacement. Each one shows you the changes before anything happens.');
+    default: return view(leagueFindingTitle(finding), 'Rat can’t fix this one by itself. Ask an admin to fix it in the league spreadsheet.');
   }
-  if (categoryFor(finding) === 'Discord roles') {
-    return {
-      title: 'Resolve Discord roles',
-      description: `${finding}\n\nRat reads Current Rosters and Player Name History in the Admin workbook and sets Discord team, division and Free Agent roles from those sheets. The sheets stay the same. No changes have been made.`,
-      footer: `Issue ${page + 1}`,
-      actions: [
-        { id: `league-audit:choice:${reference}:${page}:repair-roles`, label: 'Set Discord roles from roster sheets', disabled: false },
-        back,
-      ],
-    };
-  }
-  if (categoryFor(finding) === 'Public roster') {
-    return {
-      title: 'Resolve public roster',
-      description: `${finding}\n\nRatatoskr can update only this team section on the public roster from Current Rosters and Player Name History. No changes have been made.`,
-      footer: `Issue ${page + 1}`,
-      actions: [
-        { id: `league-audit:choice:${reference}:${page}:sync-public-roster`, label: 'Match league roster', disabled: false },
-        back,
-      ],
-    };
-  }
-  if (finding.includes('listed as a free agent but is no longer in the Discord server')) {
-    return {
-      title: 'Resolve departed free agent',
-      description: `${finding}\n\nRatatoskr can mark this player inactive in Player Name History and remove them from the public free-agent list. No changes have been made.`,
-      footer: `Issue ${page + 1}`,
-      actions: [
-        { id: `league-audit:choice:${reference}:${page}:mark-inactive`, label: 'Mark inactive', disabled: false },
-        back,
-      ],
-    };
-  }
-  return {
-    title: 'Resolve player who left the server',
-    description: `${finding}\n\nChoose the roster move that actually happened:\n- Run \`/transaction departure\` if the player left the league.\n- Run \`/transaction self-drop\` if the player self-dropped.\n\nBoth commands can select a rostered player who already left the server and let you choose an optional replacement before anything changes.`,
-    footer: `Issue ${page + 1}`,
-    actions: [back],
-  };
 }
 
 export function buildLeagueAuditConfirmationView(
@@ -117,22 +80,23 @@ export function buildLeagueAuditConfirmationView(
   reference: string,
   action: LeagueAuditResolutionAction,
 ): LeagueAuditReviewView {
-  const discordName = finding.match(/Discord name now: “([^”]*)”/)?.[1] ?? 'the current Discord name';
-  const historyName = finding.match(/Player Name History sheet: “([^”]*)”/)?.[1] ?? 'the previous name';
-  const explanation: Record<LeagueAuditResolutionAction, string> = {
-    'use-discord-name': `Discord currently shows “${discordName}”. Ratatoskr will update Current Rosters, Player Name History, and the matching public roster to that name. It will keep “${historyName}” in name history.`,
-    'use-league-name': 'Ratatoskr will update Current Rosters to the Player Name History value and repair the matching public roster cell only if needed.',
-    'use-roster-name': 'Ratatoskr will make the Current Rosters value the official league name, update the public roster, and preserve the previous official name as history.',
-    'repair-roles': 'Ratatoskr will remove incorrect league roles and add the team, division, and Free Agent roles listed in the league sheets.',
-    'sync-public-roster': 'Ratatoskr will update only the affected team section on the public roster from Current Rosters and Player Name History.',
-    'mark-inactive': 'Ratatoskr will mark the departed free agent inactive in Player Name History and remove them from the public free-agent list.',
+  const discordName = finding.match(/^Discord says: “([^”]*)”$/m)?.[1] ?? 'their Discord name';
+  const oldName = finding.match(/^Our roster says: “([^”]*)”$/m)?.[1] ?? 'the old name';
+  const player = leagueFindingTitle(finding).replace(/’s .*$|^Free agent | left the server$/g, '');
+  const changes: Record<LeagueAuditResolutionAction, string[]> = {
+    'use-discord-name': [`Change ${player}’s league name to “${discordName}” on the roster and the roster page.`, `Keep “${oldName}” as a past name.`],
+    'use-league-name': ['Change the team roster to use the name from the name list.', 'Fix the roster page only if it also differs.'],
+    'use-roster-name': ['Make the team roster’s name the official league name.', 'Update the roster page and keep the old name as a past name.'],
+    'repair-roles': [`Change ${player}’s Discord team, division and Free Agent roles to match the roster.`, 'The roster stays the same.'],
+    'sync-public-roster': ['Update this roster page so it lists the same players as our roster.', 'Nothing else changes.'],
+    'mark-inactive': [`Mark ${player} inactive.`, 'Take them off the free agent list.'],
   };
   return {
-    title: action === 'use-discord-name' ? 'Confirm Discord name update' : 'Confirm roster fix',
-    description: `${finding}\n\n${explanation[action]}\n\nRatatoskr will check the records again before making changes. No changes have been made.`,
-    footer: `Issue ${page + 1}`,
+    title: 'Confirm this fix',
+    description: `${leagueFindingTitle(finding)}\n${leagueFindingBody(finding)}\n\nWhat Rat will do:\n${changes[action].map((line) => `- ${line}`).join('\n')}\n\nRat checks everything again before changing anything. Nothing has changed yet.`,
+    footer: `Problem ${page + 1}`,
     actions: [
-      { id: `league-audit:confirm:${reference}:${page}:${action}`, label: action === 'use-discord-name' ? 'Update to Discord name' : 'Confirm repair', disabled: false },
+      { id: `league-audit:confirm:${reference}:${page}:${action}`, label: 'Confirm', disabled: false },
       { id: `league-audit:resolve:${reference}:${page}`, label: 'Back', disabled: false },
     ],
   };

@@ -163,8 +163,13 @@ export function createLeagueOpsRuntime(input: {
             jobReference: job.reference,
             onPhase: phase,
           });
-          // Refresh using fresh sources; never promote an executable preview to cache authority.
-          await audit('scheduled');
+          // One-way execution already verified the move. Run its follow-up full
+          // audit separately so it does not immediately repeat the worker's read.
+          if (intent.selections.startsWith('["trade-one-way",')) {
+            worker.enqueue('audit', { trigger: 'scheduled' }, 'audit:one-way-trades', 60_000);
+          } else {
+            await audit('scheduled');
+          }
           return result;
         } catch (error) {
           if (error instanceof LeagueTransactionPreviewChangedError) {
@@ -209,7 +214,8 @@ export function createLeagueOpsRuntime(input: {
           phase('VALIDATING');
           if (intent.reconcileReference) {
             await reconcileLeagueRepairRecord({ db, operationScope, guildId, sheets, members: discord, freeAgentRoleId,
-              reference: intent.reconcileReference, expectedFingerprint: intent.expectedRecoveryFingerprint ?? '', actorUserId: intent.actorUserId });
+              reference: intent.reconcileReference, expectedFingerprint: intent.expectedRecoveryFingerprint ?? '', actorUserId: intent.actorUserId,
+              authorizeBeforeWrite: () => authorize(intent.actorUserId) });
             await audit('scheduled');
             return { reference: intent.reconcileReference, manuallyReconciled: true };
           }
@@ -225,6 +231,7 @@ export function createLeagueOpsRuntime(input: {
             discord,
             jobReference: job.reference,
             onApplying: () => phase('APPLYING'),
+            authorizeBeforeWrite: () => authorize(intent.actorUserId),
           });
           phase('VERIFYING');
           await audit('scheduled');

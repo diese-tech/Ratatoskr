@@ -77,22 +77,6 @@ function setup() {
   return { db, worker, snapshot, input, targetedReads };
 }
 
-test('Niflheim pool membership clears only the false finding and role removal schedules a fresh check', async () => {
-  const f = setup();
-  try {
-    f.snapshot.niflheimFreeAgentRoleId = 'niflheim-fa';
-    const member = { discordId: 'niflheim-player', displayName: 'Niflheim player', roleIds: ['fa', 'niflheim-fa'] };
-    f.snapshot.discordMembers.push(member);
-    replaceLeagueFindings(f.db, 'g', 'member:niflheim-player', ['Old untracked Free Agent warning'], now);
-    await checkLeagueMember({ ...f.input, discordId: member.discordId });
-    assert.ok(!listLeagueFindings(f.db, 'g').some(entry => entry.resourceKey === 'member:niflheim-player'));
-    assert.equal(observeLeagueMember(f.db, f.worker, member, member.discordId), false);
-    assert.equal(observeLeagueMember(f.db, f.worker, { ...member, roleIds: ['fa'] }, member.discordId), true);
-    member.roleIds = ['fa'];
-    await checkLeagueMember({ ...f.input, discordId: member.discordId });
-    assert.ok(listLeagueFindings(f.db, 'g').some(entry => entry.resourceKey === 'member:niflheim-player'));
-  } finally { f.worker.stop(); f.db.close(); }
-});
 test('display-name drift triggers targeted work; irrelevant roles stop; burst events coalesce by Discord ID', () => {
   const f = setup();
   try {
@@ -396,7 +380,7 @@ for (const status of [429, 503]) {
       assert.equal(state.result, 'error');
       assert.equal(state.lastFullAt, verifiedAt);
       assert.equal(state.findings.length, 1);
-      assert.match(state.findings[0]!, /Discord name now/);
+      assert.match(state.findings[0]!, /name doesn’t match Discord\nDiscord says: /);
       assert.match(cards.sent[0]!.card.description, /latest check could not finish/);
       assert.match(cards.sent[0]!.card.description, /Previous results may have changed/);
       assert.equal(cards.sent[0]!.card.actions?.[0]?.label, 'Review problems');

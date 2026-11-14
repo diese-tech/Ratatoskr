@@ -36,12 +36,12 @@ export function savedLeagueErrorMessage(message: string | null | undefined): str
       ? 'The roster check needs staff review. Ask staff to check the current roster problems and saved action.' : cause;
     return `${guidance} No changes were made by this attempt.`;
   }
-  if (/is in Current Rosters but is no longer in the Discord server\. Confirm whether this is a departure/.test(message))
+  if (/is in Current Rosters but is no longer in the Discord server\. Confirm whether this is a departure| left the server\nThey’re still on /.test(message))
     return 'A rostered player is no longer in the Discord server. Ask staff to review their departure before changing the roster.';
   if (/exactly one current[- ]name record|multiple current name records/i.test(message))
-    return 'Player Name History needs exactly one current name for this player. Ask staff to check that sheet and the saved action.';
+    return 'This player needs exactly one current name in our records. An admin needs to fix that in the league spreadsheet.';
   if (/more than one current roster assignment|exactly one Current Rosters assignment/i.test(message))
-    return 'This player needs one current team entry. Check Current Rosters for missing or duplicate entries.';
+    return 'This player needs to be on exactly one team in our records. An admin needs to fix that in the league spreadsheet.';
   if (/permission|authorization|access.*(denied|revoked)|not editable|role hierarchy|privileged|integration-owned/i.test(message))
     return 'The person or Rat no longer has the access needed for this action. Ask an admin to check permissions.';
   if (/429|quota|rate.?limit|throttl|cooldown|asked.*wait/i.test(message))
@@ -51,8 +51,8 @@ export function savedLeagueErrorMessage(message: string | null | undefined): str
     return 'Rat cannot show a new preview for this saved action. Ask staff to check its status and records; do not repeat it.';
   if (/preview|fingerprint|changed.*(writing|confirmation)|source changed/i.test(message))
     return 'The information changed after the preview. Check the latest records before approving another action.';
-  if (/current.name|Player Name History/i.test(message)) return 'The player’s name records need checking in Player Name History.';
-  if (/ambiguous|unambiguously|inactive team|League Teams/i.test(message)) return 'Rat cannot choose the correct team or role. Ask staff to check League Teams.';
+  if (/current.name|Player Name History/i.test(message)) return 'The player’s names in our records need checking. An admin needs to fix that in the league spreadsheet.';
+  if (/ambiguous|unambiguously|inactive team|League Teams/i.test(message)) return 'Rat can’t tell which team or role is right. An admin needs to check the team setup in the league spreadsheet.';
   if (/roster audit|Current Rosters|roster.*(mismatch|does not match)/i.test(message))
     return 'The roster records do not agree. Ask staff to review the current roster problems and the saved action.';
   if (/delivery|partial|interrupted|outcome unknown/i.test(message))
@@ -75,6 +75,8 @@ const readableLeagueValidationMessages = new Set([
   'That player does not have a usable Discord display name.',
   'Cross-division trades are not supported.',
   'Both players are already on the same team.',
+  'The player is already on the receiving team.',
+  'The player does not have their current team role.',
   'The outgoing player cannot replace themselves.',
   'That player is still in the YSL server. Use `/transaction drop` or `/transaction self-drop`.',
   'The selected replacement is not a free agent.',
@@ -93,6 +95,8 @@ export function leagueValidationMessage(message: string, outcome: 'read-only' | 
     return 'The league name must match the player’s current Discord name. Copy that name from Discord and preview the change.';
   if (readableLeagueValidationMessages.has(message)
     || /^<@[A-Za-z0-9_-]+> is (?:not rostered on an active YSL team|not registered in Player Name History)\.$/.test(message)) return message;
+  if (message.startsWith('No empty slot was found') || message.startsWith('The receiving roster cell contains a value or formula.'))
+    return 'Rat could not find an empty receiving roster slot. Ask staff to check the receiving team’s public roster, then preview again.';
   const guidance = savedLeagueErrorMessage(message);
   if (outcome === 'read-only' && /Some changes may already have happened/i.test(guidance))
     return 'Rat could not prepare this player change. Ask staff to check the selected players, roles and league records.';
@@ -102,13 +106,13 @@ export function leagueValidationMessage(message: string, outcome: 'read-only' | 
 /** Only for a typed repair failure that guarantees no external write occurred. */
 export function leagueRepairNoWriteMessage(message: string): string {
   const manual = /exactly one current[- ]name record|multiple current name records|more than one current roster assignment|ambiguous or inactive team|division role is not configured unambiguously/i.test(message);
-  if (manual) return `${savedLeagueErrorMessage(message)} No changes were made. Correct the named sheet before reviewing this fix again.`;
-  if (/conflicting player-name issue/i.test(message)) return 'The player’s names disagree. Fix the name problem first, then check the public roster. No changes were made.';
-  if (/no longer (?:available for a Discord role repair|has both a Discord account and one current name record)/i.test(message)) return 'This player’s Discord account or name record changed. Check the account and Player Name History before choosing a fix. No changes were made.';
+  if (manual) return `${savedLeagueErrorMessage(message)} No changes were made.`;
+  if (/conflicting player-name issue/i.test(message)) return 'The player’s names disagree. Fix the name problem first, then check the roster page. No changes were made.';
+  if (/no longer (?:available for a Discord role repair|has both a Discord account and one current name record)/i.test(message)) return 'This player’s Discord account or name changed. Press Review problems on the League Status card to see the latest problems. No changes were made.';
   if (/does not currently provide a usable display name/i.test(message)) return 'Check the player’s current name in Discord before choosing a name fix. No changes were made.';
   const reason = /changed since this review page opened/i.test(message)
-    ? 'The records changed after this review opened.' : 'Rat could not prepare this repair.';
-  return `${reason} No changes were made. Open league tools from the latest League Status message, check the roster problems and review a fresh preview before approving a fix.`;
+    ? 'The records changed after this review opened.' : 'Rat couldn’t prepare this fix.';
+  return `${reason} No changes were made. Press Review problems on the League Status card to see the latest problems, then choose a fix again.`;
 }
 
 /** A roster check only reads sources; its outcome must not imply a saved write. */
@@ -138,22 +142,23 @@ export function leagueEasternTime(value: string | Date | null | undefined): stri
 
 export function leagueFixLabel(action: string | undefined): string {
   switch (action) {
-    case 'repair-roles': return 'Set Discord roles from roster sheets';
-    case 'use-discord-name': return 'Update sheets to Discord name';
-    case 'use-league-name': return 'Use name from name history';
-    case 'use-roster-name': return 'Use name from team roster';
-    case 'sync-public-roster': return 'Update public roster';
-    case 'mark-inactive': return 'Remove departed free agent';
+    case 'repair-roles': return 'The roster is right — fix Discord';
+    case 'use-discord-name': return 'Discord is right — update our records';
+    case 'use-league-name': return 'Use the name from the name list';
+    case 'use-roster-name': return 'Use the name from the team roster';
+    case 'sync-public-roster': return 'The roster is right — fix the roster page';
+    case 'mark-inactive': return 'They left — mark them inactive';
     default: return 'Review fix';
   }
 }
 export function leagueFixExplanation(action: string | undefined): string {
+  const confirm = 'Nothing changes until you press Confirm.';
   switch (action) {
-    case 'repair-roles': return 'Rat reads Current Rosters and Player Name History in the Admin workbook, then updates the player’s Discord team, division and Free Agent roles to match those sheets. This changes Discord roles; the sheets stay the same. Use this only when the sheets already show the correct assignment. For a new trade, drop or pickup, use /transaction instead.';
-    case 'use-discord-name': return 'This copies the player’s current Discord name to the roster sheets and public roster. The old name stays in history.';
-    case 'sync-public-roster': return 'This updates the affected team’s public player list to match the roster sheets.';
-    case 'mark-inactive': return 'This marks the departed free agent inactive and removes them from the public free-agent list.';
-    default: return 'Staff must check the named sheet and correct this problem there.';
+    case 'repair-roles': return `Which one is right? If our roster is right, Rat changes this player’s Discord team, division and Free Agent roles to match it. The roster stays the same. If Discord is right because a move already happened, use /transaction for that move instead. ${confirm}`;
+    case 'use-discord-name': return `Player names come from Discord. Rat copies the Discord name to our records and the roster page, and keeps the old name as a past name. ${confirm}`;
+    case 'sync-public-roster': return `Rat updates this roster page so it lists the same players as our roster. ${confirm}`;
+    case 'mark-inactive': return `If they’ve left the league, Rat marks them inactive and takes them off the free agent list. ${confirm}`;
+    default: return 'Rat can’t fix this one by itself. Ask an admin to fix it in the league spreadsheet.';
   }
 }
 

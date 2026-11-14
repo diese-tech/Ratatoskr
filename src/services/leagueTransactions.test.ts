@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildRenamePlan, buildStaffRenamePlan, buildSelfDropPlan, buildTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildDeparturePlan, buildDiscordRenamePlan, buildDropPlan, buildPickupPlan, buildRenamePlan, buildStaffRenamePlan, buildSelfDropPlan, buildTradePlan, buildOneWayTradePlan, LeagueMutationValidationError, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { buildLeagueIntentPlan } from './leagueTransactionIntent.js';
 import { openDatabase } from '../db/client.js';
 import {
   createLeagueTransaction,
@@ -21,6 +22,7 @@ import {
   LeagueReconciliationTicketError,
   LeagueTransactionPreviewChangedError,
   reconcilePendingLeagueTransactions,
+  type LeagueRoleState,
 } from './leagueTransactions.js';
 
 function snapshot(): LeagueSnapshot {
@@ -260,7 +262,7 @@ test('rename exemption does not bypass unrelated league drift', async () => {
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
-  }), /multiple team roles/i);
+  }), /’s team doesn’t match\nDiscord says: .* and /);
 
   assert.equal(f.events.includes('sheet-apply'), false);
   f.db.close();
@@ -275,7 +277,7 @@ test('rename exemption does not overwrite a different manual Current Rosters nam
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildDiscordRenamePlan(current, 'one', 'One Prime'),
-  }), /Discord name now:[\s\S]*Current Rosters sheet: “Manual Third Name”[\s\S]*Player Name History sheet: “One”/i);
+  }), /Manual Third Name’s name doesn’t match Discord\nDiscord says: “[^”]*”\nOur roster says: “Manual Third Name”\nOur name list says: “One”/);
 
   assert.equal(f.events.includes('sheet-apply'), false);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
@@ -576,7 +578,7 @@ test('targeted role preflight validates complete role integrity even for a renam
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
-  }), /multiple team roles/i);
+  }), /’s team doesn’t match\nDiscord says: .* and /);
   assert.deepEqual(f.events, []);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
@@ -647,7 +649,7 @@ test('targeted preflight rejects stale current-name assignment metadata after th
     db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
     freeAgentRoleId: 'free-agent', now: new Date('2026-09-30T17:00:00-04:00'), sheets: f.sheets, discord: f.discord,
     buildPlan: (current) => buildRenamePlan(current, 'one', 'Renamed'),
-  }), /Player Name History.*Current Rosters.*make the assignments match/i);
+  }), /’s league records disagree\nOur name list says: .*\nOur roster says: /);
   assert.deepEqual(f.events, []);
   assert.equal((f.db.prepare('SELECT COUNT(*) AS count FROM league_transactions').get() as { count: number }).count, 0);
   f.db.close();
@@ -804,4 +806,232 @@ test('startup recovery turns an interrupted audit repair into one durable staff 
   await recover();
   assert.equal(reports.length, 1);
   f.db.close();
+});
+
+test('saved swap intents are unchanged and one-way intents reject invalid or stale participants', () => {
+  const current = snapshot();
+  assert.deepEqual(buildLeagueIntentPlan('["trade","one","two"]', current), buildTradePlan(current, 'one', 'two'));
+  const intent = '["trade-one-way","one","team-b"]';
+  assert.deepEqual(buildLeagueIntentPlan(intent, current).playerIds, ['one']);
+  assert.throws(() => buildLeagueIntentPlan('["trade-one-way","one",null]', current), /Invalid saved/);
+  assert.throws(() => buildOneWayTradePlan(current, 'free', 'team-b'), /not rostered/);
+  assert.throws(() => buildOneWayTradePlan(current, 'one', 'team-a'), /already on the receiving team/);
+  assert.throws(() => buildOneWayTradePlan(current, 'one', 'missing'), /not an active/);
+  current.teams[1]!.division = 'Alfheim';
+  assert.throws(() => buildLeagueIntentPlan(intent, current), /Cross-division/);
+  current.teams[1]!.division = 'Vanaheim';
+  current.names[1]!.currentLeagueName = 'One';
+  assert.throws(() => buildLeagueIntentPlan(intent, current), /already used/);
+  current.discordMembers.shift();
+  assert.throws(() => buildLeagueIntentPlan(intent, current), /not currently in the Discord server/);
+});
+
+test('one-way execution is idempotent and uncertain role or Sheet writes never replay', async () => {
+  for (const failure of ['none', 'role', 'sheet', 'stale', 'permission'] as const) {
+    const f = fixture(failure === 'sheet' ? new LeagueSheetReconciliationRequiredError('Response lost') : undefined);
+    try {
+      const intent = '["trade-one-way","one","team-b"]';
+      const plan = buildLeagueIntentPlan(intent, f.current);
+      const announcement = buildLeagueAnnouncement(plan, 'Staff')!;
+      assert.match(announcement.description, /\*\*One\*\*.*team-a.*team-b/);
+      assert.match(announcement.description, /No player moves in return/);
+      assert.doesNotMatch(announcement.description, /undefined|Two|reinstat/i);
+      const reference = 'one-way-' + failure;
+      const input = {
+        db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'staff', actorName: 'Staff',
+        freeAgentRoleId: 'free-agent', now: new Date('2026-11-03T17:00:00Z'), jobReference: reference,
+        buildPlan: (current: LeagueSnapshot) => buildLeagueIntentPlan(intent, current),
+        expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan),
+        sheets: { ...f.sheets, assertOneWayTradeDestination: async () => {} },
+        discord: { ...f.discord,
+          validateOneWayTradeRoles: async () => {
+            if (failure === 'permission') throw new LeagueMutationValidationError('Missing role permission');
+          },
+          applyRoleChange: async (change: { discordId: string }) => {
+            await f.discord.applyRoleChange(change);
+            if (failure === 'role') throw Object.assign(new Error('Role response lost'), { reconciliationRequired: true });
+          },
+        },
+      };
+      if (failure === 'stale') f.current.teams[1]!.teamRole = 'Changed after preview';
+      if (failure === 'none') {
+        await executeLeagueTransaction(input);
+        await executeLeagueTransaction(input);
+        assert.equal(getLeagueTransaction(f.db, reference)?.status, 'completed');
+        assert.equal(f.events.filter(event => event === 'announce').length, 1);
+        assert.equal(f.events.filter(event => event === 'history').length, 1);
+        assert.deepEqual(f.events.filter(event => event.startsWith('discord:')), ['discord:one']);
+      } else {
+        await assert.rejects(() => executeLeagueTransaction(input));
+        if (failure === 'stale' || failure === 'permission') {
+          assert.equal(getLeagueTransaction(f.db, reference), undefined);
+          assert.ok(!f.events.includes('discord:one'));
+        } else {
+          assert.equal(getLeagueTransaction(f.db, reference)?.status, 'reconciliation_required');
+          await reconcilePendingLeagueTransactions(input);
+          await assert.rejects(() => executeLeagueTransaction(input));
+          assert.deepEqual(f.events.filter(event => event.startsWith('discord:')), ['discord:one']);
+        }
+        assert.ok(!f.events.includes('announce') && !f.events.includes('history'));
+      }
+    } finally { f.db.close(); }
+  }
+});
+
+// #200: Faye is a Svartalfheim free agent on Niflheim team N1.
+function addNiflheim(current: LeagueSnapshot): void {
+  current.teams.push(
+    { teamKey: 'Svartalfheim|S', franchise: 'S', division: 'Svartalfheim', teamRoleId: 'team-s', teamRole: 'S SD', divisionRoleId: 'division-s', active: true },
+    { teamKey: 'Niflheim|N1', franchise: 'N1', division: 'Niflheim', teamRoleId: 'team-n1', teamRole: 'N1 ND', divisionRoleId: 'division-n', active: true },
+    { teamKey: 'Niflheim|N2', franchise: 'N2', division: 'Niflheim', teamRoleId: 'team-n2', teamRole: 'N2 ND', divisionRoleId: 'division-n', active: true },
+  );
+  current.rosters.push({ sheetRow: 8, division: 'Niflheim', franchise: 'N1', teamRoleId: 'team-n1', team: 'N1 ND', discordId: 'faye', player: 'Faye', rosterStatus: 'Player' });
+  current.names.push({ sheetRow: 9, discordId: 'faye', currentLeagueName: 'Faye', knownName: 'Faye', nameStatus: 'Current Discord Name', division: 'Svartalfheim', franchise: '', leagueStatus: 'Free Agent' });
+  current.discordMembers.push({ discordId: 'faye', displayName: 'Faye', roleIds: ['free-agent', 'division-s', 'team-n1', 'division-n'] });
+  current.publicRosters.Svartalfheim = { teams: { S: [] }, freeAgents: ['Faye'] };
+  current.publicRosters.Niflheim = { teams: { N1: ['Faye'], N2: [] }, freeAgents: [] };
+}
+
+test('Niflheim moves run through the worker with layered role states and keep the Free Agent role (#200)', async () => {
+  for (const [label, build, add] of [
+    ['drop', (current: LeagueSnapshot) => buildDropPlan(current, 'faye'), null],
+    ['transfer', (current: LeagueSnapshot) => buildOneWayTradePlan(current, 'faye', 'team-n2'), 'team-n2'],
+  ] as const) {
+    const f = fixture();
+    addNiflheim(f.current);
+    const seen: unknown[] = [];
+    const discord = {
+      ...f.discord,
+      validateOneWayTradeRoles: async () => {},
+      applyRoleChange: async (change: { discordId: string; remove: string[]; add: string[] }, before: LeagueRoleState, after: LeagueRoleState) => {
+        seen.push({ change, before: before.layered?.expectedTeamRoleId, after: after.layered?.expectedTeamRoleId,
+          freeAgent: [before.expectsFreeAgent, after.expectsFreeAgent], pinned: before.observedManagedRoleIds });
+      },
+    };
+    const sheets = { ...f.sheets, assertOneWayTradeDestination: async () => {} };
+    const result = await executeLeagueTransaction({
+      db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+      freeAgentRoleId: 'free-agent', now: new Date('2026-11-05T17:00:00-05:00'), sheets, discord,
+      buildPlan: build, expectedPlanFingerprint: leagueTransactionPlanFingerprint(build(f.current)),
+    });
+    assert.deepEqual(seen, [{
+      change: { discordId: 'faye', remove: add ? ['team-n1'] : ['team-n1', 'division-n'], add: add ? [add] : [] },
+      // A transfer pins the unchanged primary roles, which selects singular cache-safe role writes.
+      before: 'team-n1', after: add, freeAgent: [true, true], pinned: add ? ['free-agent', 'division-s'] : undefined,
+    }], label);
+    assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed', label);
+    f.db.close();
+  }
+});
+
+test('a Niflheim drop announcement says the player leaves the team, not that they enter free agency (#200)', () => {
+  const current = snapshot();
+  addNiflheim(current);
+  assert.match(buildLeagueAnnouncement(buildDropPlan(current, 'faye'), 'Admin')!.description, /\*\*Faye\*\* \(<@faye>\) leaves <@&team-n1>\.$/);
+  assert.match(buildLeagueAnnouncement(buildPickupPlan(current, 'free', 'team-a'), 'Admin')!.description, /leaves free agency to join/);
+});
+
+test('a chosen division is saved as an optional fourth intent element; older intents are unchanged (#200)', () => {
+  const current = snapshot();
+  addNiflheim(current);
+  assert.deepEqual(buildLeagueIntentPlan('["drop","faye",null,"Niflheim"]', current), buildDropPlan(current, 'faye', undefined, 'Niflheim'));
+  assert.deepEqual(buildLeagueIntentPlan('["drop","one",null]', current), buildDropPlan(current, 'one'));
+  assert.throws(() => buildLeagueIntentPlan('["drop","faye",null,"Midgard"]', current), /Unsupported league division/);
+});
+
+test('a departed Svartalfheim free agent on a Niflheim team leaves both lists through the worker (#200)', async () => {
+  const f = fixture();
+  addNiflheim(f.current);
+  f.current.discordMembers = f.current.discordMembers.filter((entry) => entry.discordId !== 'faye');
+  const build = (current: LeagueSnapshot) => buildDeparturePlan(current, 'faye');
+  const plan = build(f.current);
+  assert.deepEqual(plan.publicChanges.map((change) => `${change.division}:${change.area}`), ['Niflheim:team', 'Svartalfheim:free-agent']);
+  assert.deepEqual(plan.discordRoleChanges, []);
+  const result = await executeLeagueTransaction({
+    db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'admin', actorName: 'Admin',
+    freeAgentRoleId: 'free-agent', now: new Date('2026-11-05T17:00:00-05:00'), sheets: f.sheets, discord: f.discord,
+    buildPlan: build, expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan),
+  });
+  assert.ok(f.events.includes('discord-absence:faye'));
+  assert.equal(getLeagueTransaction(f.db, result.reference)?.status, 'completed');
+  f.db.close();
+});
+
+for (const variant of ['trade', 'one-way', 'drop', 'self-drop', 'absent-self-drop', 'departure', 'pickup', 'rename', 'nickname'] as const) {
+  for (const revoked of [false, true]) test(`final authorization after suspended preflight: ${variant}, revoked=${revoked}`, async () => {
+    const f = fixture();
+    let release!: () => void;
+    let entered!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    let allowed = true;
+    let authorizations = 0;
+    let memberReads = 0;
+    const current = f.current;
+    if (variant === 'departure' || variant === 'absent-self-drop')
+      current.discordMembers = current.discordMembers.filter(member => member.discordId !== 'one');
+    current.discordMembers.forEach(member => { member.nickname = null; });
+    if (variant === 'rename') current.discordMembers[0]!.displayName = 'One Prime';
+    const plan = variant === 'trade' ? buildTradePlan(current, 'one', 'two')
+      : variant === 'one-way' ? buildOneWayTradePlan(current, 'one', 'team-b')
+      : variant === 'drop' ? buildDropPlan(current, 'one', 'free')
+      : variant === 'self-drop' || variant === 'absent-self-drop' ? buildSelfDropPlan(current, 'one', 'free')
+      : variant === 'departure' ? buildDeparturePlan(current, 'one')
+      : variant === 'pickup' ? buildPickupPlan(current, 'free', 'team-a')
+      : variant === 'nickname' ? buildStaffRenamePlan(current, 'one', 'One Prime')
+      : buildRenamePlan(current, 'one', 'One Prime');
+    const suspend = async () => { entered(); await barrier; };
+    const discord = { ...f.discord,
+      getMembers: async () => { memberReads++; return current.discordMembers; },
+      validateOneWayTradeRoles: async () => {},
+      validateRoleState: suspend,
+      validateDisplayName: suspend,
+      validateNicknameChange: suspend,
+      validateMemberAbsent: suspend,
+      applyNicknameChange: async () => { f.events.push('nickname-write'); },
+      verifyNicknameChange: async () => {}, rollbackNicknameChange: async () => {},
+    };
+    try {
+      const result = executeLeagueTransaction({ db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'staff', actorName: 'Staff',
+        freeAgentRoleId: 'free-agent', now: new Date(), sheets: { ...f.sheets, assertOneWayTradeDestination: async () => {} }, discord, buildPlan: () => plan,
+        jobReference: 'final-auth', expectedPlanFingerprint: leagueTransactionPlanFingerprint(plan),
+        authorizeBeforeWrite: async () => { authorizations++; if (!allowed) throw new LeagueMutationValidationError('Access revoked'); } });
+      await waiting;
+      if (revoked) allowed = false;
+      release();
+      if (revoked) {
+        await assert.rejects(result, /Access revoked/);
+        assert.equal(getLeagueTransaction(f.db, 'final-auth'), undefined);
+        assert.equal(f.events.some(event => /^(discord:|sheet-apply|nickname-write|announce|history)/.test(event)), false);
+      } else {
+        await result;
+        assert.equal(getLeagueTransaction(f.db, 'final-auth')?.status, 'completed');
+      }
+      assert.equal(authorizations, 1);
+      assert.equal(memberReads, 1);
+    } finally { release(); f.db.close(); }
+  });
+}
+
+test('permission failure after a role write retains ambiguous transaction evidence and never replays it', async () => {
+  const f = fixture();
+  let allowed = true;
+  const discord = { ...f.discord, applyRoleChange: async (change: { discordId: string }) => {
+    if (!allowed) throw Object.assign(Error('Permission lost after the first role write'), { reconciliationRequired: true });
+    await f.discord.applyRoleChange(change);
+    allowed = false;
+  } };
+  try {
+    await assert.rejects(() => executeLeagueTransaction({ db: f.db, operationScope: f.db, guildId: 'guild', actorUserId: 'staff', actorName: 'Staff',
+      freeAgentRoleId: 'free-agent', now: new Date(), sheets: f.sheets, discord,
+      buildPlan: current => buildTradePlan(current, 'one', 'two'), jobReference: 'partial-auth',
+      authorizeBeforeWrite: async () => { assert.equal(allowed, true); } }));
+    assert.equal(getLeagueTransaction(f.db, 'partial-auth')?.status, 'reconciliation_required');
+    assert.ok(f.events.includes('discord:one'));
+    assert.equal(f.events.some(event => event.startsWith('rollback:')), false);
+    const writes = [...f.events];
+    await reconcilePendingLeagueTransactions({ db: f.db, sheets: f.sheets, discord: f.discord });
+    assert.equal(getLeagueTransaction(f.db, 'partial-auth')?.status, 'reconciliation_required');
+    assert.deepEqual(f.events, writes);
+  } finally { f.db.close(); }
 });

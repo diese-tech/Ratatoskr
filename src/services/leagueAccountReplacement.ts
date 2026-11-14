@@ -64,13 +64,16 @@ export class LeagueAccountReplacementService {
     const loaded = await i.sheets.load(freshMembers, i.freeAgentRoleId);
     const plan = buildLeagueAccountReplacementPlan({ guildId: i.guildId, snapshot: loaded.snapshot, oldDiscordId, newDiscordId,
       oldMember, newMember, newNameSheetRow: loaded.sources.names.length + 5 });
-    const teamRow = loaded.sources.teams.slice(1).find((row) => String(row[3] ?? '') === plan.rosterBefore.teamRoleId);
-    const captainRoleId = String(teamRow?.[9] ?? '').trim();
+    // A Niflheim team's captain role gets the same manual-review note as the primary team's (#200).
+    const ownTeamRoleIds = [plan.rosterBefore.teamRoleId, ...(plan.layeredBefore ? [plan.layeredBefore.teamRoleId] : [])];
+    const ownCaptainRoleIds = loaded.sources.teams.slice(1).filter((row) => ownTeamRoleIds.includes(String(row[3] ?? '')))
+      .map((row) => String(row[9] ?? '').trim()).filter(Boolean);
     const captainRoleIds = loaded.sources.teams.slice(1).filter(row => loaded.snapshot.teams.some(team => team.active && team.teamRoleId === String(row[3] ?? '')))
       .map(row => String(row[9] ?? '').trim()).filter(Boolean);
     if (captainRoleIds.some(id => plan.roles.some(role => role.managedRoleIds.includes(id))))
       throw new LeagueMutationValidationError('Configured captain access overlaps a managed league role. Review role ownership before account replacement.');
-    if (captainRoleId) plan.manualReview.push(`Configured captain access role ${captainRoleId} requires manual review; it is not automatically transferred.`);
+    for (const captainRoleId of new Set(ownCaptainRoleIds))
+      plan.manualReview.push(`Configured captain access role ${captainRoleId} requires manual review; it is not automatically transferred.`);
     await i.discord.assertAccountReplacementRoleOwnership(plan.roles);
     const prepared = await i.sheets.prepareAccountReplacement(loaded, plan);
     const findings = humanizeLeagueAuditIssues(loaded.snapshot, auditLeagueRoster(loaded.snapshot)

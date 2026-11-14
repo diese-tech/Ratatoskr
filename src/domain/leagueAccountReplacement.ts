@@ -1,5 +1,6 @@
 import {
   auditLeagueRoster,
+  isLayeredDivision,
   LeagueMutationValidationError,
   type DiscordLeagueMember,
   type LeagueNameRow,
@@ -22,6 +23,9 @@ export type LeagueAccountReplacementPlan = {
   newDiscordId: string;
   rosterBefore: LeagueRosterRow;
   rosterAfter: LeagueRosterRow;
+  // A Niflheim row moves with the identity (#200). Absent on plans saved before it.
+  layeredBefore?: LeagueRosterRow;
+  layeredAfter?: LeagueRosterRow;
   oldNameBefore: LeagueNameRow;
   oldNameAfter: LeagueNameRow;
   newName: LeagueNameRow;
@@ -49,10 +53,15 @@ export function buildLeagueAccountReplacementPlan(input: AccountReplacementPlanI
     reject('The replacement account must be a current non-bot member of this guild.');
   if (input.oldMember && (input.oldMember.discordId !== oldDiscordId || input.oldMember.guildId !== input.guildId || input.oldMember.bot))
     reject('The old Discord account identity does not match this guild.');
-  const rosters = snapshot.rosters.filter((row) => row.discordId === oldDiscordId);
+  const rosters = snapshot.rosters.filter((row) => row.discordId === oldDiscordId && !isLayeredDivision(row.division));
+  const layeredRows = snapshot.rosters.filter((row) => row.discordId === oldDiscordId && isLayeredDivision(row.division));
   const names = snapshot.names.filter((row) => row.discordId === oldDiscordId && row.nameStatus === 'Current Discord Name');
-  if (rosters.length !== 1 || names.length !== 1)
+  if (rosters.length !== 1 || layeredRows.length > 1 || names.length !== 1)
     reject('The old account must own exactly one roster assignment and one current name record.');
+  const layeredBefore = layeredRows[0];
+  const layeredTeam = layeredBefore && snapshot.teams.find((entry) => entry.active && entry.teamRoleId === layeredBefore.teamRoleId);
+  if (layeredBefore && (!layeredTeam || layeredTeam.franchise !== layeredBefore.franchise || layeredTeam.teamRole !== layeredBefore.team))
+    reject('The old Niflheim roster row does not match its configured team.');
   if (snapshot.rosters.some((row) => row.discordId === newDiscordId) || snapshot.names.some((row) => row.discordId === newDiscordId))
     reject('The replacement account already has league identity records. Reconcile that conflict first.');
   const rosterBefore = rosters[0]!;
@@ -71,9 +80,10 @@ export function buildLeagueAccountReplacementPlan(input: AccountReplacementPlanI
   const leagueName = target.displayName.trim();
   if (!leagueName) reject('The replacement Discord display name is empty.');
   const teamRoles = snapshot.teams.filter((entry) => entry.active).map((entry) => entry.teamRoleId);
+  const ownTeamRoles = [team.teamRoleId, ...(layeredTeam ? [layeredTeam.teamRoleId] : [])];
   for (const member of [target, ...(input.oldMember ? [input.oldMember] : [])]) {
     const assigned = member.roleIds.filter((roleId) => teamRoles.includes(roleId));
-    if (assigned.length > 1 || assigned.some((roleId) => roleId !== team.teamRoleId))
+    if (assigned.some((roleId) => !ownTeamRoles.includes(roleId)))
       reject('An account holds a conflicting managed team role.');
   }
   const managedRoleIds = [...new Set(snapshot.teams.filter((entry) => entry.active)
@@ -87,6 +97,7 @@ export function buildLeagueAccountReplacementPlan(input: AccountReplacementPlanI
     oldDiscordId, newDiscordId,
     rosterBefore: { ...rosterBefore },
     rosterAfter: { ...rosterBefore, discordId: newDiscordId, player: leagueName },
+    ...(layeredBefore ? { layeredBefore: { ...layeredBefore }, layeredAfter: { ...layeredBefore, discordId: newDiscordId, player: leagueName } } : {}),
     oldNameBefore: { ...oldNameBefore },
     oldNameAfter: { ...oldNameBefore, nameStatus: 'Previous / Alternate' },
     newName: { ...oldNameBefore, sheetRow: input.newNameSheetRow, discordId: newDiscordId,
@@ -94,8 +105,10 @@ export function buildLeagueAccountReplacementPlan(input: AccountReplacementPlanI
     publicChanges: oldNameBefore.currentLeagueName === leagueName ? [] : [{
       division: team.division, area: 'team', group: team.franchise,
       from: rosterBefore.player, to: leagueName,
-    }],
-    roles: [roleChange(target, [team.teamRoleId, team.divisionRoleId]),
+    }, ...(layeredBefore ? [{
+      division: layeredBefore.division, area: 'team' as const, group: layeredBefore.franchise, from: layeredBefore.player, to: leagueName,
+    }] : [])],
+    roles: [roleChange(target, [team.teamRoleId, team.divisionRoleId, ...(layeredTeam ? [layeredTeam.teamRoleId, layeredTeam.divisionRoleId] : [])]),
       ...(input.oldMember ? [roleChange(input.oldMember, [])] : [])],
     manualReview: ['Check captain and staff access yourself. Rat only changes the team, division and Free Agent roles listed here.',
       ...[target, ...(input.oldMember ? [input.oldMember] : [])].flatMap((member) => {
@@ -113,7 +126,8 @@ export function buildLeagueAccountReplacementPlan(input: AccountReplacementPlanI
 
 export function projectLeagueAccountReplacement(snapshot: LeagueSnapshot, plan: LeagueAccountReplacementPlan): LeagueSnapshot {
   const after = structuredClone(snapshot);
-  after.rosters = after.rosters.map((row) => row.sheetRow === plan.rosterBefore.sheetRow ? { ...plan.rosterAfter } : row);
+  after.rosters = after.rosters.map((row) => row.sheetRow === plan.rosterBefore.sheetRow ? { ...plan.rosterAfter }
+    : plan.layeredBefore && row.sheetRow === plan.layeredBefore.sheetRow ? { ...plan.layeredAfter! } : row);
   after.names = after.names.map((row) => row.sheetRow === plan.oldNameBefore.sheetRow ? { ...plan.oldNameAfter } : row);
   after.names.push({ ...plan.newName });
   for (const role of plan.roles) {

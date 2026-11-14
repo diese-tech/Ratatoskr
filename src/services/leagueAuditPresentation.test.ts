@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { LeagueSnapshot } from '../domain/leagueOperations.js';
-import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
+import { humanizeLeagueAuditIssues, leagueFindingKind } from './leagueAuditPresentation.js';
 
 const playerId = '143011986349883392';
 const otherId = '2424807103111233536';
@@ -68,15 +68,37 @@ test('every league-audit diagnostic has a human-readable staff explanation witho
     'Vanaheim public free-agent list does not match Player Name History.',
   ];
 
-  const messages = humanizeLeagueAuditIssues(snapshot(), diagnostics);
+  const messages = diagnostics.map((diagnostic) => humanizeLeagueAuditIssues(snapshot(), [diagnostic])[0]!);
 
-  assert.equal(messages.length, diagnostics.length);
   for (const message of messages) {
-    assert.doesNotMatch(message, /\b\d{17,20}\b/);
-    assert.doesNotMatch(message, /Discord member snapshot/i);
-    assert.doesNotMatch(message, /could not explain safely/i);
+    // #206: readable by a first-time staff member. No sheet or tab names,
+    // role or Discord IDs, raw stored statuses or internal terms.
+    assert.doesNotMatch(message, /\b\d{16,20}\b/);
+    assert.doesNotMatch(message, /Current Rosters|Player Name History|Admin workbook|League Teams|Current Discord Name|Discord member snapshot/i);
+    assert.doesNotMatch(message, /\b(?:Captain|Player|Inactive|Self-Drop)\b/);
+    assert.doesNotMatch(message, /can’t explain/);
+    const [title, ...body] = message.split('\n');
+    assert.ok(title && title.length <= 100, `A short title about one person or team: ${title}`);
+    assert.ok(body.length >= 1, `A card says more than its title: ${message}`);
+    // Every card either offers a Rat fix (shown as two sides) or says who can fix it.
+    if (leagueFindingKind(message) === 'manual') assert.match(message, /An admin needs to fix this/);
+    else if (!['departed', 'departed-free-agent'].includes(leagueFindingKind(message))) assert.match(message, /says: /);
   }
-  assert.ok(messages.every((message) => /\b(make|keep|add|select|restore|remove|correct|clear|confirm|mark|give|use|update)\b/i.test(message)));
+});
+
+test('finding titles route each kind of problem to its fix', () => {
+  const kind = (diagnostic: string) => leagueFindingKind(humanizeLeagueAuditIssues(snapshot(), [diagnostic])[0]!);
+  assert.equal(kind(`Managed player names for ${playerId} do not match the current Discord display name.`), 'name');
+  for (const roles of ['has multiple team roles', 'team role does not match Current Rosters', 'is rostered without its team role',
+    'division roles do not match Vanaheim', 'is rostered but still has the Free Agent role',
+    'is recorded as a free agent but is missing the Free Agent role', 'has the Free Agent role but is not recorded as a current free agent'])
+    assert.equal(kind(`Discord member ${playerId} ${roles}.`), 'roles', roles);
+  assert.equal(kind('Vanaheim A public roster does not match Current Rosters.'), 'public');
+  assert.equal(kind('Vanaheim public free-agent list does not match Player Name History.'), 'public');
+  assert.equal(kind(`Current free agent ${playerId} is not in the Discord member snapshot.`), 'departed-free-agent');
+  assert.equal(kind(`Current Rosters member ${playerId} is not in the Discord member snapshot.`), 'departed');
+  assert.equal(kind(`Current name record for ${playerId} does not match its Current Rosters assignment.`), 'manual');
+  assert.equal(kind(`Current Rosters member ${playerId} does not match configured team A VD.`), 'manual');
 });
 
 test('unknown diagnostics fail closed into a plain-language instruction without echoing technical details', () => {
@@ -91,10 +113,10 @@ test('player-name findings identify Discord as the source and label each sheet v
   ]);
 
   assert.equal(message, [
-    'A VD',
-    'Discord name now: “Current Name”',
-    'Current Rosters sheet: “Old Name”',
-    'Player Name History sheet: “Current Name”',
-    'Required: update the managed roster sheets to the Discord name. Previous names stay in history.',
+    'Old Name’s name doesn’t match Discord',
+    'Discord says: “Current Name”',
+    'Our roster says: “Old Name”',
+    'Our name list says: “Current Name”',
+    'Team: A (Vanaheim)',
   ].join('\n'));
 });

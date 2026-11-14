@@ -1,3 +1,4 @@
+import { leagueFindingKind } from './leagueAuditPresentation.js';
 import { parseReinstatementSelection } from './leagueTransactionIntent.js';
 import { listLeagueMutationProblems, listOpenLeagueReconciliationTickets } from '../db/repositories/leagueOperations.js';
 import { leagueEasternTime } from './leaguePresentation.js';
@@ -11,7 +12,7 @@ import { getLeagueAuditRepair, getLeagueRepairResolution, listIncompleteLeagueAu
 import { getAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
 import { getVerifiedLeagueMember, listLeagueFindings } from '../db/repositories/leagueVerifiedState.js';
 import { DRAFT_PICK_FEATURE } from './draftPickTracking.js';
-import { LeagueMutationValidationError, type LeagueMutationPlan } from '../domain/leagueOperations.js';
+import { currentLeagueMembership, LeagueMutationValidationError, type LeagueMutationPlan } from '../domain/leagueOperations.js';
 import type { LeagueAccountReplacementService, AccountReplacementPreview } from './leagueAccountReplacement.js';
 import { leagueTransactionPlanFingerprint } from './leagueTransactions.js';
 import type { LeagueJobWorker } from './leagueJobWorker.js';
@@ -30,11 +31,11 @@ export function leagueOpsRepairAction(finding: string): LeagueAuditResolutionAct
   return control?.id.split(':').at(-1) as LeagueAuditResolutionAction | undefined;
 }
 export type ReviewAccountReplacementPreview = AccountReplacementPreview & { roleLabels?: Record<string, string> };
-export type LeagueOpsIssue = { key: string; finding: string; oldDiscordId?: string };
+export type LeagueOpsIssue = { key: string; finding: string; oldDiscordId?: string; requiresManualReview?: boolean };
 export type LeagueOpsOperation = { reference: string; type: string; status: string; action: string; targets: string[];
   actor: string; createdAt: string; attempts: number; error: string; next: string; canRepreview: boolean; canRecover: boolean; historyDetails?: string[]; linkedReferences?: string[] };
 export type LeagueOpsSnapshot = { issues: LeagueOpsIssue[]; operations: LeagueOpsOperation[]; checkDetails?: string[]; draftNeedsAttention?: boolean };
-export type ReviewTransactionPreview = { originalReference: string; selections: string; fingerprint: string; approval: string; plan: LeagueMutationPlan };
+export type ReviewTransactionPreview = { originalReference?: string; exit?: { issueKey: string; finding: string; playerId: string }; selections: string; fingerprint: string; approval: string; plan: LeagueMutationPlan };
 export type ReviewRepairPreview = { issueKey: string; finding: string; action: LeagueAuditResolutionAction; fingerprint: string; approvalReference: string; description: string };
 export type ReviewRecoveryPreview = { reference: string; type: 'repair' | 'account-replacement'; fingerprint: string; approvalReference: string; description: string; canConfirm: boolean };
 
@@ -43,7 +44,7 @@ export class LeagueOpsReviewService {
     replacement: LeagueAccountReplacementService; authorize(actor: string): Promise<string>;
     readTransactionHistory?(): Promise<(string | number | boolean | null)[][]>;
     roleLabel?(id: string): string;
-    previewTransaction(selections: string): Promise<LeagueMutationPlan>;
+    previewTransaction(selections: string, absentPlayerId?: string): Promise<LeagueMutationPlan>;
     previewRepair(finding: string, action: LeagueAuditResolutionAction): Promise<{ fingerprint: string; description: string }> }) {}
 
   async authorize(actor: string) { return this.input.authorize(actor); }
@@ -73,8 +74,8 @@ export class LeagueOpsReviewService {
     try { if (typeof payload.selections === 'string') reinstatement = parseReinstatementSelection(payload.selections); } catch { /* malformed stored evidence cannot authorize a preview */ }
     try { if (typeof payload.selections === 'string') selections = JSON.parse(payload.selections); } catch { /* evidence remains inspectable */ }
     if (!Array.isArray(selections)) selections = [];
-    const action = reinstatement ? 'reinstate' : typeof payload.action === 'string' ? payload.action : typeof selections[0] === 'string' ? selections[0] : job.type;
-    const playerSelections = reinstatement ? [reinstatement.playerId] : selections[0] === 'pickup' || selections[0] === 'rename' ? selections.slice(1, 2) : selections.slice(1);
+    const action = reinstatement ? 'reinstate' : typeof payload.action === 'string' ? payload.action : selections[0] === 'trade-one-way' ? 'trade' : typeof selections[0] === 'string' ? selections[0] : job.type;
+    const playerSelections = reinstatement ? [reinstatement.playerId] : selections[0] === 'pickup' || selections[0] === 'trade-one-way' || selections[0] === 'rename' ? selections.slice(1, 2) : selections.slice(1);
     const ids = [payload.oldDiscordId, payload.newDiscordId, ...playerSelections].filter((id): id is string => typeof id === 'string' && /^\d{16,20}$/.test(id));
     const expectedFinding = typeof payload.expectedFinding === 'string' ? payload.expectedFinding : '';
     const canRepreview = this.prewrite(job) && typeof payload.selections === 'string' && selections.length >= 2;
@@ -82,15 +83,15 @@ export class LeagueOpsReviewService {
       && (job.type === 'repair' ? getLeagueAuditRepair(this.input.db, job.reference)?.status === 'reconciliation_required'
         : job.type === 'account-replacement' && getAccountReplacement(this.input.db, this.input.guildId, job.reference)?.status === 'reconciliation_required');
     const next = job.status === 'COMPLETED' ? 'Finished. The history is saved; do not run this action again.'
-      : ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING'].includes(job.status) ? 'Rat is working on this action. Refresh to check its progress; do not submit it again.'
+      : ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING'].includes(job.status) ? 'Rat is working on this action. Reload saved status to check its progress; do not submit it again.'
       : job.status === 'RECONCILIATION_REQUIRED' ? 'Check the saved action, Discord, sheets and history. Some changes may already have happened. Do not run it again.'
-      : job.status === 'RETRYING' ? 'Rat will try again automatically. Refresh to check progress.'
+      : job.status === 'RETRYING' ? 'Rat will try again automatically. Reload saved status to check progress.'
       : canRepreview ? 'Preview the player change again, review it, then confirm.'
       : job.type === 'repair' ? 'Check Roster problems for this player. If the problem is gone, no new fix is needed. Earlier attempts stay in history.'
       : 'Check the latest records and settings with staff before trying another action.';
     const targets = ids.length ? ids.map(id => this.memberLabel(id)) : expectedFinding ? [expectedFinding] : [];
     if (reinstatement) targets.push(`Original exit: ${reinstatement.sourceReference}; requested status: ${reinstatement.returnStatus}; official proposed date: ${reinstatement.effectiveDate}.`);
-    if (selections[0] === 'pickup' && typeof selections[2] === 'string') targets.push(`Team role: ${this.input.roleLabel?.(selections[2]) ?? selections[2]}`);
+    if ((selections[0] === 'pickup' || selections[0] === 'trade-one-way') && typeof selections[2] === 'string') targets.push(`Team role: ${this.input.roleLabel?.(selections[2]) ?? selections[2]}`);
     if (selections[0] === 'rename' && typeof selections[2] === 'string') targets.push(`Requested league name: ${selections[2]}`);
     const originalReference = typeof payload.reconcileReference === 'string' ? payload.reconcileReference : payload.mode === 'reconcile' ? payload.reference : undefined;
     if (typeof originalReference === 'string') targets.push(`Checking the earlier saved action: ${originalReference}`);
@@ -147,13 +148,13 @@ export class LeagueOpsReviewService {
       'Exact elapsed time unavailable. Requested/completed times are separate from the official Sheet date.',
     ], linkedReferences: [...(source ? [source.reference] : []), ...returns.map(item => item.reference)] };
   }
-  async operationDetail(actor: string, reference: string): Promise<LeagueOpsOperation> {
+  async operationDetail(actor: string, reference: string, savedOnly = false): Promise<LeagueOpsOperation> {
     await this.authorize(actor);
     const job = getLeagueJob(this.input.db, reference);
     const detail = job?.guildId === this.input.guildId && ['transaction', 'repair', 'account-replacement'].includes(job.type)
       ? this.operation(job) : this.legacyRepair(reference) ?? this.legacyTransaction(reference);
     if (!detail) throw new LeagueMutationValidationError('This saved action was not found in this server. Check its reference.');
-    return this.linkedHistory(detail);
+    return savedOnly ? detail : this.linkedHistory(detail);
   }
   async snapshot(actor: string): Promise<LeagueOpsSnapshot> {
     await this.authorize(actor);
@@ -166,18 +167,20 @@ export class LeagueOpsReviewService {
     const draft = resources.find(entry => entry.resourceKey === DRAFT_PICK_FEATURE);
     const format = (value: string) => value.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, timestamp => leagueEasternTime(timestamp));
     return { checkDetails: [
-      'Open league tools lets you review existing problems and confirm fixes. Check again only reads Discord and the roster sheets; it makes no roster changes.',
+      'This panel lets you look at problems and confirm fixes. Check again only reads Discord and our records; it never changes the roster.',
       ...resources.filter(entry => entry.resourceKey === 'connection').flatMap(entry => entry.findings.map(format)),
       ...listOpenLeagueReconciliationTickets(db, guildId).map(ticket => `Roster problem: ${ticket.summary}`),
-      ...listLeagueMutationProblems(db, guildId).map(reference => `Unfinished action: ${reference}. Check Discord, roster sheets and history; do not run the player change again.`),
+      ...listLeagueMutationProblems(db, guildId).map(reference => `Unfinished action: ${reference}. Some changes may already have happened. Open it in Saved actions; don’t run the player change again.`),
       `Panel reference: ${audit?.runReference ?? 'Not available'}`,
       `Last full roster check: ${leagueEasternTime(audit?.lastFullAt)}`, `Last player check: ${leagueEasternTime(audit?.lastTargetedAt)}`,
       ...(draft?.findings.map(format) ?? ['Draft records have not been checked yet.']),
     ], draftNeedsAttention: draftSnapshotStatus(draft?.findings) !== 'ready', issues: resources.filter(entry => entry.resourceKey !== DRAFT_PICK_FEATURE).flatMap(entry => entry.findings.map((finding, index) => {
       const id = entry.resourceKey.startsWith('member:') ? entry.resourceKey.slice(7) : undefined;
       const state = id ? getVerifiedLeagueMember(db, guildId, id) : undefined;
+      const membership = id && state ? currentLeagueMembership(state, id) : undefined;
       return { key: `${entry.resourceKey}:${index}`, finding,
-        ...(id && state?.rosters.length === 1 && !state.member ? { oldDiscordId: id } : {}) };
+        ...(id && state && !state.member && membership?.primary && leagueFindingKind(finding) === 'departed' ? { oldDiscordId: id } : {}),
+        ...(id && (!state || (!state.member && !membership)) ? { requiresManualReview: true } : {}) };
     })), operations };
   }
   async previewReplacement(actor: string, issueKey: string, oldId: string, newId: string): Promise<ReviewAccountReplacementPreview> {
@@ -206,23 +209,45 @@ export class LeagueOpsReviewService {
     await this.authorize(actor);
     return { originalReference: reference, selections, fingerprint: leagueTransactionPlanFingerprint(plan), approval: randomUUID(), plan };
   }
+  async previewExit(actor: string, issue: LeagueOpsIssue, kind: 'departure' | 'self-drop', replacementId?: string): Promise<ReviewTransactionPreview> {
+    const current = await this.snapshot(actor);
+    if (!issue.oldDiscordId || issue.requiresManualReview || !current.issues.some(item => item.key === issue.key
+      && item.finding === issue.finding && item.oldDiscordId === issue.oldDiscordId && !item.requiresManualReview))
+      throw new LeagueMutationValidationError('This player’s roster problem changed. Reload saved status and select the problem again.');
+    if (!['departure', 'self-drop'].includes(kind) || (replacementId && !/^\d{16,20}$/.test(replacementId)))
+      throw new LeagueMutationValidationError('Choose a valid exit and exact replacement Discord ID.');
+    const selections = JSON.stringify([kind, issue.oldDiscordId, replacementId ?? null]);
+    const plan = await this.input.previewTransaction(selections, issue.oldDiscordId);
+    await this.authorize(actor);
+    return { exit: { issueKey: issue.key, finding: issue.finding, playerId: issue.oldDiscordId }, selections,
+      plan, fingerprint: leagueTransactionPlanFingerprint(plan), approval: randomUUID() };
+  }
   async confirmTransaction(actor: string, preview: ReviewTransactionPreview) {
     const actorName = await this.authorize(actor);
     const key = `transaction:${actor}:${preview.selections}:${preview.approval}`;
     const existing = getLeagueJobByDedupe(this.input.db, this.input.guildId, key);
     if (existing) return existing;
-    const original = getLeagueJob(this.input.db, preview.originalReference);
-    if (!original || original.guildId !== this.input.guildId || !this.prewrite(original)
-      || (original.payload as { selections: string }).selections !== preview.selections)
-      throw new LeagueMutationValidationError('The original operation changed. Refresh and request a new preview.');
+    if (preview.exit) {
+      const current = await this.snapshot(actor);
+      const tuple = JSON.parse(preview.selections) as unknown[];
+      if (!['departure', 'self-drop'].includes(String(tuple[0])) || tuple[1] !== preview.exit.playerId
+        || !current.issues.some(item => item.key === preview.exit!.issueKey && item.finding === preview.exit!.finding
+          && item.oldDiscordId === preview.exit!.playerId && !item.requiresManualReview))
+        throw new LeagueMutationValidationError('The player’s roster problem changed. Request a fresh preview.');
+    } else {
+      const original = preview.originalReference && getLeagueJob(this.input.db, preview.originalReference);
+      if (!original || original.guildId !== this.input.guildId || !this.prewrite(original)
+        || (original.payload as { selections: string }).selections !== preview.selections)
+        throw new LeagueMutationValidationError('The original operation changed. Reload saved status and request a new preview.');
+    }
     return this.input.worker.enqueue('transaction', { actorUserId: actor, actorName, selections: preview.selections,
-      expectedPlanFingerprint: preview.fingerprint, originalBlockedReference: preview.originalReference }, key);
+      expectedPlanFingerprint: preview.fingerprint, ...(preview.originalReference ? { originalBlockedReference: preview.originalReference } : {}) }, key);
   }
   async previewRepair(actor: string, key: string): Promise<ReviewRepairPreview> {
     const current = await this.snapshot(actor);
     const issue = current.issues.find(item => item.key === key);
     const action = issue && leagueOpsRepairAction(issue.finding);
-    if (!issue || !action || issue.oldDiscordId) throw new LeagueMutationValidationError('This issue requires an account/departure decision or manual source review.');
+    if (!issue || !action || issue.oldDiscordId || issue.requiresManualReview) throw new LeagueMutationValidationError('This issue requires an account/departure decision or manual source review.');
     const preview = await this.input.previewRepair(issue.finding, action);
     await this.authorize(actor);
     return { ...preview, approvalReference: randomUUID(), issueKey: key, finding: issue.finding, action };

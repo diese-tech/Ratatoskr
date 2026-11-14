@@ -9,6 +9,8 @@ import type { LeagueAccountReplacementService } from './leagueAccountReplacement
 import type { LeagueJobWorker } from './leagueJobWorker.js';
 import type { LeagueSheetsService } from './leagueSheets.js';
 import type { DiscordLeagueGateway } from './leagueDiscord.js';
+import { LeagueMutationValidationError, isOneWayTrade } from '../domain/leagueOperations.js';
+import { validateOneWayTradePreview } from './leagueTransactions.js';
 import { buildVerifiedTransactionIntent } from './leagueReinstatement.js';
 import { LeagueOpsReviewService } from './leagueOpsReview.js';
 import { createLeagueOpsFlow } from './leagueOpsFlow.js';
@@ -36,8 +38,8 @@ export function deferredLeagueOpsSender(interaction: ButtonInteraction): ChatInp
   } as unknown as ChatInputCommandInteraction;
 }
 export function registerLeagueOpsUi(input: { scope: object; db: Database.Database; client: Client; guild: Guild;
-  worker: LeagueJobWorker; replacement: LeagueAccountReplacementService; sheets: Pick<LeagueSheetsService, 'load'> & Partial<Pick<LeagueSheetsService, 'readTransactionHistory'>>;
-  discord: Pick<DiscordLeagueGateway, 'getMembers'>; freeAgentRoleId: string }): () => void {
+  worker: LeagueJobWorker; replacement: LeagueAccountReplacementService; sheets: Pick<LeagueSheetsService, 'load'> & Partial<Pick<LeagueSheetsService, 'readTransactionHistory' | 'prepare' | 'assertOneWayTradeDestination'>>;
+  discord: Pick<DiscordLeagueGateway, 'getMembers'> & Partial<Pick<DiscordLeagueGateway, 'validateOneWayTradeRoles' | 'validateDisplayName'>>; freeAgentRoleId: string }): () => void {
   const authorize = async (actor: string) => {
     const member = await input.guild.members.fetch({ user: actor, force: true });
     if (!hasAccess(member, 'OPERATIONS')) throw Error('League administrator access is required.');
@@ -46,8 +48,24 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
   const service = new LeagueOpsReviewService({ ...input, guildId: input.guild.id, authorize,
     readTransactionHistory: input.sheets.readTransactionHistory?.bind(input.sheets),
     roleLabel: id => `${input.guild.roles.cache.get(id)?.name ?? 'Unknown team role'} (${id})`,
-    previewTransaction: async selections => buildVerifiedTransactionIntent({ db: input.db, guildId: input.guild.id, sheets: input.sheets, selections,
-      loaded: await input.sheets.load(await input.discord.getMembers(), input.freeAgentRoleId) }),
+    previewTransaction: async (selections, absentPlayerId) => {
+      const loaded = await input.sheets.load(await input.discord.getMembers(), input.freeAgentRoleId);
+      if (absentPlayerId && loaded.snapshot.discordMembers.some(member => member.discordId === absentPlayerId))
+        throw new LeagueMutationValidationError('This player has rejoined. Review their current roster state before choosing an exit.');
+      const plan = await buildVerifiedTransactionIntent({ db: input.db, guildId: input.guild.id, sheets: input.sheets, selections, loaded });
+      if (isOneWayTrade(plan)) {
+        if (!input.sheets.prepare || !input.discord.validateDisplayName)
+          throw new Error('One-way trade preview checks are unavailable.');
+        await validateOneWayTradePreview(loaded, plan, {
+          prepare: input.sheets.prepare.bind(input.sheets),
+          assertOneWayTradeDestination: input.sheets.assertOneWayTradeDestination?.bind(input.sheets),
+        }, {
+          validateDisplayName: input.discord.validateDisplayName.bind(input.discord),
+          validateOneWayTradeRoles: input.discord.validateOneWayTradeRoles?.bind(input.discord),
+        });
+      }
+      return plan;
+    },
     previewRepair: async (finding, action) => previewLeagueAuditResolution(
       await input.sheets.load(await input.discord.getMembers(), input.freeAgentRoleId), finding, action) });
   const sessions = new Map<string, { actor: string; messageId: string }>();
@@ -57,7 +75,7 @@ export function registerLeagueOpsUi(input: { scope: object; db: Database.Databas
     flows: buildFlowCatalog([{ module: 'league-ops', flow: panel }]),
     policy: { authorize: async request => ({ allowed: await authorizeLeagueOpsUi(request, input.guild.id, authorize),
       denyMessage: 'Only the staff member who opened this view can use it, and they must still have league staff access.' }) },
-    onError: async () => { await bridge.platform.replyToActor('Rat could not finish this review. Use the main button on the latest League Status message and start again. No old confirmation will be used.'); } });
+    onError: async () => { await bridge.platform.replyToActor('Rat could not finish this review. Use the main button on the latest League Status message and start again. If you confirmed a change, inspect Saved actions before requesting any new approval.'); } });
   const host: Host = {
     open: async interaction => {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });

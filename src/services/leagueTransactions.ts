@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { assertNoUnresolvedAccountReplacement } from '../db/repositories/leagueAccountReplacements.js';
-import { reinstatementPolicyExceptions, auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot } from '../domain/leagueOperations.js';
+import { isLayeredDivision, layeredRoster, primaryRoster, isOneWayTrade, reinstatementPolicyExceptions, auditLeagueRoster, LeagueMutationValidationError, type DiscordNicknameChange, type DiscordRoleChange, type LeagueMutationPlan, type LeagueSnapshot, type LeagueTeam } from '../domain/leagueOperations.js';
 import { humanizeLeagueAuditIssues } from './leagueAuditPresentation.js';
 import {
   createLeagueTransaction,
@@ -51,11 +51,34 @@ export type LeagueRoleState = {
   expectsFreeAgent: boolean;
   divisionRoleId: string;
   observedManagedRoleIds?: string[];
+  // A layered membership's roles (Niflheim, #198). Absent while no layered division
+  // is active, so the state above is unchanged for everyone else.
+  layered?: { configuredTeamRoleIds: string[]; expectedTeamRoleId: string | null; divisionRoleId: string };
 };
+
+// ponytail: one layered division (Niflheim); make this a list if a second one appears.
+export function layeredRoleState(
+  activeTeams: LeagueTeam[], rosters: LeagueSnapshot['rosters'], discordId: string,
+): LeagueRoleState['layered'] {
+  const teams = activeTeams.filter((team) => isLayeredDivision(team.division));
+  if (!teams.length) return undefined;
+  const row = layeredRoster(rosters, discordId);
+  return {
+    configuredTeamRoleIds: teams.map((team) => team.teamRoleId),
+    expectedTeamRoleId: row ? teams.find((team) => team.teamRoleId === row.teamRoleId)?.teamRoleId ?? null : null,
+    divisionRoleId: teams[0]!.divisionRoleId,
+  };
+}
+
+export function managedRoleIds(state: LeagueRoleState): Set<string> {
+  return new Set([...state.configuredTeamRoleIds, ...state.configuredDivisionRoleIds, state.freeAgentRoleId,
+    ...(state.layered ? [...state.layered.configuredTeamRoleIds, state.layered.divisionRoleId] : [])]);
+}
 
 export interface LeagueSheetsPort {
   load(discordMembers: LeagueSnapshot['discordMembers'], freeAgentRoleId: string): Promise<LoadedLeagueSnapshot>;
   assertUnchanged(loaded: LoadedLeagueSnapshot): Promise<void>;
+  assertOneWayTradeDestination?(prepared: PreparedLeagueSheetMutation): Promise<void>;
   prepare(loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan): PreparedLeagueSheetMutation;
   apply(
     loaded: LoadedLeagueSnapshot,
@@ -67,6 +90,7 @@ export interface LeagueSheetsPort {
 }
 
 export interface LeagueDiscordPort {
+  validateOneWayTradeRoles?(plan: LeagueMutationPlan): Promise<void>;
   validateReinstatementRoles?(plan: LeagueMutationPlan, snapshot: LeagueSnapshot): Promise<void>;
   getMembers?(options?: LeagueMemberReadOptions): Promise<LeagueSnapshot['discordMembers']>;
   validateMemberAbsent(discordId: string, presentRemedy?: 'drop' | 'self-drop'): Promise<void>;
@@ -104,6 +128,29 @@ type ExecuteLeagueTransactionInput = {
 export class LeagueTransactionPreviewChangedError extends Error {
   constructor(readonly plan: LeagueMutationPlan) {
     super('League state changed after the transaction preview. Review the updated preview before confirming again.');
+  }
+}
+
+export async function validateOneWayTradePreview(
+  loaded: LoadedLeagueSnapshot, plan: LeagueMutationPlan,
+  sheets: Pick<LeagueSheetsPort, 'prepare' | 'assertOneWayTradeDestination'>,
+  discord: Pick<LeagueDiscordPort, 'validateOneWayTradeRoles' | 'validateDisplayName'>,
+): Promise<void> {
+  const issues = auditLeagueRoster(loaded.snapshot);
+  if (issues.length) {
+    console.error('One-way trade preview roster audit failed:', issues);
+    throw new LeagueMutationValidationError(humanizeLeagueAuditIssues(loaded.snapshot, issues).slice(0, 3).join(' '));
+  }
+  try {
+    if (!sheets.assertOneWayTradeDestination || !discord.validateOneWayTradeRoles) throw new Error('Trade checks unavailable.');
+    await sheets.assertOneWayTradeDestination(sheets.prepare(loaded, plan));
+    await discord.validateOneWayTradeRoles(plan);
+    await discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
+  } catch (error) {
+    if (error instanceof LeagueMutationValidationError) throw error;
+    if (error instanceof LeagueSheetDriftError) throw new LeagueMutationValidationError(error.message);
+    console.error('One-way trade preview verification failed:', error);
+    throw new LeagueMutationValidationError('Rat could not verify the receiving roster or Discord roles. Check the roster and Rat’s permissions, then preview again.');
   }
 }
 
@@ -165,11 +212,12 @@ function openReconciliationTicket(
 }
 
 function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutationPlan): void {
-  const activeTeams = snapshot.teams.filter((team) => team.active);
+  // Primary memberships only; layered (Niflheim) roles are verified by the role state.
+  const activeTeams = snapshot.teams.filter((team) => team.active && !isLayeredDivision(team.division));
   const teamsByRole = new Map(activeTeams.map((team) => [team.teamRoleId, team]));
   for (const discordId of plan.playerIds) {
     const member = snapshot.discordMembers.find((candidate) => candidate.discordId === discordId);
-    const rosterRows = snapshot.rosters.filter((row) => row.discordId === discordId);
+    const rosterRows = snapshot.rosters.filter((row) => row.discordId === discordId && !isLayeredDivision(row.division));
     if (rosterRows.length > 1) throw new Error(`Discord member ${discordId} has multiple roster assignments.`);
     const currentNames = snapshot.names.filter((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
     if (currentNames.length !== 1) throw new Error(`Discord member ${discordId} must have exactly one current name record.`);
@@ -177,7 +225,7 @@ function assertDiscordPreconditions(snapshot: LeagueSnapshot, plan: LeagueMutati
       const isAbsentExitPlayer = (plan.kind === 'departure' || plan.kind === 'self-drop')
         && discordId === plan.playerIds[0]
         && !plan.discordRoleChanges.some((change) => change.discordId === discordId);
-      if (isAbsentExitPlayer && rosterRows.length === 1) {
+      if (isAbsentExitPlayer && (rosterRows.length === 1 || layeredRoster(snapshot.rosters, discordId))) {
         continue;
       }
       throw new Error(`Discord member ${discordId} could not be loaded.`);
@@ -246,8 +294,10 @@ function expectedRoleState(
   names: LeagueSnapshot['names'],
   discordId: string,
 ): LeagueRoleState {
-  const activeTeams = snapshot.teams.filter((team) => team.active);
-  const roster = rosters.find((row) => row.discordId === discordId);
+  const allActive = snapshot.teams.filter((team) => team.active);
+  const activeTeams = allActive.filter((team) => !isLayeredDivision(team.division));
+  const roster = primaryRoster(rosters, discordId);
+  const layered = layeredRoleState(allActive, rosters, discordId);
   const currentName = names.find((row) => row.discordId === discordId && row.nameStatus === 'Current Discord Name');
   if (!currentName) throw new Error(`Discord member ${discordId} has no current name record.`);
   const team = roster ? activeTeams.find((candidate) => candidate.teamRoleId === roster.teamRoleId) : undefined;
@@ -261,6 +311,7 @@ function expectedRoleState(
     freeAgentRoleId: snapshot.freeAgentRoleId,
     expectsFreeAgent: !roster && currentName.leagueStatus === 'Free Agent',
     divisionRoleId,
+    ...(layered ? { layered } : {}),
   };
 }
 
@@ -288,26 +339,34 @@ export function buildLeagueAnnouncement(plan: LeagueMutationPlan, actorName: str
         `Ratatoskr carries news of an agreement between ${mention(firstTeam!.teamRoleId)} and ${mention(secondTeam!.teamRoleId)}.`,
         '',
         `${player(0)} leaves ${mention(firstTeam!.teamRoleId)} to join ${mention(secondTeam!.teamRoleId)}.`,
-        `${player(1)} leaves ${mention(secondTeam!.teamRoleId)} to join ${mention(firstTeam!.teamRoleId)}.`,
+        isOneWayTrade(plan)
+          ? 'This is a one-way transfer. No player moves in return.'
+          : `${player(1)} leaves ${mention(secondTeam!.teamRoleId)} to join ${mention(firstTeam!.teamRoleId)}.`,
       ].join('\n'),
       footer: `Posted by ${actorName}`,
     };
   }
   const team = plan.teams[0]!;
+  // Departure and self-drop can end a Svartalfheim and a Niflheim membership together (#200).
+  const allTeams = plan.teams.map((entry) => mention(entry.teamRoleId)).join(' and ');
   const replacement = plan.playerIds[1]
     ? ` ${mention(team.teamRoleId)} picks up ${player(1)} in their place.`
     : '';
   let line: string;
   if (plan.kind === 'reinstatement') line = `${player(0)} returns to ${mention(team.teamRoleId)}.\n\nOfficial league date: ${effectiveDate ?? plan.reinstatement!.selection.effectiveDate}.`;
-  else if (plan.kind === 'departure') line = `${player(0)} leaves ${mention(team.teamRoleId)} and the YSL server.${replacement}`;
-  else if (plan.kind === 'self-drop') line = `${player(0)} self-drops from ${mention(team.teamRoleId)}.${replacement}`;
+  else if (plan.kind === 'departure') line = `${player(0)} leaves ${allTeams} and the YSL server.${replacement}`;
+  else if (plan.kind === 'self-drop') line = `${player(0)} self-drops from ${allTeams}.${replacement}`;
+  else if (plan.kind === 'drop' && isLayeredDivision(team.division)) line = `${player(0)} leaves ${mention(team.teamRoleId)}.${replacement}`;
   else if (plan.kind === 'drop' && plan.playerIds[1]) {
     line = `${mention(team.teamRoleId)} drops ${player(0)} into free agency and picks up ${player(1)}.`;
   } else if (plan.kind === 'drop') line = `${player(0)} leaves ${mention(team.teamRoleId)} and enters free agency.`;
+  // A Niflheim pickup comes from the Svartalfheim pool and the player stays a free agent there.
+  else if (isLayeredDivision(team.division)) line = `${player(0)} joins ${mention(team.teamRoleId)}.`;
   else line = `${player(0)} leaves free agency to join ${mention(team.teamRoleId)}.`;
+  const teamRoleIds = plan.teams.map((entry) => entry.teamRoleId);
   return {
-    content: content([team.teamRoleId]),
-    allowedRoleIds: [team.teamRoleId],
+    content: content(teamRoleIds),
+    allowedRoleIds: teamRoleIds,
     title: 'Word Travels the Branches',
     description: `Ratatoskr carries word from ${mention(team.teamRoleId)}.\n\n${line}`,
     footer: `Posted by ${actorName}`,
@@ -413,6 +472,10 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
     let prepared: PreparedLeagueSheetMutation;
     try {
       prepared = input.sheets.prepare(loaded, plan);
+      if (isOneWayTrade(plan)) {
+        if (!input.sheets.assertOneWayTradeDestination) throw new Error('Destination verification is unavailable.');
+        await input.sheets.assertOneWayTradeDestination(prepared);
+      }
     } catch (error) {
       throw openReconciliationTicket(input, auditDate, error);
     }
@@ -427,6 +490,24 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       discordId,
       expectedRoleState(loaded.snapshot, plan.rosters, plan.nameUpdates, discordId),
     ]));
+    // A transfer pins the exact managed roles so its two writes use singular, cache-safe role
+    // deltas. A Niflheim transfer leaves the primary roles as they are (its own roles are
+    // checked by `layered`), so it pins the primary roles the player holds now (#200).
+    if (isOneWayTrade(plan) && isLayeredDivision(plan.teams[0]!.division)) {
+      const change = plan.discordRoleChanges[0]!;
+      const before = beforeByPlayer.get(change.discordId)!;
+      const primaryManaged = new Set([...before.configuredTeamRoleIds, ...before.configuredDivisionRoleIds, before.freeAgentRoleId]);
+      const held = (loaded.snapshot.discordMembers.find((member) => member.discordId === change.discordId)?.roleIds ?? [])
+        .filter((roleId) => primaryManaged.has(roleId));
+      before.observedManagedRoleIds = held;
+      afterByPlayer.get(change.discordId)!.observedManagedRoleIds = [...held];
+    } else if (isOneWayTrade(plan)) {
+      const change = plan.discordRoleChanges[0]!;
+      const before = beforeByPlayer.get(change.discordId)!;
+      const after = afterByPlayer.get(change.discordId)!;
+      before.observedManagedRoleIds = [change.remove[0]!, before.divisionRoleId];
+      after.observedManagedRoleIds = [change.add[0]!, after.divisionRoleId];
+    }
     try {
       for (const discordId of roleValidationPlayerIds) {
         await input.discord.validateRoleState(discordId, beforeByPlayer.get(discordId)!);
@@ -439,10 +520,14 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       await input.discord.validateReinstatementRoles(plan, loaded.snapshot);
       // A planned nickname restore is checked against the exact approved before-state below.
       if (!plan.discordNicknameChange) await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
-      await input.authorizeBeforeWrite?.();
       const freshPlan = await input.buildPlan(loaded.snapshot, loaded);
       if (leagueTransactionPlanFingerprint(freshPlan) !== leagueTransactionPlanFingerprint(plan))
         throw new LeagueTransactionPreviewChangedError(freshPlan);
+    }
+    if (isOneWayTrade(plan)) {
+      if (!input.discord.validateOneWayTradeRoles) throw new LeagueMutationValidationError('Discord role verification is unavailable.');
+      await input.discord.validateOneWayTradeRoles(plan);
+      await input.discord.validateDisplayName(plan.playerIds[0]!, plan.players[0]!);
     }
     const nickname = plan.discordNicknameChange;
     if (nickname) {
@@ -460,6 +545,8 @@ export async function executeLeagueTransaction(input: ExecuteLeagueTransactionIn
       );
     }
 
+    // All variants share this guard after asynchronous preflight, before any mutation.
+    await input.authorizeBeforeWrite?.();
     const reference = input.jobReference ?? `YSL-TRX-${auditDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const record: LeagueTransactionRecord = {
       reference, effectiveDate: plan.reinstatement?.selection.effectiveDate ?? auditDate, processedById: input.actorUserId, processedBy: input.actorName,

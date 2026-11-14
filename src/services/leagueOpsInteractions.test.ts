@@ -124,7 +124,7 @@ test('read failure keeps the current verified finding reviewable without executi
     beginDirtyLeagueAudit(db, {
       guildId: 'g',
       result: 'error',
-      findings: ['Team\nDiscord name now: “New”\nCurrent Rosters sheet: “Old”\nPlayer Name History sheet: “Old”'],
+      findings: ['Old’s name doesn’t match Discord\nDiscord says: “New”\nOur roster says: “Old”\nTeam: Team (Vanaheim)'],
       runReference: 'current',
       runAt: new Date().toISOString(),
       trigger: 'scheduled',
@@ -139,7 +139,7 @@ test('read failure keeps the current verified finding reviewable without executi
       },
     } as unknown as ButtonInteraction;
     await handleLeagueAuditReviewButton(interaction, db, db);
-    assert.match(JSON.stringify(reply), /Resolve this issue/);
+    assert.match(JSON.stringify(reply), /Choose a fix/);
     assert.doesNotMatch(JSON.stringify(reply), /out of date/);
     assert.equal((db.prepare('SELECT count(*) count FROM league_jobs').get() as { count: number }).count, 0);
   } finally {

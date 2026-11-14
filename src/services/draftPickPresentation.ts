@@ -11,6 +11,19 @@ export const PUBLIC_TEAM_CELLS: Record<string, { column: number; startRow: numbe
   'Valhalla Vikings': { column: 10, startRow: 16, endRow: 22 },
   'Wailing Banshees': { column: 14, startRow: 16, endRow: 22 },
 };
+type TeamCells = typeof PUBLIC_TEAM_CELLS;
+// The hand-made Niflheim Roster tab uses the same block shape (team name, Name, Cap:, rounds 1-6)
+// but packs its five teams into three columns (#195).
+const DIVISION_TEAM_CELLS: Record<string, TeamCells> = {
+  Niflheim: {
+    'Dream Walkers': { column: 2, startRow: 5, endRow: 11 },
+    'Little Monsters': { column: 6, startRow: 5, endRow: 11 },
+    'Something Spicy': { column: 10, startRow: 5, endRow: 11 },
+    'The Rat Pack': { column: 2, startRow: 16, endRow: 22 },
+    'Valhalla Vikings': { column: 6, startRow: 16, endRow: 22 },
+  },
+};
+export const publicTeamCellsFor = (division: string): TeamCells => DIVISION_TEAM_CELLS[division] ?? PUBLIC_TEAM_CELLS;
 export const DRAFT_HISTORY_RULE = '=$M6<>""';
 export const DRAFT_NAME_YELLOW = { red: 1, green: 1, blue: 0 };
 export const DRAFT_ROW_YELLOW = { red: 1, green: 0.95, blue: 0.6 };
@@ -28,7 +41,7 @@ export function hasDraftHistoryRule(sheetId: number, rules: DraftHistoryRule[] =
 export function publicDraftHighlightCells(slots: DraftHighlightSlot[], grids: Record<string, (string | number | boolean | null)[][]>) {
   const cells = new Map<string, { title: string; row: number; column: number; range: string }>();
   for (const slot of slots) {
-    const block = PUBLIC_TEAM_CELLS[slot.team], round = Number(slot.round), grid = grids[slot.division];
+    const block = publicTeamCellsFor(slot.division)[slot.team], round = Number(slot.round), grid = grids[slot.division];
     if (!DRAFT_DIVISIONS.includes(slot.division as typeof DRAFT_DIVISIONS[number]) || !block
       || !Number.isInteger(round) || round < 1 || round > 4 || !grid)
       throw new Error('Protected draft slot cannot be mapped to an owned public roster cell.');
