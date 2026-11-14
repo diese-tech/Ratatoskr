@@ -74,18 +74,24 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
       } finally { job.mutate(data => { data.busy = false; }); }
     });
   };
-  const refresh = action<LeagueOpsPanelData>()(event => {
+  const refresh = action<LeagueOpsPanelData>()(async event => {
     if (event.session.data.busy) return;
     const previousIssue = event.session.data.selectedIssue;
     const previousOperation = event.session.data.selectedOperation;
     const hadPreview = !!(event.session.data.replacement || event.session.data.transaction || event.session.data.repair || event.session.data.recovery);
-    event.mutate(data => { Object.assign(data, clearedPreview); });
+
     // Fluxcord 0.2.2 keeps modal nonces on ordinary redraws and same-screen go.
     // Two navigation transitions invalidate pending modals without a new session.
-    const screen = hadPreview ? previousIssue ? 'issue' : 'operation' : event.session.screen;
+    const activeScreen = event.session.screen;
+    const previewScreen = activeScreen === 'preview' || activeScreen === 'confirmation';
+    const screen = previewScreen
+      ? event.session.data.replacement || event.session.data.repair ? 'issue' : 'operation'
+      : activeScreen;
+    event.mutate(data => { Object.assign(data, clearedPreview); data.busy = true; data.notice = 'Reloading saved status…'; });
     event.ui.go(screen === 'issues' ? 'operations' : 'issues');
     event.ui.go(screen);
-    run(event, async () => {
+    // Saved reads stay in this interaction so navigation uses their reconciled result.
+    try {
       const snapshot = await service.snapshot(event.actorId);
       const selectedIssue = previousIssue ? snapshot.issues.find(issue => issue.key === previousIssue.key
         && issue.finding === previousIssue.finding && issue.oldDiscordId === previousIssue.oldDiscordId
@@ -95,13 +101,20 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
         try { selectedOperation = await service.operationDetail(event.actorId, previousOperation.reference, true); }
         catch (error) { if (!(error instanceof LeagueMutationValidationError)) throw error; }
       }
-      return { snapshot, selectedIssue, selectedOperation,
+      event.mutate(data => { Object.assign(data, { snapshot, selectedIssue, selectedOperation,
         notice: 'Saved status reloaded. No new Discord or Sheets check was run.'
           + (previousIssue && !selectedIssue ? ' This problem changed or is no longer listed. Choose a problem again.' : '')
           + (previousOperation && !selectedOperation ? ' This saved action is no longer available.' : '')
           + (event.session.data.queued ? ' Accepted work is unchanged. Check Saved actions for its result.'
-            : hadPreview ? ' The unconfirmed preview was cleared. Request a new preview before approving.' : '') };
-    }, true, 'Reloading saved status…');
+            : hadPreview ? ' The unconfirmed preview was cleared. Request a new preview before approving.' : '') }); });
+      const destination = screen === 'issue' && !selectedIssue ? 'issues'
+        : screen === 'operation' && !selectedOperation ? 'operations' : screen;
+      event.ui.go(destination);
+    } catch {
+      event.mutate(data => { data.selectedIssue = undefined; data.selectedOperation = undefined;
+        data.notice = 'Saved status could not be loaded. Unconfirmed previews were cleared. Accepted work is unchanged; check Saved actions.'; });
+      event.ui.go(screen === 'issue' ? 'issues' : screen === 'operation' ? 'operations' : screen);
+    } finally { event.mutate(data => { data.busy = false; }); }
   });
 
   const findOperation = action<LeagueOpsPanelData>()(async event => {

@@ -381,7 +381,7 @@ for (const change of ['unchanged', 'modified', 'removed'] as const) test(`reload
     assert.match(copy, /No new Discord or Sheets check was run/);
     assert.match(copy, /unconfirmed preview was cleared/);
     assert.equal(copy.includes('One’s division'), change === 'unchanged');
-    if (change !== 'unchanged') assert.match(copy, /changed or is no longer listed/);
+    if (change !== 'unchanged') { assert.match(copy, /changed or is no longer listed/); assert.match(copy, /League tools · Roster problems/); }
     await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.deepEqual(h.repairConfirmations, []);
     if (change === 'unchanged') {
@@ -415,7 +415,67 @@ for (const missing of [false, true]) test(`reload revalidates selected saved ope
     await h.click('Reload saved status');
     await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
     assert.match(JSON.stringify(h.edits.at(-1)), missing ? /no longer available/ : /Finished/);
+    if (missing) assert.match(JSON.stringify(h.edits.at(-1)), /League tools · Saved actions/);
     await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
     assert.equal(h.count(), 0);
   } finally { h.release(); h.close(); }
 });
+
+for (const kind of ['repair', 'transaction', 'recovery', 'replacement'] as const) {
+  for (const details of [false, true]) test(`reload routes by active screen and preview type: ${kind}, details=${details}`, async () => {
+    const h = await harness();
+    try {
+      const issue = { key: 'first', finding: divisionCard('One'), ...(kind === 'replacement' ? { oldDiscordId: 'one' } : {}) };
+      await h.setIssues([issue]); await h.click('View problem');
+      h.snapshot.operations[0]!.canRecover = true;
+      h.service.operationDetail = async (_actor, reference) => ({ ...h.snapshot.operations[0]!, reference });
+      const openPreview = async () => {
+        if (kind === 'repair') { await h.click(FIX); }
+        else if (kind === 'transaction') { await h.click('Preview player change'); h.release(); }
+        else if (kind === 'recovery') { await h.click('Check unfinished changes'); }
+        else {
+          await h.click('Player changed Discord account');
+          await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit,
+            { old: 'one', new: '123456789012345678', attestation: 'SAME PLAYER' });
+        }
+        await until(() => JSON.stringify(h.edits.at(-1)).includes('League tools · Review changes')
+          && !JSON.stringify(h.edits.at(-1)).includes('Checking the latest league records'));
+      };
+      if (kind === 'transaction' || kind === 'recovery') {
+        await h.click('Saved actions'); await h.click('View action');
+      }
+      if (kind === 'replacement') {
+        const f = accountReplacementSources();
+        const snapshot = (await f.sheets.load([...f.members.values()], 'fa')).snapshot;
+        const plan = buildLeagueAccountReplacementPlan({ guildId: 'g', snapshot, oldDiscordId: 'one', newDiscordId: 'new',
+          oldMember: null, newMember: f.members.get('new')!, newNameSheetRow: 20 });
+        h.service.previewReplacement = async () => ({ plan, fingerprint: 'proof', approvalReference: 'approval', preservedJobReferences: [], draftVerification: 'verified' });
+        h.service.confirmReplacement = async () => { assert.fail('Old replacement modal must not approve'); };
+      }
+      await openPreview();
+      const approve = kind === 'repair' ? FIX : kind === 'replacement' ? 'Change Discord account'
+        : kind === 'recovery' ? 'Close checked action' : 'Approve player change';
+      await h.click(approve);
+      const oldModal = h.modals.at(-1)!.custom_id;
+      if (details) await h.click('Check details');
+      await h.click('Reload saved status');
+      await until(() => JSON.stringify(h.edits.at(-1)).includes('Saved status reloaded'));
+      const copy = JSON.stringify(h.edits.at(-1));
+      assert.match(copy, details ? /League tools · Check details/ : kind === 'repair' || kind === 'replacement'
+        ? /One’s division/ : /League tools · Saved action/);
+      await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: kind === 'recovery' ? 'HISTORY REVIEWED' : 'CONFIRM' });
+      assert.equal(h.count(), 0); assert.equal(h.recoveries(), 0); assert.deepEqual(h.repairConfirmations, []);
+      if (!details && kind === 'transaction') {
+        await openPreview(); await h.click(approve);
+        await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+        assert.equal(h.count(), 0);
+        await h.dispatch(h.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+        await until(() => h.count() === 1);
+        await h.click('Reload saved status');
+        assert.match(JSON.stringify(h.edits.at(-1)), /Accepted work is unchanged/);
+        assert.match(JSON.stringify(h.edits.at(-1)), /already sent a fix/);
+        assert.equal(h.count(), 1);
+      }
+    } finally { h.release(); h.close(); }
+  });
+}
