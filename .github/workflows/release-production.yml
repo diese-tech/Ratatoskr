@@ -1,0 +1,71 @@
+name: Release Ratatoskr production
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact lowercase 40-character commit SHA on main
+        required: true
+        type: string
+      dry_run:
+        description: Verify checks only; never deploy
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ratatoskr-production-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Trusted workflow revision, never candidate-SHA code, handles credentials.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Verify exact SHA and all required checks without deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: node --import tsx scripts/production-release.ts check "$RELEASE_SHA"
+
+  deploy:
+    name: Approve production SHA ${{ inputs.sha }}
+    needs: verify
+    if: ${{ !inputs.dry_run && vars.RATATOSKR_RELEASE_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    environment:
+      name: ratatoskr-production
+      url: https://railway.com/project/40ae1533-b171-461e-b2e1-8b68b4d48b39
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Recheck approval protection and checks, deploy once, verify startup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RAILWAY_PROJECT_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
+          RELEASE_ENABLED: ${{ vars.RATATOSKR_RELEASE_ENABLED }}
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: node --import tsx scripts/production-release.ts deploy "$RELEASE_SHA"

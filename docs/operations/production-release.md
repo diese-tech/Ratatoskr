@@ -1,0 +1,49 @@
+# Production releases and read-only League Tools acceptance
+
+## Current boundary
+
+P1–P5 was observed deployed at `a7838dbace7fda704753aaafff2e8adb81ec216a` on 2026-11-14. Recheck the actual revision; this is historical evidence, not a permanent deployment claim. The observed card was clean, so contextual exits could not be exercised without an eligible finding. Read-only acceptance does not require creating drift or executing a transaction.
+
+The owner accepts the absence of a verified current production backup under [ADR 0003](../adr/0003-backup-policy-and-accepted-operational-risk.md). Do not turn backup absence into a release gate or create backups/schedules without authorization. Integrity, existing-file validation, migration safety and preserved recovery evidence remain required. PR #191 addresses the production missing-file startup safeguard; this workflow neither initializes storage nor replaces that safeguard.
+
+## Manual release contract
+
+`.github/workflows/release-production.yml` is manual-only and defaults to `dry_run: true`. The candidate must be a full lowercase 40-character SHA already on main. The trusted workflow revision verifies successful latest CI and CodeQL runs for that exact SHA, including both Windows/Ubuntu jobs and both CodeQL languages. Missing, pending, failed, cancelled, skipped or neutral required evidence blocks. Workflow IDs are intentionally bound to this repository: CI `340763552`, managed CodeQL `373679467`. If GitHub recreates them, update and review the explicit allowlist; never bypass missing evidence.
+
+Dry run uses only the GitHub read token. It does not access Railway credentials, deploy, initialize SQLite, call Discord/Sheets or request an audit. The deployment job additionally requires repository variable `RATATOSKR_RELEASE_ENABLED=true`, protected environment `ratatoskr-production` with required owner/designated reviewers and administrator approval bypass disabled, and environment secret `RAILWAY_PROJECT_TOKEN`. This must be a Railway project token scoped to the existing production environment, not an account token. It can access that environment's other services, so the code also fixes the target IDs; protect the token and keep it out of repository/organization-wide secrets.
+
+The workflow runs only from main, uses pinned actions, never executes candidate-SHA code with credentials, serializes releases without cancelling an active deployment, and rechecks evidence after approval. The approval job name includes the candidate SHA; reviewers must inspect both that SHA and the trusted workflow revision, which may differ when releasing an older main commit. It refuses enabled native autodeploy, a different source, multiple replicas, the wrong token scope or a missing `/data` volume. There is exactly one `serviceInstanceDeploy` request with explicit `commitSha` and `latestCommit:false`; no fallback to latest main, blind retry, rollback, configuration change or recovery is performed.
+
+Post-deployment reads require a new matching deployment ID, exact SHA/repository/service/environment, Railway SUCCESS and startup evidence for SQLite, Discord connection, league notice recovery and worker startup. Known UI/recovery initialization failures block verification. These are startup checks, not proof of private UI behavior or successful transactions. Raw logs and API error bodies are not printed. A timeout or uncertain response requires inspecting Railway and preserved job evidence before requesting any new release.
+
+Fixed destination: project `40ae1533-b171-461e-b2e1-8b68b4d48b39`, production environment `89f84014-d527-4496-839d-26885d1bb7c1`, Ratatoskr service `8ae03a74-c126-4939-b59c-979855a8a02f`, existing volume at `/data`, one replica. Lucid and YSL Archive DB are not release targets. Retain the existing Railpack build/start configuration.
+
+## Activation sequence — separate owner authorization required
+
+Implementation/merge is not authorization to activate or deploy. Native autodeploy was enabled when this change was prepared: merging either PR while it remains enabled can deploy automatically. Coordinate any merge with the owner; do not assume adding a workflow disables Railway's trigger.
+
+1. **Verify without deploying.** Run tests and actionlint before merge. The read-only entry point is `node --import tsx scripts/production-release.ts check EXACT_SHA` with a read-only `GH_TOKEN`. After an owner-coordinated merge, dispatch **Release Ratatoskr production** from main with the verified SHA and `dry_run: true`. Confirm verify succeeds and deploy is skipped. Leave the activation variable unset/false and production credentials absent. This document does not authorize that merge/dispatch.
+2. **Configure approval and credentials.** With separate approval, create `ratatoskr-production`, select the owner/designated required reviewers, disallow administrator bypass and restrict workflow deployment refs to main. Enable prevent-self-review only when another approver is available. Store the environment-scoped project token only in that environment. Confirm protections and secret location without exposing the token. Keep `RATATOSKR_RELEASE_ENABLED` false/unset. GitHub environment protection governs Actions jobs, not Railway-native deployments.
+3. **Disable native autodeploy for Ratatoskr only.** Use its Source settings Disable control (retain the repository/branch); do not disconnect/reconnect the source, commit unrelated pending patches, or alter volume/build/start settings. Read back `serviceInstanceAutoDeployStatus.enabled=false`. Confirm current deployment, replica and volume identities are unchanged and no new deployment was triggered. Wait for CI alone is not a separate approval gate.
+4. **Verify merges no longer deploy.** Observe the next separately approved normal merge with releases still disabled. Record the new GitHub SHA and unchanged Railway deployment ID/SHA; inspect for queued/building deployments. Do not create a synthetic production commit solely for this check. If a deployment starts, leave manual releases disabled and investigate. This evidence can only be collected after a real approved merge.
+5. **Enable approved manual releases.** Only after steps 1–4, explicitly approve setting repository variable `RATATOSKR_RELEASE_ENABLED=true`. Each release then requires its own manual dispatch with `dry_run:false` and environment approval for the exact SHA. Retain prior deployment references; inspect active/reconciliation work before an approved restart. Railway administrators can bypass Actions using the dashboard/API; such an emergency action requires explicit owner authorization.
+
+GitHub concurrency serializes this workflow, not direct Railway admin actions. GitHub may replace an older pending run when several releases are queued; it never cancels the running release here. Inspect the run status rather than assuming a queued dispatch will execute.
+
+## Clean-card human smoke checklist
+
+Record time, deployment ID/SHA, operator and observed outcomes. Do not mark unperformed checks passed.
+
+1. Verify the deployed revision and startup logs/Discord connection using read-only Railway/GitHub access. Do not restart or invoke recovery to test health.
+2. In staff-ops, identify the latest Ratatoskr-owned League Status card. Record its audit timestamp and counts. Check for unexplained duplicate cards; a bounded message sample does not prove all history is duplicate-free.
+3. As current OPERATIONS staff (Allfather/Aesir/Valkyrie), open your own private panel. An existing non-OPERATIONS account may test denial. Do not revoke/change roles to manufacture a case; structural ADMIN policy is unchanged.
+4. Visit Roster problems → Saved actions → Check details → Roster problems. On the clean card expect no current problems, not invented exit candidates.
+5. Record saved check times, then use **Reload saved status**. Expect saved data only, no renewed approval, fresh session or requested audit. Do not press public **Check again**; that is a separate explicit audit.
+6. Inspect a known existing completed job through **Find by reference**; compare status/history and reload. Do not use repreview, reconciliation closure or any confirmation action.
+7. Close and reopen from the status card. Expect a fresh independent session with no inherited preview/attestation. Closing does not cancel accepted work.
+8. Leave a panel untouched for more than ten minutes, then use a read-only navigation control; expect expiry. Never submit CONFIRM, SAME PLAYER or HISTORY REVIEWED during read-only acceptance.
+9. Compare available job/notice/history evidence before/after. There must be no new mutation approval or external roster write. Presentation/reload must not request extra full-guild reads; normal independently scheduled work may still occur, so correlate timestamps rather than attributing every background event to the smoke test.
+
+Executable today: deployment/log/card reads, authorized private navigation, reload, completed-job inspection, close/new session, expiry and existing unauthorized-account denial. Remote SQLite integrity/ledger inspection requires an existing authorized read-only file connection; never call `openApplicationStorage` or `openExistingDatabase` for inspection, copy a live main SQLite file without its coherent WAL, or treat a historical copy as current.
+
+Blocked without a suitable verified finding/fixture: contextual account replacement/departure/self-drop and layered preview cases. Do not manufacture drift or require a live transaction to complete this read-only checklist. Controlled transaction acceptance, valid duplicate confirmations, permission-change races and interruption/recovery exercises require separate explicit approval and a fixture-specific plan. Read-only approval never supplies that authorization.

@@ -1,5 +1,11 @@
 # Repository agent guidance
 
+## Accepted backup risk and release approval
+
+Follow [ADR 0003](docs/adr/0003-backup-policy-and-accepted-operational-risk.md): the owner accepts operating without a verified current production recovery backup. Managed cloud backups are deferred; missing backups alone do not block source review, approved release or read-only acceptance. Do not repeatedly reopen this decision or add backup infrastructure/schedules without authorization. Missing/corrupt production storage, unsafe migrations and weakened durable/reconciliation safeguards remain defects. Historical copies are not presumed current.
+
+Merging must be separated from production deployment. The [manual release activation sequence](docs/operations/production-release.md) requires separate owner authorization for environment/credential setup and disabling native Railway autodeploy. Preparing the workflow does not activate it. No production deployment, restart, mutation or settings change is implied by implementation or read-only acceptance.
+
 ## Human-facing wording
 
 Commands, help, forms, buttons, private replies, public status cards, staff alerts and staff guides must use simple, respectful plain English. Say what happened, whether changes were made when known, and what to do next. Do not display implementation terms, raw stored states or technical errors. Keep diagnostic detail in logs and use a readable reference for support. Never suggest repeating a saved action or an action that may already have posted.
