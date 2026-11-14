@@ -150,12 +150,14 @@ Before deploying a runtime or migration change:
 1. Confirm the runtime uses Node 24.
 2. Confirm the native `better-sqlite3` module loads in the deployed environment.
 3. Confirm `DATABASE_PATH` still points to the existing persistent volume.
-4. Take a consistent database backup before schema changes.
+4. Record available recovery evidence and the owner's [accepted backup risk](docs/adr/0003-backup-policy-and-accepted-operational-risk.md). A missing current backup alone is not a release blocker; do not create backups or infrastructure without authorization.
 5. Retain the previous deployment reference for rollback/recovery.
-6. Rehearse migrations against a production copy when the change affects durable Scout or managed-resource state.
+6. Verify migration preservation on an appropriate isolated copy or representative fixture when the change affects durable state. Historical copies are not assumed to represent current production.
 7. Treat successful CI as necessary but not sufficient; verify startup/reconciliation and any required live Discord acceptance separately.
 
 Do not start a second production bot replica against the same Discord workflow/database state merely for verification unless the architecture has explicitly been changed to support multiple writers.
+
+Production uses merge-to-deploy: run local validation, require successful final-head CI/CodeQL and independent review, then merge only when authorized. Railway native autodeploy remains enabled for main. Follow the [release and read-only smoke checklist](docs/operations/production-release.md) to verify the merged revision and health; no separate manual deployment pipeline or infrastructure change is required.
 
 Operational rollout and recovery guidance lives under [`docs/operations/`](docs/operations/).
 

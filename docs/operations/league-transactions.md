@@ -104,7 +104,7 @@ The original related `BLOCKED_REVIEW` repair jobs remain preserved and actionabl
 
 ### Production approval gate for account replacement
 
-Issue #154 authorizes source implementation only. Before one live execution, a human operator must privately review the exact old/new IDs and attest that they belong to the same continuing player, verify backups of Railway SQLite and **both workbooks**, inspect the current preview and role deltas, approve once, then observe a fresh audit and verify the captain's actual access. Do not publish the private IDs or raw operational records. No deployment, production reconciliation, role/Sheet change, retry/dismissal of the original jobs, restart or automatic merge is authorized by this implementation issue.
+Issue #154 authorizes source implementation only. Before one separately approved live execution, a human operator must privately review the exact old/new IDs and attest that they belong to the same continuing player, record available recovery evidence and the owner's [accepted backup risk](../adr/0003-backup-policy-and-accepted-operational-risk.md), inspect the current preview and role deltas, approve once, then observe a fresh audit and verify the captain's actual access. Backup absence alone is not a release or acceptance blocker. Do not publish the private IDs or raw operational records. No deployment, production reconciliation, role/Sheet change, retry/dismissal of the original jobs, restart or automatic merge is authorized by this implementation issue.
 
 ## Required Railway variables
 
@@ -127,7 +127,7 @@ Keep the service-account JSON sealed. Share both workbooks with the service-acco
 
 ## Production gate
 
-Passing tests and CI does not prove live acceptance. Before enabling staff use, back up the persistent SQLite database, deploy through migration 33 once, inspect startup recovery and the healthy persistent panel, verify queued/double-click behavior and targeted nickname/role/leave checks, observe a 2-minute dirty retry and an hourly safe repost, preview each exit type with and without a replacement, deliberately verify one unrelated safe drift and one occupied legend range produce staff-ops tickets without writes, and perform one approved controlled replacement with both sheet workbooks open. Do not run a second bot replica against the same database/guild.
+Passing tests and CI does not prove live acceptance. Follow the [merge-to-deploy and clean-card read-only checklist](production-release.md) and [accepted backup policy](../adr/0003-backup-policy-and-accepted-operational-risk.md). Verify the deployed migration ledger against the current source (currently through 37) when read-only file access is available; otherwise report it unverified. Inspect startup recovery and the persistent panel without restarting solely for inspection. Queued/double-click execution, introduced drift, controlled replacement and other mutation/recovery exercises require separate fixture-specific approval; they are not prerequisites for read-only acceptance of a currently clean card. Do not run a second bot replica against the same database/guild.
 
 Sheets presentation reads use the existing shared service-account scheduler to coalesce identical concurrent GET/batchGet requests and reuse successful results for up to three seconds, with at most 128 entries. Roster autocomplete opts into this reuse. Full snapshots, targeted reconciliation, repair confirmations, and mutation preflight remain fresh and never join cached or in-flight presentation reads. Workbook writes invalidate that workbook's reusable results before and after the request, including ambiguous failures. Errors and incomplete batch responses are not retained; the existing two-second pacing and 429 cooldown still apply. Cache for presentation, never cache for proof.
 
@@ -161,7 +161,7 @@ Role/Sheet interruptions use existing private reconciliation; they never replay 
 This implementation does not authorize deployment or a live roster correction.
 
 - [ ] Human reviews the PR, policy exception wording, absent-member limitation and current dependency audit findings.
-- [ ] Back up persistent SQLite and both workbooks; rehearse migration 37 on a stopped copy and verify original transaction/job/history preservation.
+- [ ] Record available recovery evidence and the accepted backup risk under ADR 0003; rehearse migration 37 on an isolated appropriate copy or representative fixture and verify original transaction/job/history preservation. Do not create backups without separate authorization.
 - [ ] Separately approve deployment and command registration; run one bot instance and inspect startup recovery.
 - [ ] Read-only live preview: find the historical player without their job ID; compare original date/type/processor/team against Transaction History and private saved actions. The Manny regression is synthetic source-shaped evidence, not a live verification.
 - [ ] Verify staff-only private controls, disambiguation, stale/replayed confirmations, advisory choices and linked history navigation in Discord.
