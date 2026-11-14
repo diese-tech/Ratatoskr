@@ -1,5 +1,7 @@
 # Private League Ops review (#155)
 
+For deployed P1–P5 acceptance, use the [clean-card read-only smoke checklist](production-release.md#clean-card-human-smoke-checklist). [ADR 0003](../adr/0003-backup-policy-and-accepted-operational-risk.md) records the owner's accepted backup risk; no backup creation, live transaction or manufactured finding is required for read-only acceptance.
+
 The rolling League Status card is a compact snapshot: roster problem and unfinished-action counts, one draft-health line, and the time of the last full roster check. Diagnostic text, references and individual check times are private under **Check details**. **Open league tools** (or **Review problems** when attention is needed) opens an ephemeral, owner-bound Fluxcord panel for current OPERATIONS staff (Allfather, Aesir or Valkyrie). Structural ADMIN/configuration access remains Allfather/Aesir only. Existing commands, the 6 AM full audit and hourly presentation heartbeat keep their current contracts.
 
 The staff-ops card has two controls: **Open league tools** opens private tools where staff can approve changes; **Check again** only checks for problems and makes no roster changes. Times are displayed in Eastern time with EST or EDT as appropriate.
@@ -40,8 +42,8 @@ Live smoke checklist:
 
 1. Confirm the deployed commit, migration and one rolling staff-ops card.
 2. Open the private panel as an authorized administrator; inspect original repair causes, current operation state and a completed reference.
-3. Verify a non-admin, revoked administrator, stale card and expired panel cannot inspect details or enqueue work.
-4. For a later controlled account replacement, independently verify backups and exact identity ownership, review the fresh plan and role boundaries, confirm once, then verify both workbooks, role/captain access, history/draft continuity and a fresh audit.
+3. Verify an actor without OPERATIONS access, stale card and expired panel cannot inspect details or enqueue work. Valkyrie is authorized OPERATIONS staff; do not confuse it with structural ADMIN access. Revocation tests needing role changes require separate authorization.
+4. For a separately approved controlled account replacement, record available recovery evidence and the accepted backup risk under ADR 0003, independently verify exact identity ownership, review the fresh plan and role boundaries, confirm once, then verify both workbooks, role/captain access, history/draft continuity and a fresh audit. This is separate from read-only acceptance.
 5. Leave the incident/feature live gate open until actual operator evidence is recorded. No production account transfer is performed by source implementation or CI.
 
 ## Reloading saved status
