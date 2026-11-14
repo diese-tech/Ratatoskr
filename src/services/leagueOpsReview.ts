@@ -35,7 +35,7 @@ export type LeagueOpsIssue = { key: string; finding: string; oldDiscordId?: stri
 export type LeagueOpsOperation = { reference: string; type: string; status: string; action: string; targets: string[];
   actor: string; createdAt: string; attempts: number; error: string; next: string; canRepreview: boolean; canRecover: boolean; historyDetails?: string[]; linkedReferences?: string[] };
 export type LeagueOpsSnapshot = { issues: LeagueOpsIssue[]; operations: LeagueOpsOperation[]; checkDetails?: string[]; draftNeedsAttention?: boolean };
-export type ReviewTransactionPreview = { originalReference: string; selections: string; fingerprint: string; approval: string; plan: LeagueMutationPlan };
+export type ReviewTransactionPreview = { originalReference?: string; exit?: { issueKey: string; finding: string; playerId: string }; selections: string; fingerprint: string; approval: string; plan: LeagueMutationPlan };
 export type ReviewRepairPreview = { issueKey: string; finding: string; action: LeagueAuditResolutionAction; fingerprint: string; approvalReference: string; description: string };
 export type ReviewRecoveryPreview = { reference: string; type: 'repair' | 'account-replacement'; fingerprint: string; approvalReference: string; description: string; canConfirm: boolean };
 
@@ -44,7 +44,7 @@ export class LeagueOpsReviewService {
     replacement: LeagueAccountReplacementService; authorize(actor: string): Promise<string>;
     readTransactionHistory?(): Promise<(string | number | boolean | null)[][]>;
     roleLabel?(id: string): string;
-    previewTransaction(selections: string): Promise<LeagueMutationPlan>;
+    previewTransaction(selections: string, absentPlayerId?: string): Promise<LeagueMutationPlan>;
     previewRepair(finding: string, action: LeagueAuditResolutionAction): Promise<{ fingerprint: string; description: string }> }) {}
 
   async authorize(actor: string) { return this.input.authorize(actor); }
@@ -209,17 +209,39 @@ export class LeagueOpsReviewService {
     await this.authorize(actor);
     return { originalReference: reference, selections, fingerprint: leagueTransactionPlanFingerprint(plan), approval: randomUUID(), plan };
   }
+  async previewExit(actor: string, issue: LeagueOpsIssue, kind: 'departure' | 'self-drop', replacementId?: string): Promise<ReviewTransactionPreview> {
+    const current = await this.snapshot(actor);
+    if (!issue.oldDiscordId || issue.requiresManualReview || !current.issues.some(item => item.key === issue.key
+      && item.finding === issue.finding && item.oldDiscordId === issue.oldDiscordId && !item.requiresManualReview))
+      throw new LeagueMutationValidationError('This player’s roster problem changed. Reload saved status and select the problem again.');
+    if (!['departure', 'self-drop'].includes(kind) || (replacementId && !/^\d{16,20}$/.test(replacementId)))
+      throw new LeagueMutationValidationError('Choose a valid exit and exact replacement Discord ID.');
+    const selections = JSON.stringify([kind, issue.oldDiscordId, replacementId ?? null]);
+    const plan = await this.input.previewTransaction(selections, issue.oldDiscordId);
+    await this.authorize(actor);
+    return { exit: { issueKey: issue.key, finding: issue.finding, playerId: issue.oldDiscordId }, selections,
+      plan, fingerprint: leagueTransactionPlanFingerprint(plan), approval: randomUUID() };
+  }
   async confirmTransaction(actor: string, preview: ReviewTransactionPreview) {
     const actorName = await this.authorize(actor);
     const key = `transaction:${actor}:${preview.selections}:${preview.approval}`;
     const existing = getLeagueJobByDedupe(this.input.db, this.input.guildId, key);
     if (existing) return existing;
-    const original = getLeagueJob(this.input.db, preview.originalReference);
-    if (!original || original.guildId !== this.input.guildId || !this.prewrite(original)
-      || (original.payload as { selections: string }).selections !== preview.selections)
-      throw new LeagueMutationValidationError('The original operation changed. Refresh and request a new preview.');
+    if (preview.exit) {
+      const current = await this.snapshot(actor);
+      const tuple = JSON.parse(preview.selections) as unknown[];
+      if (!['departure', 'self-drop'].includes(String(tuple[0])) || tuple[1] !== preview.exit.playerId
+        || !current.issues.some(item => item.key === preview.exit!.issueKey && item.finding === preview.exit!.finding
+          && item.oldDiscordId === preview.exit!.playerId && !item.requiresManualReview))
+        throw new LeagueMutationValidationError('The player’s roster problem changed. Request a fresh preview.');
+    } else {
+      const original = preview.originalReference && getLeagueJob(this.input.db, preview.originalReference);
+      if (!original || original.guildId !== this.input.guildId || !this.prewrite(original)
+        || (original.payload as { selections: string }).selections !== preview.selections)
+        throw new LeagueMutationValidationError('The original operation changed. Reload saved status and request a new preview.');
+    }
     return this.input.worker.enqueue('transaction', { actorUserId: actor, actorName, selections: preview.selections,
-      expectedPlanFingerprint: preview.fingerprint, originalBlockedReference: preview.originalReference }, key);
+      expectedPlanFingerprint: preview.fingerprint, ...(preview.originalReference ? { originalBlockedReference: preview.originalReference } : {}) }, key);
   }
   async previewRepair(actor: string, key: string): Promise<ReviewRepairPreview> {
     const current = await this.snapshot(actor);
