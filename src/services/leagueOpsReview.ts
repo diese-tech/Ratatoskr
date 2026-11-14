@@ -83,9 +83,9 @@ export class LeagueOpsReviewService {
       && (job.type === 'repair' ? getLeagueAuditRepair(this.input.db, job.reference)?.status === 'reconciliation_required'
         : job.type === 'account-replacement' && getAccountReplacement(this.input.db, this.input.guildId, job.reference)?.status === 'reconciliation_required');
     const next = job.status === 'COMPLETED' ? 'Finished. The history is saved; do not run this action again.'
-      : ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING'].includes(job.status) ? 'Rat is working on this action. Refresh to check its progress; do not submit it again.'
+      : ['QUEUED', 'LOADING', 'VALIDATING', 'APPLYING', 'VERIFYING'].includes(job.status) ? 'Rat is working on this action. Reload saved status to check its progress; do not submit it again.'
       : job.status === 'RECONCILIATION_REQUIRED' ? 'Check the saved action, Discord, sheets and history. Some changes may already have happened. Do not run it again.'
-      : job.status === 'RETRYING' ? 'Rat will try again automatically. Refresh to check progress.'
+      : job.status === 'RETRYING' ? 'Rat will try again automatically. Reload saved status to check progress.'
       : canRepreview ? 'Preview the player change again, review it, then confirm.'
       : job.type === 'repair' ? 'Check Roster problems for this player. If the problem is gone, no new fix is needed. Earlier attempts stay in history.'
       : 'Check the latest records and settings with staff before trying another action.';
@@ -148,13 +148,13 @@ export class LeagueOpsReviewService {
       'Exact elapsed time unavailable. Requested/completed times are separate from the official Sheet date.',
     ], linkedReferences: [...(source ? [source.reference] : []), ...returns.map(item => item.reference)] };
   }
-  async operationDetail(actor: string, reference: string): Promise<LeagueOpsOperation> {
+  async operationDetail(actor: string, reference: string, savedOnly = false): Promise<LeagueOpsOperation> {
     await this.authorize(actor);
     const job = getLeagueJob(this.input.db, reference);
     const detail = job?.guildId === this.input.guildId && ['transaction', 'repair', 'account-replacement'].includes(job.type)
       ? this.operation(job) : this.legacyRepair(reference) ?? this.legacyTransaction(reference);
     if (!detail) throw new LeagueMutationValidationError('This saved action was not found in this server. Check its reference.');
-    return this.linkedHistory(detail);
+    return savedOnly ? detail : this.linkedHistory(detail);
   }
   async snapshot(actor: string): Promise<LeagueOpsSnapshot> {
     await this.authorize(actor);

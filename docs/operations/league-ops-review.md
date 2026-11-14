@@ -13,7 +13,7 @@ Normal roster moves start with an approved `/transaction` action. The bot update
 ## Operator workflow
 
 - **Roster problems:** paginated current findings. An absent rostered account has separate account-replacement, departure and self-drop guidance. Replacement requires the exact old/new IDs and an explicit `SAME PLAYER` ownership attestation. Departures and self-drops continue through their existing transaction commands.
-- **Saved actions:** transaction, repair and account-replacement jobs, including original pre-write blocked attempts and interrupted legacy repair records. Detail shows the saved cause, action, targets, creator, timestamp, attempts, durable reference and appropriate next step. Completed records can be inspected with **Find by reference**; refresh re-reads their durable state.
+- **Saved actions:** transaction, repair and account-replacement jobs, including original pre-write blocked attempts and interrupted legacy repair records. Detail shows the saved cause, action, targets, creator, timestamp, attempts, durable reference and appropriate next step. Completed records can be inspected with **Find by reference**; **Reload saved status** re-reads their durable state.
 - **Review changes:** a fresh read-only account replacement, managed repair or proven pre-write transaction preview. A changed finding or source fingerprint blocks execution. Original blocked transaction selections are retained, while superseded attempts cannot generate reverse trades through stale UI.
 - **Confirmation:** review the preview, choose the button named for the change, then type `CONFIRM` in its modal. Account replacement uses the #154 service; ordinary transactions/repairs use the existing canonical worker. UI state never performs external roster mutations.
 - **Check unfinished changes:** inspect an interrupted account replacement or repair against fresh source values. Type `HISTORY REVIEWED` only after checking the original record and preserved name/history data. The worker rechecks the fingerprint before acknowledging convergence; no interrupted mutation is replayed or retroactively declared successful.
@@ -43,3 +43,9 @@ Live smoke checklist:
 3. Verify a non-admin, revoked administrator, stale card and expired panel cannot inspect details or enqueue work.
 4. For a later controlled account replacement, independently verify backups and exact identity ownership, review the fresh plan and role boundaries, confirm once, then verify both workbooks, role/captain access, history/draft continuity and a fresh audit.
 5. Leave the incident/feature live gate open until actual operator evidence is recorded. No production account transfer is performed by source implementation or CI.
+
+## Reloading saved status
+
+**Reload saved status** loads persisted findings and saved action status. It does not request a new Discord/Sheets audit or start a new review session. **Check again** on the public League Status card remains the separate explicit audit request.
+
+Reload preserves a selected issue only when its key, finding and eligibility remain unchanged; a changed or removed issue is cleared without selecting another. Selected saved actions are looked up by their original reference, including completed actions. Unconfirmed previews and ownership attestations are cleared on every reload: persisted status alone cannot establish that their source fingerprint remains current. Request a new preview before approving. Pending modal submissions are invalidated even when the same screen remains visible. Accepted durable approvals, saved jobs and the one-fix-per-panel lock are never cleared or renewed by reload. Execution still validates fresh sources and authorization.

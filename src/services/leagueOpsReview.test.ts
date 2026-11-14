@@ -300,3 +300,15 @@ test('unfinished private inventory includes canonical work at every active phase
     assert.equal(f.gateway.writes.length, 0);
   } finally { f.close(); }
 });
+
+test('saved snapshots reload persisted findings without full-member reads or an audit', async () => {
+  const f = await leagueOpsReviewFixture();
+  try {
+    const before = await f.service.snapshot('admin');
+    f.discord.getAccountReplacementMembers = async () => assert.fail('No complete member read for saved status');
+    f.sheets.load = async () => assert.fail('No source audit for saved status');
+    const jobs = (f.db.prepare('SELECT count(*) n FROM league_jobs').get() as { n: number }).n;
+    assert.deepEqual(await f.service.snapshot('admin'), before);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM league_jobs').get() as { n: number }).n, jobs);
+  } finally { f.close(); }
+});
