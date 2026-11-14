@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute } from 'node:path';
 import Database from 'better-sqlite3';
 import { runMigrations } from './migrate.js';
 
@@ -9,17 +9,36 @@ import { runMigrations } from './migrate.js';
 // actually open a database are affected by it.
 const DEFAULT_LOCAL_DATABASE_PATH = './data/ratatoskr.db';
 
-export function resolveDatabasePath(): string {
-  const configured = process.env.DATABASE_PATH;
+export function resolveDatabasePath(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
+  const configured = environment.DATABASE_PATH;
   if (configured && configured.trim().length > 0) return configured;
   return DEFAULT_LOCAL_DATABASE_PATH;
 }
 
-// Opens (creating if necessary) the SQLite database at `databasePath` and
-// brings it up to the latest schema. Throws -- rather than falling back to
-// an in-memory database -- if the path can't be created or opened, so a
-// misconfigured DATABASE_PATH (e.g. an unmounted Railway volume) fails
-// startup loudly instead of silently running without durable storage.
+// Production must open an initialized database before any startup writes.
+export function openExistingDatabase(databasePath: string | undefined): Database.Database {
+  if (!databasePath || !isAbsolute(databasePath)) {
+    throw new Error('Production SQLite requires DATABASE_PATH to point to an existing database using an absolute path.');
+  }
+
+  let db: Database.Database | undefined;
+  try {
+    db = new Database(databasePath, { fileMustExist: true });
+    if (db.pragma('quick_check', { simple: true }) !== 'ok' ||
+        !db.prepare('SELECT 1 FROM schema_migrations WHERE id = 1').get()) {
+      throw new Error('Database validation failed.');
+    }
+    initializeDatabase(db);
+    return db;
+  } catch {
+    db?.close();
+    throw new Error(
+      'Production SQLite could not be opened, validated, or migrated. Verify the persistent volume and restore the existing Ratatoskr database if needed.',
+    );
+  }
+}
+
+// Local development and bootstrap can initialize a new database.
 export function openDatabase(databasePath: string = resolveDatabasePath()): Database.Database {
   if (databasePath !== ':memory:') {
     try {
@@ -36,12 +55,15 @@ export function openDatabase(databasePath: string = resolveDatabasePath()): Data
     throw new Error(`Cannot open database at DATABASE_PATH "${databasePath}": ${(error as Error).message}`);
   }
 
+  initializeDatabase(db);
+  return db;
+}
+
+function initializeDatabase(db: Database.Database): void {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
   runMigrations(db);
-
-  return db;
 }
 
 export function closeDatabase(db: Database.Database): void {
