@@ -64,11 +64,14 @@ async function harness() {
     };
     visit(payload);
   };
+  let loseAcceptedRender = false;
   const copies: string[] = [];
   const modals: V2ModalPayload[] = [];
   let now = 1_000_000;
   const runtime = createUiRuntime({ flows: buildFlowCatalog([{ module: 'league-ops', flow }]), sweeper: false, now: () => now,
-    platform: { editMessage: async (_ref, payload) => { validatePayload(payload); edits.push(payload); }, replyToActor: async value => { copies.push(value); },
+    platform: { editMessage: async (_ref, payload) => {
+      if (loseAcceptedRender && JSON.stringify(payload).includes('Action accepted')) { loseAcceptedRender = false; throw Error('Acknowledgement delivery lost'); }
+      validatePayload(payload); edits.push(payload); }, replyToActor: async value => { copies.push(value); },
       showModal: async value => { modals.push(value); }, ack: async () => {} },
     sendToChannel: async () => assert.fail('Private League Ops must never post to a public channel'),
     policy: { authorize: async request => ({ allowed: await authorizeLeagueOpsUi(request, 'g', actor => service.authorize(actor)) }) } });
@@ -87,7 +90,7 @@ async function harness() {
     release(); await until(() => JSON.stringify(edits.at(-1)).includes('Review these player changes'));
     await click('Approve player change');
   };
-  return { service, snapshot, setData: async (change: (data: LeagueOpsPanelData) => void) => handle.redraw(change), recoveries: () => recoveries, runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
+  return { loseAcceptedRender: () => { loseAcceptedRender = true; }, service, snapshot, setData: async (change: (data: LeagueOpsPanelData) => void) => handle.redraw(change), recoveries: () => recoveries, runtime, edits, copies, modals, click, dispatch, preview, release, deny: () => { allowed = false; },
     setIssues: async (issues: LeagueOpsSnapshot['issues']) => { snapshot.issues = issues; await handle.redraw(data => { data.snapshot = snapshot; }); },
     repairConfirmations,
     expire: () => { now += 11 * 60_000; }, count: () => confirmations, close: () => runtime.stopSweeper() };
@@ -479,3 +482,49 @@ for (const kind of ['repair', 'transaction', 'recovery', 'replacement'] as const
     } finally { h.release(); h.close(); }
   });
 }
+
+for (const status of ['QUEUED', 'COMPLETED'] as const) test(`accepted ${status} action has direct inspection and close cannot cancel it`, async () => {
+  const h = await harness();
+  try {
+    h.service.confirmTransaction = async () => ({ reference: 'accepted-job', status } as never);
+    await h.preview();
+    const oldModal = h.modals.at(-1)!.custom_id;
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => JSON.stringify(h.edits.at(-1)).includes('Action accepted'));
+    const copy = JSON.stringify(h.edits.at(-1));
+    assert.match(copy, /accepted-job/); assert.match(copy, status === 'COMPLETED' ? /Finished/ : /Waiting/);
+    assert.match(copy, /Acceptance does not mean execution has completed/);
+    assert.match(copy, /Closing this panel does not cancel/); assert.doesNotMatch(copy, /Cancel and close/);
+    await h.click('View submitted action'); await until(() => JSON.stringify(h.edits.at(-1)).includes('Reference: accepted-job'));
+    await h.click('Reload saved status'); assert.match(JSON.stringify(h.edits.at(-1)), /already sent a fix/);
+    await h.click('Close panel');
+    await h.dispatch(oldModal, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    assert.equal(h.count(), 0);
+  } finally { h.release(); h.close(); }
+});
+
+test('an independent session inherits no accepted approval or attestation', async () => {
+  const first = await harness(); const second = await harness();
+  try {
+    await first.preview(); await first.dispatch(first.modals.at(-1)!.custom_id, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => JSON.stringify(first.edits.at(-1)).includes('Action accepted'));
+    assert.doesNotMatch(JSON.stringify(second.edits.at(-1)), /already sent|new-durable-job|accepted-job/);
+    assert.equal(second.count(), 0); assert.equal(first.count(), 1);
+  } finally { first.release(); second.release(); first.close(); second.close(); }
+});
+
+test('lost acknowledgement rendering retains accepted state and cannot submit twice', async () => {
+  const h = await harness();
+  try {
+    await h.preview(); h.loseAcceptedRender();
+    const confirm = h.modals.at(-1)!.custom_id;
+    await h.dispatch(confirm, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await until(() => h.count() === 1);
+    await h.dispatch(confirm, 'admin', 'g', EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+    await h.click('Saved actions');
+    assert.match(JSON.stringify(h.edits.at(-1)), /already sent a fix/);
+    await h.click('Reload saved status');
+    assert.match(JSON.stringify(h.edits.at(-1)), /Accepted work is unchanged/);
+    assert.equal(h.count(), 1);
+  } finally { h.release(); h.close(); }
+});

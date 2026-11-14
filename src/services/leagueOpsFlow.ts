@@ -19,11 +19,11 @@ const PAGE_SIZE = 5;
 const NOTHING_YET = 'Nothing changes until you press Confirm.';
 /** Each panel sends one fix; after that its change buttons stay off on purpose (#206 rule 7). */
 export function leagueOpsLockedText(reference: string): string {
-  return `You already sent a fix from this panel (${reference}). It’s saved and being done, so don’t send it again.
+  return `You already sent a fix from this panel (${reference}). It’s saved; check Saved actions for the result, and don’t send it again.
 To fix another problem, press Review problems on the League Status card.`;
 }
 const statusLines = (data: DeepReadonly<LeagueOpsPanelData>, fallback = NOTHING_YET) =>
-  [...(data.queued ? [text(leagueOpsLockedText(data.queued))] : []), text(data.notice || fallback)];
+  [...(data.queued ? [text(leagueOpsLockedText(data.queued))] : []), text(data.notice || (data.queued ? 'Closing this panel does not cancel accepted work.' : fallback))];
 export function leagueCheckDetailPages(details: readonly string[]): string[] {
   const pages: string[] = [];
   let remaining = redactOperationalText(details.join('\n\n')) || 'No check details available yet.';
@@ -56,8 +56,10 @@ export function leagueOpsPreviewText(data: DeepReadonly<Pick<LeagueOpsPanelData,
   if (data.repair) return [leagueFindingTitle(data.repair.finding), '', 'What will change:', ...data.repair.description.split('\n').map(line => `- ${line}`), '',
     'Rat checks everything again when you confirm. Nothing has changed yet.'].join('\n');
   const plan = data.transaction?.plan;
+  const roleName = (id: string) => plan?.teams.find(team => team.teamRoleId === id)?.teamRole
+    ?? plan?.teams.find(team => team.divisionRoleId === id)?.division ?? 'Free Agent';
   return plan ? [`${leagueActionLabel(plan.kind)}: ${plan.players.join(' / ')}`, ...plan.publicChanges.map(c => `${c.division} / ${c.group}: ${c.from || 'empty'} → ${c.to || 'empty'}`),
-    `Earlier action needing review: ${data.transaction!.originalReference}.`, 'This shows a new preview. Rat will not run the earlier action again.'].join('\n') : 'No approved preview is available.';
+    ...(data.transaction!.exit ? [plan.kind === 'self-drop' ? 'Mark the player suspended for this season and next season. They do not become a Free Agent.' : 'Mark the player inactive. They do not become a Free Agent.', 'End all listed memberships. Preserve identity, name history and original draft attribution.', ...(plan.players[1] ? [`Replacement: ${plan.players[1]} joins ${plan.teams[0]!.franchise} (${plan.teams[0]!.division}).`] : []), ...plan.discordRoleChanges.map(change => `Discord roles for ${plan.players[plan.playerIds.indexOf(change.discordId)]}: add ${change.add.map(roleName).join(', ') || 'none'}; remove ${change.remove.map(roleName).join(', ') || 'none'}.`), 'Record one approved transaction and its public notice/history.'] : [`Earlier action needing review: ${data.transaction!.originalReference}.`, 'This shows a new preview. Rat will not run the earlier action again.'])].join('\n') : 'No approved preview is available.';
 }
 export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id: string) => void = () => {}) {
   const run = (event: ActionEvent<LeagueOpsPanelData>, work: () => Promise<Partial<LeagueOpsPanelData>>, readOnly = false, loading = 'Checking the latest league records…') => {
@@ -85,7 +87,7 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     const activeScreen = event.session.screen;
     const previewScreen = activeScreen === 'preview' || activeScreen === 'confirmation';
     const screen = previewScreen
-      ? event.session.data.replacement || event.session.data.repair ? 'issue' : 'operation'
+      ? event.session.data.replacement || event.session.data.repair || event.session.data.transaction?.exit ? 'issue' : 'operation'
       : activeScreen;
     event.mutate(data => { Object.assign(data, clearedPreview); data.busy = true; data.notice = 'Reloading saved status…'; });
     event.ui.go(screen === 'issues' ? 'operations' : 'issues');
@@ -152,6 +154,23 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
         notice: 'Review the account change. Check any captain or staff roles listed below before confirming.' };
     });
   });
+  const exitPreview = (kind: 'departure' | 'self-drop') => action<LeagueOpsPanelData>()(async event => {
+    if (event.session.data.busy || event.session.data.queued) return;
+    const issue = event.session.data.selectedIssue;
+    if (!issue?.oldDiscordId) return;
+    if (event.kind !== EventKind.ModalSubmit) {
+      await event.ui.showModal(modal({ title: kind === 'departure' ? 'Player left the league' : 'Player self-dropped' },
+        text(`Player: ${leagueFindingTitle(issue.finding)}. Leave replacement blank for none. Nothing changes until you review and confirm.`),
+        input({ id: 'replacement', label: 'Replacement Discord ID (optional)', required: false, maxLength: 20 })));
+      return;
+    }
+    const replacementId = String(event.inputs?.replacement ?? '').trim();
+    event.ui.go('preview');
+    run(event, async () => ({ ...clearedPreview, transaction: await service.previewExit(event.actorId, issue, kind, replacementId || undefined),
+      notice: 'Review every change below. Nothing has changed yet.' }));
+  });
+  const departure = exitPreview('departure');
+  const selfDrop = exitPreview('self-drop');
   const repreview = action<LeagueOpsPanelData>()(event => {
     const operation = event.session.data.selectedOperation;
     if (!operation?.canRepreview || event.session.data.replacement || event.session.data.transaction) return;
@@ -197,8 +216,15 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
         : reviewedReplacement ? await service.confirmReplacement(event.actorId, reviewedReplacement, samePlayerConfirmed)
         : reviewedRepair ? await service.confirmRepair(event.actorId, reviewedRepair) : await service.confirmTransaction(event.actorId, reviewedTransaction!);
       return { queued: job.reference,
-        notice: `Sent. Rat is making this change now (${leagueStatusLabel(job.status).toLowerCase()}). You can follow it in Saved actions.` };
+        notice: `Accepted: ${job.reference}. Status at acceptance: ${leagueStatusLabel(job.status)}. Acceptance does not mean execution has completed. Inspect the saved action or reload its status. Closing this panel does not cancel accepted work.` };
     });
+  });
+  const submittedAction = action<LeagueOpsPanelData>()(event => {
+    const reference = event.session.data.queued;
+    if (!reference || event.session.data.busy) return;
+    event.ui.go('operation');
+    run(event, async () => ({ selectedOperation: await service.operationDetail(event.actorId, reference, true),
+      notice: 'Saved action loaded. Closing this panel does not cancel accepted work.' }), true);
   });
   const navigation = (kit: ScreenKit<LeagueOpsPanelData>) => row({},
     kit.Button({ label: 'Roster problems', secondary: true, onClick: event => { if (event.session.data.busy) return; event.mutate(d => { d.page = 0; Object.assign(d, clearedPreview); d.notice = ''; }); event.ui.go('issues'); } }),
@@ -258,9 +284,11 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
     return view({}, container({ color: 0x2f6844 },
       text({ title: leagueOpsText(finding ? leagueFindingTitle(finding) : 'League tools · Roster problem', 200) },
         leagueOpsText(finding ? leagueFindingBody(finding) : 'Choose a current roster problem.')),
-      text(departed ? 'What happened?\n- Same player, new Discord account: press Player changed Discord account.\n- They left the league: run /transaction departure.\n- They dropped themselves: run /transaction self-drop.\nEach one shows you the changes before anything happens.'
+      text(departed ? 'What happened?\n- Same player, new Discord account: press Player changed Discord account.\n- They left the league: press Player left the league.\n- They dropped themselves: press Player self-dropped.\nEach one shows you the changes before anything happens.'
         : leagueFixExplanation(fix)),
-      ...(departed ? [row({}, kit.Button({ label: 'Player changed Discord account', disabled: !!data.queued, onClick: replacement }))] : []),
+      ...(departed ? [row({}, kit.Button({ label: 'Player changed Discord account', disabled: !!data.queued, onClick: replacement }),
+        kit.Button({ label: 'Player left the league', disabled: !!data.queued, onClick: departure }),
+        kit.Button({ label: 'Player self-dropped', disabled: !!data.queued, onClick: selfDrop }))] : []),
       ...(!departed && fix ? [row({}, kit.Button({ label: leagueFixLabel(fix), disabled: !!data.queued, onClick: repairPreview }))] : []),
       row({}, kit.Button({ label: 'Skip for now', secondary: true, disabled: data.busy, onClick: skip })),
       ...statusLines(data), navigation(kit)));
@@ -292,7 +320,10 @@ export function createLeagueOpsFlow(service: LeagueOpsReviewService, ended: (id:
       ...(buttons.length ? [row({}, ...buttons)] : []), navigation(kit)));
   });
   const approvalLabel = (data: DeepReadonly<LeagueOpsPanelData>) => data.recovery ? 'Close checked action' : data.replacement ? 'Change Discord account' : data.repair ? leagueFixLabel(data.repair.action) : 'Approve player change';
-  const preview = screen<LeagueOpsPanelData>()((data, kit) => view({}, container({ color: 0x2f6844 },
+  const preview = screen<LeagueOpsPanelData>()((data, kit) => data.queued ? view({}, container({ color: 0x2f6844 },
+    text({ title: 'League tools · Action accepted' }, data.notice || `Accepted saved action: ${data.queued}. Inspect it for the current status.`),
+    text(leagueOpsLockedText(data.queued)), text('Closing this panel does not cancel accepted work. Use the main button on the latest League Status card for another independent review.'),
+    row({}, kit.Button({ label: 'View submitted action', secondary: true, onClick: submittedAction })), navigation(kit))) : view({}, container({ color: 0x2f6844 },
     text({ title: 'League tools · Review changes' }, leagueOpsText(leagueOpsPreviewText(data), 3400)),
     ...statusLines(data, `${NOTHING_YET} The button below opens the final check.`),
     ...(data.recovery && !data.recovery.canConfirm ? [text('Fix the problems listed above first. This action can be closed once Discord and our records agree.')] : []),

@@ -1,3 +1,5 @@
+import type { LeagueSheetsGateway } from './leagueSheets.js';
+import { executeLeagueTransaction } from './leagueTransactions.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildFlowCatalog, createUiRuntime, EventKind, type V2MessagePayload, type V2ModalPayload } from 'fluxcord';
@@ -28,12 +30,27 @@ async function leagueOpsReviewFixture() {
   const idle: LeagueJobHandler = async () => {};
   const handlers = Object.fromEntries(['transaction', 'repair', 'targeted', 'panel', 'dirty', 'audit', 'heartbeat', 'account-replacement']
     .map(type => [type, idle])) as Record<LeagueJobType, LeagueJobHandler>;
+  handlers.transaction = async (job, phase) => {
+    const intent = job.payload as { selections: string; expectedPlanFingerprint: string };
+    return executeLeagueTransaction({ db, operationScope: db, guildId: 'g', actorUserId: 'admin', actorName: 'Admin', freeAgentRoleId: 'fa',
+      now: new Date(), sheets: sources.sheets, buildPlan: current => buildLeagueIntentPlan(intent.selections, current),
+      expectedPlanFingerprint: intent.expectedPlanFingerprint, jobReference: job.reference, onPhase: phase,
+      authorizeBeforeWrite: async () => { await authorize(); },
+      discord: { getMembers: async () => [...sources.members.values()], validateMemberAbsent: async id => { if (sources.members.has(id)) throw Error('Player returned'); },
+        validateRoleState: async () => {}, validateDisplayName: async () => {},
+        applyRoleChange: async change => { const member = sources.members.get(change.discordId)!; member.roleIds = member.roleIds.filter(id => !change.remove.includes(id)).concat(change.add); },
+        rollbackRoleChange: async () => {}, findAnnouncement: async () => undefined, announce: async () => 'notice' } });
+  };
   handlers['account-replacement'] = (job, phase) => replacement.execute(job, phase);
   worker = new LeagueJobWorker(db, 'g', handlers, job => replacement.recover(job));
   worker.stop();
   const load = () => sources.sheets.load([...sources.members.values()], 'fa');
   const service = new LeagueOpsReviewService({ db, scope: db, guildId: 'g', worker, replacement, authorize,
-    previewTransaction: async selections => buildLeagueIntentPlan(selections, (await load()).snapshot),
+    previewTransaction: async (selections, absentPlayerId) => {
+      const loaded = await load();
+      if (absentPlayerId && loaded.snapshot.discordMembers.some(member => member.discordId === absentPlayerId)) throw Error('Player returned');
+      return buildLeagueIntentPlan(selections, loaded.snapshot);
+    },
     previewRepair: async (finding, action) => previewLeagueAuditResolution(await load(), finding, action) });
   const recheck = async (reference = 'audit') => {
     const loaded = await load();
@@ -74,7 +91,7 @@ function configure(f: Fixture, layered: boolean, freeAgent: boolean) {
     g.rows('admin', 'Player Name History')[5]![5] = '';
     g.rows('admin', 'Player Name History')[5]![6] = 'Free Agent';
     g.rows('public', 'Svartalfheim Roster')[4]![2] = '';
-    g.rows('public', 'Svartalfheim Roster')[24]![5] = 'One';
+    g.rows('public', 'Svartalfheim Roster')[24]![6] = 'One';
   }
   if (layered) {
     g.rows('admin', 'League Teams').push(['n', 'Dream Walkers', 'Niflheim', 'n', 'Dream Walkers ND', '', '', 'division-n', '', 'nif-captain', '', 'Yes']);
@@ -193,5 +210,87 @@ for (const invalid of ['missing-name', 'duplicate-name', 'duplicate-primary', 'd
       assert.equal(labels.some(label => label.includes('right —')), false);
       assert.equal(f.gateway.writes.length, 0); assert.equal(f.roleWrites, 0);
     } finally { ui?.runtime.stopSweeper(); f.close(); }
+  });
+}
+
+for (const kind of ['departure', 'self-drop'] as const) for (const layered of [false, true]) {
+  for (const withReplacement of [false, true]) test(`contextual ${kind} through real UI and worker: layered=${layered}, replacement=${withReplacement}`, async () => {
+    const f = await leagueOpsReviewFixture(); let ui: Awaited<ReturnType<typeof panel>> | undefined;
+    try {
+      configure(f, layered, false); f.members.delete(newId);
+      const replacementId = '222222222222222222';
+      if (withReplacement) {
+        f.members.set(replacementId, { guildId: 'g', bot: false, discordId: replacementId, displayName: 'Free', roleIds: ['fa', 'division'] });
+        f.gateway.rows('admin', 'Player Name History').push([replacementId, 'Free', 'Free', 'Current Discord Name', 'Svartalfheim', '', 'Free Agent']);
+        f.gateway.rows('public', 'Svartalfheim Roster')[24]![6] = 'Free';
+      }
+      let presentationInstalled = false;
+      f.gateway.ensureSelfDropPresentation = async () => { presentationInstalled = true; };
+      const presentationGateway: LeagueSheetsGateway = f.gateway;
+      presentationGateway.getSelfDropPresentation = async () => ({ sheetId: 1, ruleExists: presentationInstalled,
+        legend: presentationInstalled ? [['Red row', 'Self-Drop: suspended for the current season and banned for the next YSL season.']] : [] });
+      f.gateway.append = async (_workbook, _range, values) => { f.gateway.appends++; f.gateway.rows('admin', 'Transaction History').push(...values); };
+      await f.recheck();
+      const issue = (await f.service.snapshot('admin')).issues.find(issue => issue.oldDiscordId === 'one')!;
+      ui = await panel(f, issue.key);
+      await ui.click(kind === 'departure' ? 'Player left the league' : 'Player self-dropped');
+      assert.equal(f.gateway.writes.length, 0);
+      await ui.dispatch(ui.modals.at(-1)!.custom_id, EventKind.ModalSubmit, { replacement: withReplacement ? replacementId : '' });
+      await until(() => JSON.stringify(ui!.edits.at(-1)).includes('Review every change'));
+      assert.equal(f.gateway.writes.length, 0);
+      const copy = JSON.stringify(ui.edits.at(-1));
+      assert.match(copy, kind === 'departure' ? /inactive/ : /this season and next season/);
+      if (layered) assert.match(copy, /Niflheim/);
+      await ui.click('Approve player change');
+      const confirm = ui.modals.at(-1)!.custom_id;
+      await ui.dispatch(confirm, EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+      await until(() => JSON.stringify(ui!.edits.at(-1)).includes('Action accepted'));
+      const jobs = f.db.prepare("SELECT reference FROM league_jobs WHERE type='transaction'").all() as { reference: string }[];
+      assert.equal(jobs.length, 1); assert.equal(f.gateway.writes.length, 0);
+      await ui.dispatch(confirm, EventKind.ModalSubmit, { confirm: 'CONFIRM' });
+      assert.equal((f.db.prepare("SELECT count(*) n FROM league_jobs WHERE type='transaction'").get() as { n: number }).n, 1);
+      await ui.click('View submitted action');
+      await until(() => JSON.stringify(ui!.edits.at(-1)).includes(jobs[0]!.reference));
+      f.worker.start();
+      await until(() => ['COMPLETED', 'BLOCKED_REVIEW', 'RECONCILIATION_REQUIRED', 'FAILED'].includes(getLeagueJob(f.db, jobs[0]!.reference)!.status));
+      assert.equal(getLeagueJob(f.db, jobs[0]!.reference)?.status, 'COMPLETED');
+      await ui.click('Reload saved status');
+      assert.match(JSON.stringify(ui.edits.at(-1)), /Finished/);
+      const after = await f.sheets.load([...f.members.values()], 'fa');
+      assert.equal(after.snapshot.rosters.some(row => row.discordId === 'one'), false);
+      assert.equal(after.snapshot.names.find(row => row.discordId === 'one' && row.nameStatus === 'Current Discord Name')!.leagueStatus,
+        kind === 'departure' ? 'Inactive' : 'Suspended - Self-Drop (Current + Next Season)');
+      if (withReplacement) assert.ok(after.snapshot.rosters.some(row => row.discordId === replacementId));
+      await ui.click('Close panel');
+      assert.equal(getLeagueJob(f.db, jobs[0]!.reference)?.status, 'COMPLETED');
+    } finally { ui?.runtime.stopSweeper(); f.close(); }
+  });
+}
+
+for (const scenario of ['stale', 'revoked', 'returned', 'invalid-replacement', 'unrelated-drift'] as const) {
+  test(`contextual exit rejects unsafe state without writes: ${scenario}`, async () => {
+    const f = await leagueOpsReviewFixture();
+    try {
+      configure(f, true, false); f.members.delete(newId); await f.recheck();
+      const issue = (await f.service.snapshot('admin')).issues.find(item => item.oldDiscordId === 'one')!;
+      if (scenario === 'returned') {
+        f.members.set('one', { guildId: 'g', bot: false, discordId: 'one', displayName: 'One', roleIds: ['a', 'division', 'n', 'division-n'] });
+        await assert.rejects(() => f.service.previewExit('admin', issue, 'self-drop'), /returned/);
+      } else if (scenario === 'invalid-replacement') {
+        await assert.rejects(() => f.service.previewExit('admin', issue, 'departure', 'not-an-id'));
+      } else {
+        const preview = await f.service.previewExit('admin', issue, 'departure');
+        if (scenario === 'stale') { f.gateway.rows('admin', 'Player Name History')[5]![6] = 'Inactive'; await f.recheck(); }
+        if (scenario === 'revoked') f.deny();
+        if (scenario === 'unrelated-drift') {
+          f.members.get('two')!.roleIds = [];
+          const job = await f.service.confirmTransaction('admin', preview);
+          // Worker owns authoritative drift validation; the UI approval writes nothing.
+          f.worker.start();
+          await until(() => getLeagueJob(f.db, job.reference)?.status === 'RETRYING');
+        } else await assert.rejects(() => f.service.confirmTransaction('admin', preview));
+      }
+      assert.equal(f.gateway.writes.length, 0); assert.equal(f.gateway.appends, 0);
+    } finally { f.close(); }
   });
 }
